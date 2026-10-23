@@ -175,7 +175,7 @@ export class Ciws {
         if (miss < e.hitRadius) {
           r.alive = false;
           const pk = e.kind === 'drone' ? 0.5 : e.kind === 'cruise' ? 0.35 : e.kind === 'arm' ? 0.3 : 0.12;
-          if (w.rng.chance(pk)) w.killEntity(e, this.name);
+          if (w.rng.chance(pk)) w.killEntity(e, this.name, this.name, 'gun');
           break;
         }
       }

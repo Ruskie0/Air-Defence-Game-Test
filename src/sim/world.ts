@@ -1,6 +1,6 @@
 import { DT } from './constants';
 import { Ciws } from './ciws';
-import { Arm, Cruise, Emitter, Entity } from './entities';
+import { Arm, Cruise, Emitter, Entity, Fate } from './entities';
 import { Fighter } from './fighter';
 import { V3, add, clone, dist, norm, scale, sub, v3 } from './math';
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, UnitType, sandboxDeployment } from './catalog';
@@ -103,6 +103,8 @@ export class World {
   readonly radiating = new Map<string, number>();
   /** Package tag given to everything spawned while it is set. */
   spawnTag = -1;
+  /** Everything that died or left in the last 20 s, newest last (for wrecks and kill feeds). */
+  deaths: Entity[] = [];
   /** Track id remaps from fusion merges, so the UI can follow a selected track. */
   readonly remapped = new Map<number, number>();
   private readonly byId = new Map<number, Entity>();
@@ -312,11 +314,27 @@ export class World {
     this.pending.push({ t: this.t + delay, e });
   }
 
+  /** Record how an entity died or left, once. */
+  setFate(e: Entity, how: Fate['how'], by: string, extra: Partial<Fate> = {}): void {
+    if (e.fate) return;
+    e.fate = { how, by, t: this.t, pos: clone(e.pos), vel: clone(e.vel), air: how === 'missile' || how === 'gun' || how === 'laser', ...extra };
+    this.deaths.push(e);
+  }
+
+  /** An entity leaves the battle without being destroyed (egress, landing, end of flight). */
+  retire(e: Entity): void {
+    e.alive = false;
+    this.setFate(e, 'exit', '');
+  }
+
   /** A red warhead functions: damage every site inside its lethal radius. */
   detonate(e: Entity): void {
     e.alive = false;
     const wh = e.warhead;
-    if (!wh) return;
+    if (!wh) {
+      this.setFate(e, 'impact', e.targetName, { hit: false });
+      return;
+    }
     const nearGround = e.pos.z - this.terrain.groundAt(e.pos.x, e.pos.y) < 60;
     this.effect(e.pos, e.kind === 'tbm' || e.kind === 'cruise' ? 'big' : nearGround ? 'ground' : 'blast');
     let hit = false;
@@ -329,6 +347,7 @@ export class World {
         hit = true;
       }
     }
+    this.setFate(e, 'impact', e.targetName, { hit });
     if (hit) {
       this.stats.leakers++;
       if (e.pkg >= 0) this.pkgHits.set(e.pkg, (this.pkgHits.get(e.pkg) ?? 0) + 1);
@@ -339,9 +358,10 @@ export class World {
   }
 
   /** Destroy an entity in the air (missile kill, gun kill). */
-  killEntity(e: Entity, by: string, shooter = by): void {
+  killEntity(e: Entity, by: string, shooter = by, how: 'missile' | 'gun' | 'laser' = 'missile'): void {
     if (!e.alive) return;
     e.alive = false;
+    this.setFate(e, how, shooter);
     this.effect(e.pos, 'blast');
     if (e.side === 'red') {
       this.stats.kills++;
@@ -547,11 +567,13 @@ export class World {
     if (this.entities.some((e) => !e.alive)) {
       this.entities = this.entities.filter((e) => {
         if (e.alive || e instanceof Fighter) return true;
+        if (!e.fate) this.setFate(e, 'exit', '');
         this.byId.delete(e.id);
         return false;
       });
     }
     if (this.missiles.some((m) => !m.alive)) this.missiles = this.missiles.filter((m) => m.alive);
+    if (this.deaths.length && this.t - this.deaths[0].fate!.t > 20) this.deaths = this.deaths.filter((e) => this.t - e.fate!.t <= 20);
     if (this.effects.length && this.t - this.effects[0].t0 > 6) this.effects = this.effects.filter((f) => this.t - f.t0 <= 6);
   }
 }

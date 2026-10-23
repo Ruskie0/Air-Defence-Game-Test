@@ -45,6 +45,24 @@ export interface Emitter {
   isEmitting(): boolean;
 }
 
+/**
+ * How an entity left the battle. `air` kills (missile, gun, laser) leave a wreck that falls from `pos`
+ * with `vel`; `impact` means its warhead functioned on the ground (or at its aim point); `exit` means it
+ * flew off the map, ran out of time or landed.
+ */
+export interface Fate {
+  how: 'missile' | 'gun' | 'laser' | 'impact' | 'exit';
+  /** Shooter (fire unit, gun, fighter or laser name) for air kills; target name for impacts. */
+  by: string;
+  t: number;
+  pos: V3;
+  vel: V3;
+  /** Killed in the air, so a wreck should fall. */
+  air: boolean;
+  /** Impacts only: a defended or AD site took damage. */
+  hit?: boolean;
+}
+
 let nextId = 1;
 
 export abstract class Entity {
@@ -75,6 +93,8 @@ export abstract class Entity {
   lastDetected = -1e9;
   /** Campaign raid package this threat belongs to (-1 outside the campaign). */
   pkg = -1;
+  /** Set once, when the entity dies or leaves (null while it is alive). */
+  fate: Fate | null = null;
 
   constructor(name: string, pos: V3) {
     this.name = name;

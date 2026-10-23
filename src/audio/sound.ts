@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Entity, Kind } from '../sim/entities';
 import type { Effect, World } from '../sim/world';
 import type { FrameEvents } from '../render/events';
+import './sound.css';
 
 /**
  * Procedural battlefield audio with WebAudio: no samples, everything is filtered noise and oscillators.
@@ -10,7 +11,9 @@ import type { FrameEvents } from '../render/events';
  */
 
 const SOUND_SPEED = 343;
-const STORE_KEY = 'ad-sound-muted';
+const STORE_KEY = 'ad-sound';
+/** Older builds stored only the mute flag. */
+const OLD_KEY = 'ad-sound-muted';
 
 interface Spatial {
   gain: number;
@@ -52,6 +55,9 @@ const JET: Partial<Record<Kind, number>> = { fighter: 2500, sead: 2500, bomber: 
 
 export class SoundEngine {
   muted = false;
+  /** Master volume and alert-tone volume, 0..1. */
+  volume = 0.7;
+  alerts = 0.6;
   private ctx: AudioContext | null = null;
   private master!: GainNode;
   private sfx!: GainNode;
@@ -67,12 +73,18 @@ export class SoundEngine {
   private stillFor = 0;
   private suspendedByPause = false;
   private readonly btn: HTMLButtonElement;
+  private readonly panel: HTMLDivElement;
   private readonly right = new THREE.Vector3();
   private readonly tmp = new THREE.Vector3();
 
   constructor() {
     try {
-      this.muted = localStorage.getItem(STORE_KEY) === '1';
+      const saved = JSON.parse(localStorage.getItem(STORE_KEY) ?? 'null') as { volume?: number; alerts?: number; muted?: boolean } | null;
+      if (saved) {
+        this.volume = clamp01(saved.volume ?? this.volume);
+        this.alerts = clamp01(saved.alerts ?? this.alerts);
+        this.muted = !!saved.muted;
+      } else this.muted = localStorage.getItem(OLD_KEY) === '1';
     } catch {
       /* storage unavailable */
     }
@@ -84,33 +96,96 @@ export class SoundEngine {
       if (e.code === 'KeyM' && !e.ctrlKey && !e.metaKey && !e.altKey) this.toggle();
       start();
     });
+
+    // Speaker button in the top bar; it opens a small panel with the volume sliders and mute.
+    const wrap = document.createElement('div');
+    wrap.className = 'snd';
     this.btn = document.createElement('button');
     this.btn.id = 'snd-btn';
-    this.btn.title = 'Sound on or off (M)';
-    this.btn.addEventListener('click', () => this.toggle());
+    this.btn.title = 'Sound (M mutes)';
+    this.btn.setAttribute('aria-haspopup', 'true');
+    this.panel = document.createElement('div');
+    this.panel.id = 'snd-panel';
+    this.panel.hidden = true;
+    this.panel.innerHTML = `
+      <label for="snd-vol">Volume <output id="snd-vol-v"></output></label>
+      <input id="snd-vol" type="range" min="0" max="100" step="1">
+      <label for="snd-alert">Alert tones <output id="snd-alert-v"></output></label>
+      <input id="snd-alert" type="range" min="0" max="100" step="1">
+      <button id="snd-mute" type="button">Mute</button>
+      <p>M mutes or unmutes at any time.</p>`;
+    wrap.append(this.btn, this.panel);
     const help = document.getElementById('help-btn');
-    if (help) help.before(this.btn);
-    this.paintButton();
+    if (help) help.before(wrap);
+    else document.body.append(wrap);
+
+    const vol = this.panel.querySelector<HTMLInputElement>('#snd-vol')!;
+    const alert = this.panel.querySelector<HTMLInputElement>('#snd-alert')!;
+    vol.value = String(Math.round(this.volume * 100));
+    alert.value = String(Math.round(this.alerts * 100));
+    vol.addEventListener('input', () => {
+      this.volume = Number(vol.value) / 100;
+      this.muted = false;
+      this.apply();
+    });
+    alert.addEventListener('input', () => {
+      this.alerts = Number(alert.value) / 100;
+      this.apply();
+    });
+    // A short tone so the alert level can be judged while dragging.
+    alert.addEventListener('change', () => {
+      if (this.ctx?.state === 'running') this.tone([784, 587], 0.16, 0.04, 'triangle', 0.25);
+    });
+    this.panel.querySelector('#snd-mute')!.addEventListener('click', () => this.toggle());
+    this.btn.addEventListener('click', () => {
+      this.panel.hidden = !this.panel.hidden;
+      this.btn.setAttribute('aria-expanded', String(!this.panel.hidden));
+    });
+    document.addEventListener('pointerdown', (e) => {
+      if (!this.panel.hidden && !wrap.contains(e.target as Node)) this.panel.hidden = true;
+    });
+    this.panel.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        this.panel.hidden = true;
+        this.btn.focus();
+      }
+    });
+    this.paint();
   }
 
   toggle(): void {
     this.muted = !this.muted;
+    this.apply();
+  }
+
+  private apply(): void {
     try {
-      localStorage.setItem(STORE_KEY, this.muted ? '1' : '0');
+      localStorage.setItem(STORE_KEY, JSON.stringify({ volume: this.volume, alerts: this.alerts, muted: this.muted }));
     } catch {
       /* storage unavailable */
     }
-    if (this.ctx) this.master.gain.setTargetAtTime(this.muted ? 0 : 0.7, this.ctx.currentTime, 0.05);
-    this.paintButton();
+    if (this.ctx) {
+      this.master.gain.setTargetAtTime(this.muted ? 0 : this.volume, this.ctx.currentTime, 0.05);
+      this.ui.gain.setTargetAtTime(this.alerts * 0.8, this.ctx.currentTime, 0.05);
+    }
+    this.paint();
   }
 
-  private paintButton(): void {
-    const waves = this.muted
+  private paint(): void {
+    const silent = this.muted || this.volume === 0;
+    const waves = silent
       ? '<path d="M11 6l4 4M15 6l-4 4" stroke="currentColor" stroke-width="1.4" fill="none"/>'
-      : '<path d="M11 5.5a3.5 3.5 0 0 1 0 5M12.6 3.6a6 6 0 0 1 0 8.8" stroke="currentColor" stroke-width="1.3" fill="none"/>';
+      : this.volume < 0.4
+        ? '<path d="M11 5.5a3.5 3.5 0 0 1 0 5" stroke="currentColor" stroke-width="1.3" fill="none"/>'
+        : '<path d="M11 5.5a3.5 3.5 0 0 1 0 5M12.6 3.6a6 6 0 0 1 0 8.8" stroke="currentColor" stroke-width="1.3" fill="none"/>';
     this.btn.innerHTML = `<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M2 6h3l4-3v10l-4-3H2z" fill="currentColor"/>${waves}</svg>`;
-    this.btn.setAttribute('aria-label', this.muted ? 'Unmute sound' : 'Mute sound');
-    this.btn.classList.toggle('on', !this.muted && !!this.ctx);
+    this.btn.setAttribute('aria-label', silent ? 'Sound settings, muted' : `Sound settings, volume ${Math.round(this.volume * 100)}%`);
+    this.btn.classList.toggle('on', !silent && !!this.ctx);
+    this.panel.querySelector('#snd-vol-v')!.textContent = this.muted ? 'muted' : `${Math.round(this.volume * 100)}%`;
+    this.panel.querySelector('#snd-alert-v')!.textContent = `${Math.round(this.alerts * 100)}%`;
+    const mute = this.panel.querySelector('#snd-mute')!;
+    mute.textContent = this.muted ? 'Unmute' : 'Mute';
+    mute.classList.toggle('on', this.muted);
   }
 
   /** Browsers only allow audio after a user gesture, so the graph is built on the first click or key. */
@@ -129,12 +204,12 @@ export class SoundEngine {
     comp.attack.value = 0.003;
     comp.release.value = 0.25;
     this.master = ctx.createGain();
-    this.master.gain.value = this.muted ? 0 : 0.7;
+    this.master.gain.value = this.muted ? 0 : this.volume;
     this.master.connect(comp).connect(ctx.destination);
     this.sfx = ctx.createGain();
     this.sfx.connect(this.master);
     this.ui = ctx.createGain();
-    this.ui.gain.value = 0.5;
+    this.ui.gain.value = this.alerts * 0.8;
     this.ui.connect(this.master);
 
     const len = ctx.sampleRate * 3;
@@ -149,7 +224,7 @@ export class SoundEngine {
       b[i] = last * 3.5;
     }
     this.buildLoops();
-    this.paintButton();
+    this.paint();
   }
 
   // ---------------------------------------------------------------- building blocks
@@ -467,4 +542,8 @@ export class SoundEngine {
     const alt = cam.position.y - w.terrain.groundAt(cam.position.x, -cam.position.z);
     L.wind.set({ gain: 0.05 / (1 + Math.max(0, alt) / 3000), pan: 0, cutoff: 20000, delay: 0 }, 1, 0.5);
   }
+}
+
+function clamp01(v: number): number {
+  return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.7;
 }

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { clamp, smoothstep } from '../sim/math';
 import { Terrain, valleyX } from '../sim/terrain';
 import { fbm, hash2, prng, tileNoise, vnoise } from './noise';
+import { buildBuildings, buildTrees } from './scatter';
 
 /**
  * Presentation-only scenery: sky, lighting, land cover, water, trees and towns.
@@ -208,7 +209,75 @@ class LandCover {
   }
 }
 
-function paintLandCover(lc: LandCover): HTMLCanvasElement {
+/** Newer terrains carry their pass valleys and orientation; the original map has them as fixed functions. */
+interface TerrainFeatures {
+  seed?: number;
+  valleys?: { x: number; y: number }[][];
+  layout?: { rot: number };
+}
+
+/** Each pass river: down its valley to the plain, then meandering on towards the sea. */
+function riverPaths(t: Terrain): [number, number][][] {
+  const f = t as unknown as TerrainFeatures;
+  if (f.valleys && f.layout) {
+    // The sea lies opposite the mountains: rot is the bearing of the mountain side (0 = north).
+    const away = ((f.layout.rot + 180) * Math.PI) / 180;
+    const dx = Math.sin(away);
+    const dy = Math.cos(away);
+    return f.valleys.map((v, which) => {
+      const pts: [number, number][] = v.map((p, i) => [p.x + 250 * Math.sin(i / 2.6) * -dy, p.y + 250 * Math.sin(i / 2.6) * dx]);
+      const [x0, y0] = pts[pts.length - 1];
+      const spread = which === 0 ? -0.07 : 0.06;
+      for (let d = 500; d < 4 * t.half; d += 500) {
+        const side = spread * d + 2600 * Math.sin(d / 7000 + which) * Math.min(1, d / 20000) + 300 * Math.sin(d / 1100);
+        const x = x0 + dx * d - dy * side;
+        const y = y0 + dy * d + dx * side;
+        pts.push([x, y]);
+        if (Math.max(Math.abs(x), Math.abs(y)) > t.half * 1.05) break;
+      }
+      return pts;
+    });
+  }
+  return ([0, 1] as const).map((which) => {
+    const pts: [number, number][] = [];
+    for (let y = 78000; y > 14000; y -= 500) pts.push([valleyX(which, y) + 250 * Math.sin(y / 1300), y]);
+    const x0 = pts[pts.length - 1][0];
+    for (let y = 14000; y > -72000; y -= 500) {
+      const k = (14000 - y) / 86000;
+      const drift = which === 0 ? -6000 * k : 5000 * k;
+      pts.push([x0 + drift + 2600 * Math.sin((14000 - y) / 7000 + which) * Math.min(1, k * 4) + 300 * Math.sin(y / 1100), y]);
+    }
+    return pts;
+  });
+}
+
+/** A road up each pass, beside its river. */
+function passRoads(t: Terrain): [number, number][][] {
+  const f = t as unknown as TerrainFeatures;
+  if (f.valleys) {
+    return f.valleys.map((v) =>
+      v.map((p, i): [number, number] => {
+        const q = v[Math.min(i + 1, v.length - 1)];
+        const r = v[Math.max(i - 1, 0)];
+        const len = Math.hypot(q.x - r.x, q.y - r.y) || 1;
+        return [p.x + ((q.y - r.y) / len) * 420, p.y - ((q.x - r.x) / len) * 420];
+      }),
+    );
+  }
+  return ([0, 1] as const).map((which) => {
+    const pts: [number, number][] = [];
+    for (let y = 9000; y < 80000; y += 600) pts.push([valleyX(which, y) + 420, y]);
+    return pts;
+  });
+}
+
+/** The seed for land cover: the terrain's own where it has one. */
+export function terrainSeed(t: Terrain, fallback: number): number {
+  return (t as unknown as TerrainFeatures).seed ?? fallback;
+}
+
+/** Paints the land-cover texture; also returns a forest mask (row 0 south, as a DataTexture expects). */
+function paintLandCover(lc: LandCover): { canvas: HTMLCanvasElement; mask: Uint8Array } {
   const t = lc.t;
   const N = TEX;
   const half = t.half;
@@ -223,6 +292,7 @@ function paintLandCover(lc: LandCover): HTMLCanvasElement {
   const g = canvas.getContext('2d')!;
   const img = g.createImageData(N, N);
   const d = img.data;
+  const mask = new Uint8Array(N * N);
   const at = (i: number, j: number): number => H[clamp(j, 0, N - 1) * N + clamp(i, 0, N - 1)];
   const s = lc.seed;
   const c: RGB = [0, 0, 0];
@@ -272,7 +342,10 @@ function paintLandCover(lc: LandCover): HTMLCanvasElement {
           if (edge) toward(C.forest2, 0.35);
           toward(C.grass2, (n2 - 0.5) * 0.25);
         }
-        if (forest > 0) mix(C.forest, C.forest2, n2 * 0.6 + clamp(1 - forest * 8, 0, 0.4));
+        if (forest > 0) {
+          mix(C.forest, C.forest2, n2 * 0.6 + clamp(1 - forest * 8, 0, 0.4));
+          if (town <= 0) mask[(N - 1 - j) * N + i] = 255 * clamp(forest * 10, 0, 1);
+        }
         else if (forest > -0.05) toward(C.forest2, 0.35);
         if (h > 1250) toward(C.alpine, smoothstep(1250, 1600, h) * (forest > 0 ? 0.3 : 1));
         const rocky = smoothstep(0.28, 0.6, slope) + smoothstep(1700, 2300, h) * 0.8;
@@ -282,7 +355,8 @@ function paintLandCover(lc: LandCover): HTMLCanvasElement {
         }
         const snowLine = 2200 + (n1 - 0.5) * 500;
         if (h > snowLine && slope < 1.1) toward(C.snow, clamp((h - snowLine) / 220, 0, 1) * (1 - smoothstep(0.7, 1.1, slope)));
-        if (town > 0) mix(n2 > 0.55 ? C.town2 : C.town, c, 1 - clamp(town * 1.3, 0, 1));
+        // Built-up ground stays part garden: houses and blocks stand on it in 3D.
+        if (town > 0) mix(n2 > 0.55 ? C.town2 : C.town, c, 1 - clamp(town * 0.9, 0, 0.7));
       }
       // Cheap ambient occlusion: valleys darker, ridges brighter.
       const avg = (at(i - 3, j) + at(i + 3, j) + at(i, j - 3) + at(i, j + 3)) * 0.25;
@@ -312,17 +386,7 @@ function paintLandCover(lc: LandCover): HTMLCanvasElement {
     g.lineCap = 'round';
     g.stroke();
   };
-  for (const which of [0, 1] as const) {
-    const pts: [number, number][] = [];
-    for (let y = 78000; y > 14000; y -= 500) pts.push([valleyX(which, y) + 250 * Math.sin(y / 1300), y]);
-    const x0 = pts[pts.length - 1][0];
-    for (let y = 14000; y > -72000; y -= 500) {
-      const k = (14000 - y) / 86000;
-      const drift = which === 0 ? -6000 * k : 5000 * k;
-      pts.push([x0 + drift + 2600 * Math.sin((14000 - y) / 7000 + which) * Math.min(1, k * 4) + 300 * Math.sin(y / 1100), y]);
-    }
-    stroke(pts, '#3c6879', 1.6);
-  }
+  for (const pts of riverPaths(t)) stroke(pts, '#3c6879', 1.6);
   // Roads: each town to its two nearest neighbours (the airbase counts as one), plus a road up each pass.
   const nodes = [{ x: 0, y: -1500 }, ...lc.towns];
   const roads = new Set<string>();
@@ -351,12 +415,8 @@ function paintLandCover(lc: LandCover): HTMLCanvasElement {
       road(a, nodes[ib], ia * 31 + ib);
     }
   });
-  for (const which of [0, 1] as const) {
-    const pts: [number, number][] = [];
-    for (let y = 9000; y < 80000; y += 600) pts.push([valleyX(which, y) + 420, y]);
-    stroke(pts, 'rgba(92,88,80,0.9)', 1.0);
-  }
-  return canvas;
+  for (const pts of passRoads(t)) stroke(pts, 'rgba(92,88,80,0.9)', 1.0);
+  return { canvas, mask };
 }
 
 function detailTexture(): THREE.DataTexture {
@@ -411,22 +471,27 @@ function waterNormals(): THREE.DataTexture {
  * Adds world-space detail noise to a terrain material, faded out with distance. With `edge`, the colour also
  * fades towards haze beyond that distance from the centre, for the mirrored skirt.
  */
-function addDetail(m: THREE.MeshStandardMaterial, detail: THREE.Texture, edge = 0): void {
+function addDetail(m: THREE.MeshStandardMaterial, detail: THREE.Texture, forest: THREE.Texture, edge = 0): void {
   m.customProgramCacheKey = () => `terrain-detail-${edge}`;
   m.onBeforeCompile = (sh) => {
     sh.uniforms.detailMap = { value: detail };
+    sh.uniforms.forestMask = { value: forest };
     sh.uniforms.edgeHaze = { value: new THREE.Color('#7f8a73') };
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
       .replace('#include <project_vertex>', '#include <project_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nuniform sampler2D detailMap;\nuniform vec3 edgeHaze;')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nuniform sampler2D detailMap;\nuniform sampler2D forestMask;\nuniform vec3 edgeHaze;')
       .replace(
         '#include <map_fragment>',
         `#include <map_fragment>
         float camD = distance(vWPos, cameraPosition);
         float dn = texture2D(detailMap, vWPos.xz / 260.0).r * 0.55 + texture2D(detailMap, vWPos.xz / 41.0).r * 0.45;
         diffuseColor.rgb *= mix(1.0, 0.72 + 0.56 * dn, 1.0 - smoothstep(3000.0, 26000.0, camD));
+        // Inside forests, break the flat green into lit and shadowed crowns.
+        float fm = texture2D(forestMask, vMapUv).r;
+        float cn = texture2D(detailMap, vWPos.xz / 170.0).r * 0.65 + texture2D(detailMap, vWPos.xz / 430.0).r * 0.35;
+        diffuseColor.rgb *= mix(1.0, 0.45 + 0.95 * smoothstep(0.36, 0.72, cn), fm * (1.0 - smoothstep(1500.0, 14000.0, camD)));
         ${edge > 0 ? `float edgeK = smoothstep(${(edge * 1.02).toFixed(1)}, ${(edge * 1.7).toFixed(1)}, max(abs(vWPos.x), abs(vWPos.z)));
         diffuseColor.rgb = mix(diffuseColor.rgb, edgeHaze, edgeK * 0.9);` : ''}`,
       );
@@ -435,14 +500,26 @@ function addDetail(m: THREE.MeshStandardMaterial, detail: THREE.Texture, edge = 
 
 export interface Scenery {
   terrainMesh: THREE.Mesh;
+  /** Town centres and radii in sim coordinates. */
+  towns: readonly Town[];
   /** Hide trees and buildings within r metres of a sim position, so units placed there stay visible. */
   clearAround(x: number, y: number, r: number): void;
   update(dt: number): void;
+  /** Remove everything from the scene and free GPU memory, before building a new map. */
+  dispose(): void;
 }
 
-export function buildScenery(scene: THREE.Scene, t: Terrain, seed: number): Scenery {
+export function buildScenery(parent: THREE.Scene, t: Terrain, seed: number): Scenery {
+  const scene = new THREE.Group();
+  parent.add(scene);
   const lc = new LandCover(t, seed);
-  const canvas = paintLandCover(lc);
+  const { canvas, mask } = paintLandCover(lc);
+  const forestTex = new THREE.DataTexture(mask, TEX, TEX, THREE.RedFormat);
+  forestTex.magFilter = THREE.LinearFilter;
+  forestTex.minFilter = THREE.LinearMipmapLinearFilter;
+  forestTex.generateMipmaps = true;
+  forestTex.wrapS = forestTex.wrapT = THREE.MirroredRepeatWrapping;
+  forestTex.needsUpdate = true;
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 8;
@@ -456,7 +533,7 @@ export function buildScenery(scene: THREE.Scene, t: Terrain, seed: number): Scen
   for (let i = 0; i < pos.count; i++) pos.setY(i, t.heightAt(pos.getX(i), -pos.getZ(i)));
   geo.computeVertexNormals();
   const terrainMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, metalness: 0 });
-  addDetail(terrainMat, detail);
+  addDetail(terrainMat, detail, forestTex);
   const terrainMesh = new THREE.Mesh(geo, terrainMat);
   scene.add(terrainMesh);
 
@@ -483,12 +560,12 @@ export function buildScenery(scene: THREE.Scene, t: Terrain, seed: number): Scen
   }
   sk.computeVertexNormals();
   const skirtMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0 });
-  addDetail(skirtMat, detail, t.half);
+  addDetail(skirtMat, detail, forestTex, t.half);
   const skirt = new THREE.Mesh(sk, skirtMat);
   scene.add(skirt);
 
   const normals = waterNormals();
-  normals.repeat.set(2700, 1125);
+  normals.repeat.set(2700, 2700);
   const seaMat = new THREE.MeshStandardMaterial({
     color: 0x1b4253,
     roughness: 0.12,
@@ -498,19 +575,20 @@ export function buildScenery(scene: THREE.Scene, t: Terrain, seed: number): Scen
     normalMap: normals,
     normalScale: new THREE.Vector2(0.35, 0.35),
   });
-  const sea = new THREE.Mesh(new THREE.PlaneGeometry(size * 12, size * 5), seaMat);
+  // Sea level is 0 everywhere: the terrain hides the plane on land, so lakes and any coast get water.
+  const sea = new THREE.Mesh(new THREE.PlaneGeometry(size * 12, size * 12), seaMat);
   sea.rotateX(-Math.PI / 2);
-  sea.position.set(0, 0, 25000 + size * 2.5);
   scene.add(sea);
 
   const trees = buildTrees(scene, lc);
-  const houses = buildTowns(scene, lc);
+  const buildings = buildBuildings(scene, lc);
 
   let time = 0;
   return {
     terrainMesh,
+    towns: lc.towns,
     clearAround(x, y, r) {
-      for (const set of [...trees, houses]) {
+      for (const set of [...trees, ...buildings]) {
         let changed = false;
         for (let i = 0; i < set.mesh.count; i++) {
           if (set.hidden[i]) continue;
@@ -527,118 +605,17 @@ export function buildScenery(scene: THREE.Scene, t: Terrain, seed: number): Scen
       time += dt;
       normals.offset.set(time * 0.004, time * 0.0025);
     },
+    dispose() {
+      parent.remove(scene);
+      scene.traverse((o) => {
+        if (o instanceof THREE.Mesh) {
+          o.geometry.dispose();
+          (o.material as THREE.Material).dispose();
+        }
+      });
+      for (const tx of [tex, detail, forestTex, normals]) tx.dispose();
+    },
   };
 }
 
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
-const Y_AXIS = new THREE.Vector3(0, 1, 0);
-
-interface Scatter {
-  mesh: THREE.InstancedMesh;
-  xy: Float32Array;
-  hidden: Uint8Array;
-}
-
-function scatterSet(scene: THREE.Scene, geo: THREE.BufferGeometry, mat: THREE.Material, max: number): Scatter {
-  const mesh = new THREE.InstancedMesh(geo, mat, max);
-  mesh.count = 0;
-  mesh.frustumCulled = false;
-  scene.add(mesh);
-  return { mesh, xy: new Float32Array(max * 2), hidden: new Uint8Array(max) };
-}
-
-/** Broadleaf and conifer trees in the forests around the defended area; conifers take over with height. */
-function buildTrees(scene: THREE.Scene, lc: LandCover): Scatter[] {
-  const t = lc.t;
-  const rnd = prng(lc.seed ^ 0x7ee5);
-  const leafGeo = new THREE.IcosahedronGeometry(1, 1);
-  leafGeo.translate(0, 0.85, 0);
-  const pineGeo = new THREE.ConeGeometry(0.75, 2.4, 7, 1, true);
-  pineGeo.translate(0, 1.2, 0);
-  const mat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
-  const leaf = scatterSet(scene, leafGeo, mat, 22000);
-  const pine = scatterSet(scene, pineGeo, mat, 16000);
-  const m = new THREE.Matrix4();
-  const q = new THREE.Quaternion();
-  const sc = new THREE.Vector3();
-  const p = new THREE.Vector3();
-  const col = new THREE.Color();
-  const R = 26000;
-  for (let i = 0; i < 400000 && (leaf.mesh.count < 22000 || pine.mesh.count < 16000); i++) {
-    const a = rnd() * Math.PI * 2;
-    const r = Math.sqrt(rnd()) * R;
-    const x = Math.cos(a) * r;
-    const y = Math.sin(a) * r - 2000;
-    const h = t.heightAt(x, y);
-    if (h < 10) continue;
-    const slope = lc.slopeAt(x, y);
-    const f = lc.forest(x, y, h, slope);
-    // Dense in the forests, the odd tree along field edges.
-    if (f < 0 && !(f > -0.1 && rnd() < 0.012)) continue;
-    const conifer = rnd() < 0.25 + smoothstep(300, 1200, h) * 0.65;
-    const set = conifer ? pine : leaf;
-    const n = set.mesh.count;
-    if (n >= set.xy.length / 2) continue;
-    const w = conifer ? 5 + rnd() * 5 : 6 + rnd() * 7;
-    sc.set(w, conifer ? w * (1.1 + rnd() * 0.5) : w * (0.8 + rnd() * 0.4), w);
-    q.setFromAxisAngle(Y_AXIS, rnd() * 6.28);
-    p.set(x, t.groundAt(x, y) - 1.5, -y);
-    m.compose(p, q, sc);
-    set.mesh.setMatrixAt(n, m);
-    if (conifer) col.setHSL(0.28 + rnd() * 0.08, 0.4 + rnd() * 0.2, 0.03 + rnd() * 0.025);
-    else col.setHSL(0.2 + rnd() * 0.1, 0.45 + rnd() * 0.2, 0.035 + rnd() * 0.035);
-    set.mesh.setColorAt(n, col);
-    set.xy[n * 2] = x;
-    set.xy[n * 2 + 1] = y;
-    set.mesh.count = n + 1;
-  }
-  return [leaf, pine];
-}
-
-/** Houses, blocks and sheds in each town. */
-function buildTowns(scene: THREE.Scene, lc: LandCover): Scatter {
-  const t = lc.t;
-  const rnd = prng(lc.seed ^ 0x70e1);
-  const max = 9000;
-  const geo = new THREE.BoxGeometry(1, 1, 1);
-  geo.translate(0, 0.5, 0);
-  const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0 }), max);
-  const xy = new Float32Array(max * 2);
-  const m = new THREE.Matrix4();
-  const q = new THREE.Quaternion();
-  const sc = new THREE.Vector3();
-  const p = new THREE.Vector3();
-  const col = new THREE.Color();
-  const palette = ['#c9c1b0', '#b9a58c', '#a65f47', '#9b9b98', '#d6d0c4', '#8a5040', '#7f8580'].map((c) => new THREE.Color(c));
-  let n = 0;
-  for (const tw of lc.towns) {
-    const grid = rnd() * Math.PI;
-    const count = Math.min(max - n, Math.round((tw.r * tw.r) / 9000));
-    for (let k = 0; k < count; k++) {
-      const a = rnd() * Math.PI * 2;
-      const r = Math.abs(rnd() + rnd() - 1) * tw.r * 1.1;
-      const x = tw.x + Math.cos(a) * r;
-      const y = tw.y + Math.sin(a) * r;
-      if (lc.slopeAt(x, y) > 0.15 || t.heightAt(x, y) < 6) continue;
-      const centre = 1 - r / (tw.r * 1.1);
-      const big = tw.r > 2000 && centre > 0.6 && rnd() < 0.35;
-      const w = big ? 25 + rnd() * 25 : 9 + rnd() * 10;
-      const d = big ? 20 + rnd() * 30 : 8 + rnd() * 8;
-      const hgt = big ? 14 + rnd() * 30 : 5 + rnd() * 5;
-      sc.set(w, hgt, d);
-      q.setFromAxisAngle(Y_AXIS, grid + (rnd() < 0.8 ? 0 : Math.PI / 2) + (rnd() - 0.5) * 0.15);
-      p.set(x, t.groundAt(x, y) - 0.5, -y);
-      m.compose(p, q, sc);
-      mesh.setMatrixAt(n, m);
-      col.copy(palette[Math.floor(rnd() * palette.length)]).multiplyScalar(0.85 + rnd() * 0.2);
-      mesh.setColorAt(n, col);
-      xy[n * 2] = x;
-      xy[n * 2 + 1] = y;
-      n++;
-    }
-  }
-  mesh.count = n;
-  mesh.frustumCulled = false;
-  scene.add(mesh);
-  return { mesh, xy, hidden: new Uint8Array(max) };
-}

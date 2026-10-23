@@ -1,0 +1,51 @@
+/* Sound control in the top bar: the speaker button opens a small panel of sliders. */
+.snd {
+  position: relative;
+  display: flex;
+}
+#snd-btn {
+  width: 32px;
+  display: grid;
+  place-items: center;
+}
+#snd-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 220px;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px 12px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  backdrop-filter: blur(6px);
+  z-index: 20;
+}
+#snd-panel[hidden] {
+  display: none;
+}
+#snd-panel label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--dim);
+}
+#snd-panel output {
+  font-family: var(--mono);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+#snd-panel input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+  margin: 0 0 4px;
+}
+#snd-panel button {
+  justify-self: start;
+}
+#snd-panel p {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--dim);
+}

@@ -17,7 +17,7 @@ import { IDENT_COLOR } from '../ui/colors';
 import { CameraRig } from './camera';
 import { Effects } from './effects';
 import { WorldEvents } from './events';
-import { Scenery, buildScenery, buildSky, updateHaze } from './terrain3d';
+import { Scenery, buildScenery, buildSky, terrainSeed, updateHaze } from './terrain3d';
 
 /** Sim frame (x east, y north, z up) to three.js frame (x east, y up, z south). */
 export const toThree = (p: V3, out = new THREE.Vector3()): THREE.Vector3 => out.set(p.x, p.z, -p.y);
@@ -193,6 +193,8 @@ export class View3D {
   private readonly bloom: UnrealBloomPass;
   private lastFrame = performance.now();
   private clearedKey = '';
+  /** The terrain the scenery was built for; a world on a different map rebuilds it. */
+  private sceneryTerrain: World['terrain'] | null = null;
   private readonly preview = new THREE.Group();
   private readonly raycaster = new THREE.Raycaster();
   private down: { x: number; y: number } | null = null;
@@ -318,6 +320,11 @@ export class View3D {
   /** Show another world (a new day, the deployment preview) over the same terrain. */
   setWorld(w: World): void {
     this.world = w;
+    if (w.terrain !== this.sceneryTerrain) {
+      this.scenery.dispose();
+      this.buildTerrain();
+      this.clearedKey = '';
+    }
     for (const s of this.siteObjs) {
       this.scene.remove(s.root);
       // CSS2D labels only clean up their DOM element when removed directly, not with a parent.
@@ -381,7 +388,8 @@ export class View3D {
   }
 
   private buildTerrain(): void {
-    this.scenery = buildScenery(this.scene, this.world.terrain, MAP_SEED);
+    this.scenery = buildScenery(this.scene, this.world.terrain, terrainSeed(this.world.terrain, MAP_SEED));
+    this.sceneryTerrain = this.world.terrain;
     this.terrainMesh = this.scenery.terrainMesh;
   }
 

@@ -1,4 +1,4 @@
-import { CAMPAIGN_DAYS, Campaign, DayReport } from '../campaign/campaign';
+import { CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty } from '../campaign/campaign';
 import { SECTOR_NAMES, sectorOf } from '../campaign/raidgen';
 import type { View3D } from '../render/view3d';
 import { CATALOG, DeployedUnit, UnitType } from '../sim/catalog';
@@ -80,10 +80,13 @@ export class CampaignUi {
       <h2>AIR DEFENCE</h2>
       <p>Command the integrated air defence of an airbase, its command and reporting centre (CRC) and a power plant. Every radar, missile and gun round is simulated.</p>
       <div class="menu-opts">
-        <button data-cui="new" class="big">
-          <b>New campaign</b>
-          <small>${CAMPAIGN_DAYS} days on a new random map. Earn a budget from what still stands, buy and deploy units, and face an enemy that learns from what worked.${saved ? ' Replaces the saved campaign.' : ''}</small>
-        </button>
+        <div class="big-group">
+          <div class="big-h"><b>New campaign</b>
+          <small>${CAMPAIGN_DAYS} days on a new random map. Earn a budget from what still stands, buy and deploy units, and face an enemy that learns from what worked.${saved ? ' Replaces the saved campaign.' : ''}</small></div>
+          <div class="diff">${(Object.keys(DIFFICULTY) as Difficulty[])
+            .map((d) => `<button data-cui="new" data-diff="${d}" class="${d === 'normal' ? 'go' : ''}"><b>${DIFFICULTY[d].name}</b><small>${DIFFICULTY[d].desc}</small></button>`)
+            .join('')}</div>
+        </div>
         ${
           saved
             ? `<button data-cui="continue" class="big"><b>Continue campaign</b><small>Day ${saved.s.day} of ${CAMPAIGN_DAYS}, budget ${money(saved.s.money)}, ${saved.units.length} units deployed.</small></button>`
@@ -97,8 +100,8 @@ export class CampaignUi {
       <p class="dim">Press <b>?</b> in the top bar at any time for how the systems work.</p>`;
   }
 
-  newCampaign(seed = Math.floor(Math.random() * 1e6) + 1): void {
-    this.c = Campaign.create(seed);
+  newCampaign(seed = Math.floor(Math.random() * 1e6) + 1, difficulty: Difficulty = 'normal'): void {
+    this.c = Campaign.create(seed, difficulty);
     store(this.c);
     this.note = 'Your first units are in their default positions. Move them, buy more, then start the day.';
     this.showPlanning();
@@ -151,7 +154,7 @@ export class CampaignUi {
     if (!c) return;
     const s = c.s;
     const last = s.history[s.history.length - 1];
-    $('raid').innerHTML = `<span class="lbl">DAY</span><b>${s.day}</b><span class="dim">/${CAMPAIGN_DAYS}</span> <span class="lbl" style="margin-left:10px">PLANNING</span>`;
+    $('raid').innerHTML = `<span class="lbl">DAY</span><b>${s.day}</b><span class="dim">/${CAMPAIGN_DAYS}</span> <span class="lbl" style="margin-left:10px">PLANNING</span><span class="dim">${c.diff.name}</span>`;
     $('clock').innerHTML = '';
     $('score').innerHTML = `<span class="chip">Budget <b>${money(s.money)}</b></span>`;
 
@@ -295,6 +298,14 @@ export class CampaignUi {
       ${over ? `<p class="${over.won ? 'good' : 'bad'}"><b>${esc(over.reason)}</b></p>` : ''}
       <div class="kv">
         <span>Threats destroyed</span><b>${r.kills}</b>
+        ${
+          r.killsBy && Object.keys(r.killsBy).length
+            ? `<span class="dim">by unit</span><b class="dim">${Object.entries(r.killsBy)
+                .sort((a, b) => b[1] - a[1])
+                .map(([k, n]) => `${esc(k)} ${n}`)
+                .join(' · ')}</b>`
+            : ''
+        }
         <span>Leakers (hits on defended or AD sites)</span><b>${r.leakers}</b>
         <span>Missiles fired</span><b>${r.missilesFired} (${money(r.missileCostM)})</b>
         ${r.civilian ? `<span class="bad">Civil airliners shot down</span><b class="bad">${r.civilian}</b>` : ''}
@@ -326,7 +337,7 @@ export class CampaignUi {
     switch (d.cui) {
       case 'new':
         $('debrief').classList.add('hidden');
-        this.newCampaign();
+        this.newCampaign(undefined, (d.diff as Difficulty | undefined) ?? this.c?.s.difficulty ?? 'normal');
         return;
       case 'continue': {
         const saved = loadSaved();

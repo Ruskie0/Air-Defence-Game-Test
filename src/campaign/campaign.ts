@@ -15,9 +15,20 @@ export const AIRCRAFT_COST = 85;
 /** Shooting down this many airliners ends the campaign. */
 export const CIVIL_LIMIT = 2;
 
+export type Difficulty = 'easy' | 'normal' | 'hard';
+
+/** What each difficulty changes: the enemy's daily threat budget, our income and the starting budget. */
+export const DIFFICULTY: Record<Difficulty, { name: string; desc: string; threat: number; income: number; start: number }> = {
+  easy: { name: 'Recruit', desc: 'Smaller raids and a bigger budget.', threat: 0.75, income: 1.2, start: 220 },
+  normal: { name: 'Regular', desc: 'The intended balance.', threat: 1, income: 1, start: 160 },
+  hard: { name: 'Veteran', desc: 'Bigger raids, a tighter budget.', threat: 1.3, income: 0.85, start: 130 },
+};
+
 export interface DayReport {
   day: number;
   kills: number;
+  /** Kills per shooter. */
+  killsBy?: Record<string, number>;
   leakers: number;
   missilesFired: number;
   missileCostM: number;
@@ -47,6 +58,7 @@ export interface CampaignState {
   over: null | { won: boolean; reason: string };
   /** Seed of this campaign's map; absent in saves from before random maps (the classic map). */
   mapSeed?: number;
+  difficulty?: Difficulty;
 }
 
 /** Where new units go before the player moves them, in order of preference. */
@@ -68,12 +80,12 @@ export class Campaign {
     this.s = state;
   }
 
-  static create(seed: number): Campaign {
+  static create(seed: number, difficulty: Difficulty = 'normal'): Campaign {
     const c = new Campaign({
       version: 1,
       seed,
       day: 1,
-      money: 160,
+      money: DIFFICULTY[difficulty].start,
       deployment: { units: [], assets: DEFENDED_ASSETS.map((a) => ({ name: a.name, hp: 100 })) },
       nextUid: 1,
       nextPkg: 1,
@@ -83,6 +95,7 @@ export class Campaign {
       civilLosses: 0,
       over: null,
       mapSeed: seed,
+      difficulty,
     });
     // Starting order of battle: one MR battery, a SHORAD unit and a CIWS on the airbase.
     c.add('MR');
@@ -106,6 +119,10 @@ export class Campaign {
   }
 
   private map: Terrain | null = null;
+
+  get diff(): (typeof DIFFICULTY)[Difficulty] {
+    return DIFFICULTY[this.s.difficulty ?? 'normal'];
+  }
 
   /** This campaign's map layout (the classic map for old saves). */
   get layout(): MapLayout {
@@ -135,7 +152,7 @@ export class Campaign {
   /** Budget the defended area earns at the start of the next day, from what is still standing. */
   income(): number {
     const hp = (n: string): number => (this.s.deployment.assets.find((a) => a.name === n)?.hp ?? 0) / 100;
-    return Math.round(50 + 65 * hp('Airbase') + 45 * hp('Power plant') + 25 * hp('CRC'));
+    return Math.round((50 + 65 * hp('Airbase') + 45 * hp('Power plant') + 25 * hp('CRC')) * this.diff.income);
   }
 
   /** Price of restoring one hp point of an asset. */
@@ -312,7 +329,7 @@ export class Campaign {
   // ------------------------------------------------------------- the day
 
   replan(): void {
-    this.s.plan = planDay(this.s.day, this.s.seed, this.s.enemy, this.s.nextPkg, this.layout.rot);
+    this.s.plan = planDay(this.s.day, this.s.seed, this.s.enemy, this.s.nextPkg, this.layout.rot, this.diff.threat);
     this.s.nextPkg += this.s.plan.length;
   }
 
@@ -417,6 +434,7 @@ export class Campaign {
     const report: DayReport = {
       day: s.day,
       kills: w.stats.kills,
+      killsBy: { ...w.stats.killsBy },
       leakers: w.stats.leakers,
       missilesFired: w.stats.fired.LR + w.stats.fired.MR + w.stats.fired.SH + w.stats.fired.AAM,
       missileCostM: Math.round(w.stats.costM * 10) / 10,

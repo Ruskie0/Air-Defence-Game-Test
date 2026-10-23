@@ -493,7 +493,7 @@ export class Hud {
     const fu = w.unit(code);
     if (fu) {
       const r = fu.radar!;
-      const active = [...fu.activeTargets(w)].map((id) => w.tracker.get(id)?.label ?? `T${id}`);
+      const active = [...fu.activeTargets(w)].map((id) => w.tracker.get(id)?.label ?? `T${String(id).padStart(3, "0")}`);
       const ready = fu.launchers.filter((l) => l.site.alive && l.rounds > 0).length;
       const reload = fu.launchers.filter((l) => l.reloadAt > 0 && l.site.alive);
       const rows = this.candidates().map((tr) => {

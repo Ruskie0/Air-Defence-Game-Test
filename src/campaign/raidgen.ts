@@ -95,16 +95,16 @@ export function newEnemy(rot = 0): EnemyModel {
 }
 
 /** Threat points the enemy can spend on a given day. */
-export const threatBudget = (day: number): number => 8 + day * 7;
+export const threatBudget = (day: number, scale = 1): number => (8 + day * 7) * scale;
 
 /**
  * Build a day's raid plan from the enemy's budget and what it has learned. Package sectors are listed
  * relative to the enemy side of the map (sector 0 = the mountains, bearing `rot`).
  */
-export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: number, rot = 0): PlannedPkg[] {
+export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: number, rot = 0, threatScale = 1): PlannedPkg[] {
   const k = sectorOf(rot);
   const rng = new Rng(seed * 7919 + day * 104729);
-  let budget = threatBudget(day);
+  let budget = threatBudget(day, threatScale);
   const out: PlannedPkg[] = [];
   const kinds = (Object.keys(PKG) as PkgKind[]).filter((k) => day >= PKG[k].minDay && k !== 'dark');
   let guard = 0;

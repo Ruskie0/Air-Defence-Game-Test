@@ -553,8 +553,8 @@ function buildTrees(scene: THREE.Scene, lc: LandCover): Scatter[] {
   const rnd = prng(lc.seed ^ 0x7ee5);
   const leafGeo = new THREE.IcosahedronGeometry(1, 1);
   leafGeo.translate(0, 0.85, 0);
-  const pineGeo = new THREE.ConeGeometry(0.5, 2.6, 6, 1, true);
-  pineGeo.translate(0, 1.3, 0);
+  const pineGeo = new THREE.ConeGeometry(0.75, 2.4, 7, 1, true);
+  pineGeo.translate(0, 1.2, 0);
   const mat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
   const leaf = scatterSet(scene, leafGeo, mat, 22000);
   const pine = scatterSet(scene, pineGeo, mat, 16000);
@@ -585,7 +585,7 @@ function buildTrees(scene: THREE.Scene, lc: LandCover): Scatter[] {
     p.set(x, t.groundAt(x, y) - 1.5, -y);
     m.compose(p, q, sc);
     set.mesh.setMatrixAt(n, m);
-    if (conifer) col.setHSL(0.3 + rnd() * 0.08, 0.35 + rnd() * 0.2, 0.025 + rnd() * 0.02);
+    if (conifer) col.setHSL(0.28 + rnd() * 0.08, 0.4 + rnd() * 0.2, 0.03 + rnd() * 0.025);
     else col.setHSL(0.2 + rnd() * 0.1, 0.45 + rnd() * 0.2, 0.035 + rnd() * 0.035);
     set.mesh.setColorAt(n, col);
     set.xy[n * 2] = x;

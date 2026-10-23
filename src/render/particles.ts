@@ -36,7 +36,9 @@ varying vec4 vColor;
 void main() {
   vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
   gl_Position = projectionMatrix * mvPosition;
-  float px = pdata.x * uScale / max(-mvPosition.z, 1.0);
+  float dist = max(-mvPosition.z, 1.0);
+  // Exaggerate distant particles a little (up to 2x at 25 km) so smoke and bursts still read from the overview.
+  float px = pdata.x * uScale / dist * mix(1.0, 2.0, smoothstep(3000.0, 25000.0, dist));
   float a = pdata.y;
   float minPx = pdata.z;
   if (minPx < 0.5) a *= clamp(px, 0.0, 1.0);
@@ -179,7 +181,7 @@ export class ParticlePool {
     }
     for (let i = 0; i < this.n; i++) {
       const k = this.age[i] / this.life[i];
-      const grow = 1 - (1 - k) * (1 - k) * (1 - k);
+      const grow = 1 - (1 - k) * (1 - k) * (1 - k) * (1 - k);
       const fadeIn = Math.min(1, k * 25);
       const fade = (1 - k) * (1 - k * 0.5);
       this.gpos[i * 3] = this.p[i * 3];

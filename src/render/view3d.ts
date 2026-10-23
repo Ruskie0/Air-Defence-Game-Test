@@ -242,7 +242,8 @@ export class View3D {
     this.buildCoverage();
     this.fx = new Effects(this.scene);
 
-    this.composer = new EffectComposer(this.renderer);
+    // The composer renders off-screen, so the canvas's own antialiasing does not apply: multisample the target.
+    this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.55, 0.5, 1.6);
     this.composer.addPass(this.bloom);

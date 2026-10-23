@@ -147,9 +147,9 @@ export class Effects {
     const y = p.z;
     const z = -p.y;
     this.flash(x, y + 3, z, 35, 0.35, [12, 7, 3], 6);
-    for (let i = 0; i < 34; i++) {
+    for (let i = 0; i < 44; i++) {
       const a = rnd() * Math.PI * 2;
-      const sp = 6 + rnd() * 26;
+      const sp = 8 + rnd() * 30;
       this.puff({
         x: x + sym(4),
         y: y + rnd() * 6,
@@ -158,9 +158,9 @@ export class Effects {
         vy: 1 + rnd() * 5,
         vz: Math.sin(a) * sp,
         life: 18 + rnd() * 14,
-        size0: 8 + rnd() * 6,
-        size1: 50 + rnd() * 40,
-        alpha: 0.55,
+        size0: 14 + rnd() * 10,
+        size1: 70 + rnd() * 60,
+        alpha: 0.6,
         c0: [0.62, 0.58, 0.5],
         c1: [0.7, 0.69, 0.66],
         drag: 0.6,
@@ -176,8 +176,8 @@ export class Effects {
     const ground = w.terrain.groundAt(f.pos.x, f.pos.y);
     const low = y - ground < 90;
     const scale = f.kind === 'small' ? 1 : f.kind === 'blast' ? 2.2 : 4;
-    this.flash(x, y, z, 40 * scale, 0.14, [24, 16, 9], 10);
-    this.flash(x, y, z, 90 * scale, 0.5, [3, 1.6, 0.6], 0);
+    this.flash(x, y, z, 30 * scale, 0.14, [20, 13, 7], 10);
+    this.flash(x, y, z, 55 * scale, 0.45, [1.6, 0.8, 0.3], 0);
     const nFire = f.kind === 'small' ? 8 : f.kind === 'blast' ? 26 : 55;
     for (let i = 0; i < nFire; i++) {
       this.v.set(sym(1), low ? rnd() : sym(1), sym(1)).normalize().multiplyScalar((4 + rnd() * 16) * scale);
@@ -358,7 +358,7 @@ export class Effects {
       const dy = y - last.y;
       const dz = z - last.z;
       const seg = Math.hypot(dx, dy, dz);
-      const spacing = Math.max(cfg.s0 * 1.6, seg / 14);
+      const spacing = Math.max(cfg.s0 * 0.7, seg / 40);
       const n = Math.floor(seg / spacing);
       if (n > 0) {
         for (let k = 1; k <= n; k++) {

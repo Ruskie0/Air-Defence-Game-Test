@@ -36,6 +36,8 @@ export interface Stats {
   leakers: number;
   fratricide: number;
   civilian: number;
+  /** Threats destroyed per shooter (fire unit, fighter or gun name). */
+  killsBy: Record<string, number>;
 }
 
 export interface WorldOptions {
@@ -93,6 +95,7 @@ export class World {
     leakers: 0,
     fratricide: 0,
     civilian: 0,
+    killsBy: {},
   };
   /** Hits on defended sites per campaign raid package. */
   readonly pkgHits = new Map<number, number>();
@@ -336,11 +339,14 @@ export class World {
   }
 
   /** Destroy an entity in the air (missile kill, gun kill). */
-  killEntity(e: Entity, by: string): void {
+  killEntity(e: Entity, by: string, shooter = by): void {
     if (!e.alive) return;
     e.alive = false;
     this.effect(e.pos, 'blast');
-    if (e.side === 'red') this.stats.kills++;
+    if (e.side === 'red') {
+      this.stats.kills++;
+      this.stats.killsBy[shooter] = (this.stats.killsBy[shooter] ?? 0) + 1;
+    }
     if (e.side === 'blue') {
       this.stats.fratricide++;
       this.log(`FRATRICIDE: ${e.name} shot down by ${by}`, 'damage');
@@ -377,7 +383,7 @@ export class World {
     const tr = this.tracker.get(m.trackId);
     if (tr) tr.kaUntil = this.t + 5;
     const label = tr?.label ?? tgt.name;
-    if (kill) this.killEntity(tgt, `${m.spec.name} (${label}, miss ${miss.toFixed(0)} m)`);
+    if (kill) this.killEntity(tgt, `${m.spec.name} (${label}, miss ${miss.toFixed(0)} m)`, m.unit);
     else this.log(`${m.spec.name} detonated ${miss.toFixed(0)} m from ${label}: target survived`, 'engage');
   }
 

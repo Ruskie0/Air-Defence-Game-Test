@@ -10,7 +10,7 @@ export class Ppi {
   readonly canvas: HTMLCanvasElement;
   private readonly g: CanvasRenderingContext2D;
   private world: World;
-  private readonly relief: HTMLCanvasElement;
+  private relief: HTMLCanvasElement;
   rangeKm = 100;
   selected: number | null = null;
   onSelect: (id: number | null) => void = () => {};
@@ -29,7 +29,9 @@ export class Ppi {
   }
 
   setWorld(w: World): void {
+    const newMap = w.terrain !== this.world.terrain;
     this.world = w;
+    if (newMap) this.relief = this.buildRelief();
     this.selected = null;
   }
 

@@ -584,6 +584,43 @@ button.go {
 .menu-opts.row {
   display: flex;
 }
+.big-group {
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  background: var(--btn);
+}
+.big-h b {
+  display: block;
+  font-size: 15px;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+.big-h small {
+  color: var(--dim);
+  font-size: 12px;
+}
+.diff {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 8px;
+}
+.diff button {
+  text-align: left;
+  padding: 6px 8px;
+}
+.diff button b {
+  display: block;
+}
+.diff button small {
+  color: var(--dim);
+}
+@media (max-width: 600px) {
+  .diff {
+    grid-template-columns: 1fr;
+  }
+}
 button.big {
   display: block;
   text-align: left;

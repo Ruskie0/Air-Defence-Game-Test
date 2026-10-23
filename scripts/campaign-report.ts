@@ -1,13 +1,14 @@
 // Headless campaign run with a simple automatic commander, for balancing the economy and the raids.
 // Usage: npm run campaign -- [seed] [--verbose]
-import { Campaign } from '../src/campaign/campaign';
+import { Campaign, Difficulty } from '../src/campaign/campaign';
 import { PKG, SECTOR_NAMES, sectorOf } from '../src/campaign/raidgen';
 import { CATALOG, UnitType } from '../src/sim/catalog';
 
 const seed = Number(process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 1);
 const verbose = process.argv.includes('--verbose');
 const logDay = Number(process.argv.find((a) => a.startsWith('--log-day='))?.split('=')[1] ?? 0);
-const c = Campaign.create(seed);
+const diff = (process.argv.find((a) => a.startsWith('--diff='))?.split('=')[1] ?? 'normal') as Difficulty;
+const c = Campaign.create(seed, diff);
 
 /** What the automatic commander buys, in order, while it can afford it. */
 function shop(): string[] {
@@ -43,7 +44,7 @@ function shop(): string[] {
   return bought;
 }
 
-console.log(`Campaign seed ${seed}`);
+console.log(`Campaign seed ${seed}, ${diff}`);
 const t0 = Date.now();
 while (!c.s.over) {
   const bought = shop();

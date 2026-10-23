@@ -98,6 +98,9 @@ The main menu offers a ten-day campaign next to the sandbox. Each day has a plan
   belt depth and height, ridge scale, lowland relief and pass shapes varied. Threats from the mountain
   side fly down the passes, raid sectors and the default unit positions turn with the map, and
   `terrain.valleys` gives the renderer the pass centre-lines. The sandbox keeps the classic map.
+- **Difficulty.** Recruit, Regular and Veteran scale the enemy's threat budget (0.75x, 1x, 1.3x), our
+  income (1.2x, 1x, 0.85x) and the starting budget ($220M, $160M, $130M). The automatic commander wins
+  every Recruit campaign it was tried on, about half on Regular, and none on Veteran.
 - **Unlocks.** MR, SHORAD, CIWS, early warning radar and GNSS jammer from day 1; decoy and CAP from
   day 2; the LR SAM (the only ballistic missile defence) from day 3. Ballistic missiles first appear on
   day 5 and are always reported the first time.
@@ -122,6 +125,8 @@ The main menu offers a ten-day campaign next to the sandbox. Each day has a plan
   arrival. ARMs that lose their emitter fly on memory and look for another emitter (a decoy, or a
   nearby CIWS or SHORAD radar). Under heavy jamming the ARMs may never be tracked, which is the case
   for killing the jammer first.
+- **Debrief.** Kills, leakers, missiles and their cost, kills per unit, damage, equipment lost and the
+  enemy's lessons.
 - **Saving.** The campaign state is plain JSON saved to `localStorage` after every change; storage
   errors are ignored so the game also runs where storage is blocked.
 

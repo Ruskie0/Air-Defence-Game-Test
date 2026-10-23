@@ -65,10 +65,10 @@ interface Debris {
 }
 
 const MISSILE_SMOKE: Record<string, { s0: number; s1: number; life: number; flame: number }> = {
-  LR: { s0: 6, s1: 60, life: 30, flame: 8 },
-  MR: { s0: 5, s1: 48, life: 26, flame: 6 },
-  SH: { s0: 3, s1: 30, life: 16, flame: 4 },
-  AAM: { s0: 3, s1: 34, life: 22, flame: 4 },
+  LR: { s0: 10, s1: 75, life: 35, flame: 9 },
+  MR: { s0: 8, s1: 60, life: 30, flame: 7 },
+  SH: { s0: 5, s1: 36, life: 18, flame: 4 },
+  AAM: { s0: 4, s1: 40, life: 24, flame: 4 },
 };
 
 const CONTRAIL_KINDS = new Set(['fighter', 'bomber', 'sead', 'soj', 'airliner']);
@@ -189,8 +189,8 @@ export class Effects {
         vy: this.v.y,
         vz: this.v.z,
         life: (0.45 + rnd() * 0.5) * Math.sqrt(scale),
-        size0: 7 * scale,
-        size1: (22 + rnd() * 18) * scale,
+        size0: 9 * scale,
+        size1: (26 + rnd() * 18) * scale,
         c0: [9, 4.5, 1.6],
         c1: [0.5, 0.12, 0.02],
         drag: 1.8,
@@ -209,9 +209,10 @@ export class Effects {
         vy: this.v.y,
         vz: this.v.z,
         life: (14 + rnd() * 10) * (f.kind === 'small' ? 1 : 1.6),
-        size0: 9 * scale,
-        size1: (45 + rnd() * 25) * scale,
-        alpha: 0.78,
+        size0: 16 * scale,
+        size1: (55 + rnd() * 30) * scale,
+        alpha: 0.8,
+        minPx: 2.5,
         c0: [0.07, 0.065, 0.06],
         c1: [0.3, 0.3, 0.31],
         drag: 0.9,
@@ -372,10 +373,11 @@ export class Effects {
             life: cfg.life * (0.8 + rnd() * 0.4),
             size0: Math.max(cfg.s0, spacing * 0.9),
             size1: cfg.s1 * (0.8 + rnd() * 0.4),
-            alpha: 0.5,
+            alpha: 0.55,
             c0: [0.95, 0.94, 0.9],
             c1: [0.78, 0.79, 0.81],
             drag: 0.4,
+            minPx: 1.5,
           });
         }
         this.lastEmit.set(m.id, { x, y, z });

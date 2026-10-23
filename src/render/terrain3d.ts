@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { Sky } from 'three/addons/objects/Sky.js';
 import { clamp, smoothstep } from '../sim/math';
 import { Terrain, valleyX } from '../sim/terrain';
 import { fbm, hash2, prng, tileNoise, vnoise } from './noise';
@@ -18,19 +17,52 @@ export const SUN_DIR = (() => {
 })();
 
 /** Haze colour at the horizon, shared by fog and the far edge of the world. */
-export const HAZE = new THREE.Color('#b4c3cf');
+export const HAZE = new THREE.Color('#aebfcc');
 
+const SKY_VS = `
+varying vec3 vDir;
+void main() {
+  vDir = position;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`;
+const SKY_FS = `
+uniform vec3 zenith;
+uniform vec3 horizon;
+uniform vec3 below;
+uniform vec3 sunDir;
+uniform vec3 sunCol;
+varying vec3 vDir;
+void main() {
+  vec3 d = normalize(vDir);
+  float h = d.y;
+  vec3 c = mix(horizon, zenith, pow(clamp(h, 0.0, 1.0), 0.5));
+  c = mix(c, below, smoothstep(0.0, -0.06, h));
+  float s = max(dot(d, sunDir), 0.0);
+  c += sunCol * (pow(s, 6.0) * 0.18 + pow(s, 80.0) * 0.5) * smoothstep(-0.1, 0.05, h);
+  c += sunCol * smoothstep(0.99955, 0.9998, s) * 6.0;
+  gl_FragColor = vec4(c, 1.0);
+}`;
+
+/**
+ * A clear afternoon sky: a gradient from haze at the horizon to blue overhead, with the sun.
+ * Kept below the bloom threshold apart from the sun disc, so the sky never glows.
+ */
 export function buildSky(renderer: THREE.WebGLRenderer, scene: THREE.Scene): void {
-  const sky = new Sky();
-  sky.scale.setScalar(1000);
-  const u = sky.material.uniforms;
-  u.turbidity.value = 4.5;
-  u.rayleigh.value = 1.4;
-  u.mieCoefficient.value = 0.004;
-  u.mieDirectionalG.value = 0.8;
-  u.sunPosition.value.copy(SUN_DIR);
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: SKY_VS,
+    fragmentShader: SKY_FS,
+    side: THREE.BackSide,
+    depthWrite: false,
+    uniforms: {
+      zenith: { value: new THREE.Color('#3f6ea8') },
+      horizon: { value: HAZE.clone() },
+      below: { value: new THREE.Color('#9aa89f') },
+      sunDir: { value: SUN_DIR.clone() },
+      sunCol: { value: new THREE.Color('#fff1d6') },
+    },
+  });
   const skyScene = new THREE.Scene();
-  skyScene.add(sky);
+  skyScene.add(new THREE.Mesh(new THREE.SphereGeometry(1000, 64, 32), mat));
 
   const cube = new THREE.WebGLCubeRenderTarget(512, { type: THREE.HalfFloatType });
   const cubeCam = new THREE.CubeCamera(1, 5000, cube);
@@ -38,12 +70,12 @@ export function buildSky(renderer: THREE.WebGLRenderer, scene: THREE.Scene): voi
   scene.background = cube.texture;
   const pmrem = new THREE.PMREMGenerator(renderer);
   scene.environment = pmrem.fromScene(skyScene, 0, 1, 5000).texture;
-  scene.environmentIntensity = 0.55;
+  scene.environmentIntensity = 0.5;
   pmrem.dispose();
 
   scene.fog = new THREE.FogExp2(HAZE.getHex(), 1e-5);
-  scene.add(new THREE.HemisphereLight(0xc6d8ea, 0x5d5443, 0.9));
-  const sun = new THREE.DirectionalLight(0xfff0d8, 3.2);
+  scene.add(new THREE.HemisphereLight(0xc6d8ea, 0x5d5443, 0.7));
+  const sun = new THREE.DirectionalLight(0xfff0d8, 2.6);
   sun.position.copy(SUN_DIR).multiplyScalar(100000);
   scene.add(sun);
 }
@@ -79,7 +111,7 @@ const C = {
   town: hex('#8d8981'),
   town2: hex('#a69d8e'),
 };
-const CROPS: RGB[] = ['#b9a35a', '#6d8c39', '#86a04f', '#7d674c', '#a3a168', '#c6bb4f', '#5e7f34', '#9b8558', '#8f9a55'].map(hex);
+const CROPS: RGB[] = ['#a89a62', '#6c7c40', '#7f8a4c', '#77684f', '#958f66', '#b0a752', '#5d6f36', '#8c7d58', '#868d58'].map(hex);
 
 export interface Town {
   x: number;
@@ -223,18 +255,22 @@ function paintLandCover(lc: LandCover): HTMLCanvasElement {
         const forest = lc.forest(x, y, h, slope);
         const town = lc.townness(x, y);
         if (lc.farm(x, y, h, slope) && forest < 0.02) {
+          // Fields: rows of strips whose length varies per row, in a slowly turning grid.
           const a = (vnoise(x / 30000, y / 30000, s + 5) - 0.5) * 1.4;
           const ca = Math.cos(a);
           const sa = Math.sin(a);
-          const fu = (x * ca + y * sa) / 640;
-          const cu = Math.floor(fu);
-          const fv = (-x * sa + y * ca) / 430 + hash2(cu, 0, s + 6) * 3;
+          const fv = (-x * sa + y * ca) / 420;
           const cv = Math.floor(fv);
-          const crop = CROPS[Math.floor(hash2(cu, cv, s + 9) * CROPS.length)];
+          const fu = (x * ca + y * sa) / (300 + 650 * hash2(cv, 7, s)) + hash2(cv, 8, s) * 9;
+          const cu = Math.floor(fu);
+          const r = hash2(cu, cv, s + 9);
+          // About a third of the parcels are pasture, the rest a muted mix of crops and bare soil.
+          if (r < 0.33) toward(C.grass2, 0.3 + r);
+          else mix(CROPS[Math.floor(((r - 0.33) / 0.67) * CROPS.length)], c, 0.3);
           // Field edges read as hedgerows and tracks.
-          const edge = Math.min(fu - cu, 1 - (fu - cu)) < 0.05 || Math.min(fv - cv, 1 - (fv - cv)) < 0.07;
-          mix(crop, edge ? C.forest2 : crop, edge ? 0.45 : 0);
-          toward(C.grass2, (n2 - 0.5) * 0.25 + 0.08);
+          const edge = Math.min(fu - cu, 1 - (fu - cu)) < 0.06 || Math.min(fv - cv, 1 - (fv - cv)) < 0.08;
+          if (edge) toward(C.forest2, 0.35);
+          toward(C.grass2, (n2 - 0.5) * 0.25);
         }
         if (forest > 0) mix(C.forest, C.forest2, n2 * 0.6 + clamp(1 - forest * 8, 0, 0.4));
         else if (forest > -0.05) toward(C.forest2, 0.35);
@@ -371,21 +407,28 @@ function waterNormals(): THREE.DataTexture {
   return t;
 }
 
-/** Adds world-space detail noise to a terrain material, faded out with distance. */
-function addDetail(m: THREE.MeshStandardMaterial, detail: THREE.Texture): void {
+/**
+ * Adds world-space detail noise to a terrain material, faded out with distance. With `edge`, the colour also
+ * fades towards haze beyond that distance from the centre, for the mirrored skirt.
+ */
+function addDetail(m: THREE.MeshStandardMaterial, detail: THREE.Texture, edge = 0): void {
+  m.customProgramCacheKey = () => `terrain-detail-${edge}`;
   m.onBeforeCompile = (sh) => {
     sh.uniforms.detailMap = { value: detail };
+    sh.uniforms.edgeHaze = { value: new THREE.Color('#7f8a73') };
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
       .replace('#include <project_vertex>', '#include <project_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nuniform sampler2D detailMap;')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nuniform sampler2D detailMap;\nuniform vec3 edgeHaze;')
       .replace(
         '#include <map_fragment>',
         `#include <map_fragment>
         float camD = distance(vWPos, cameraPosition);
         float dn = texture2D(detailMap, vWPos.xz / 260.0).r * 0.55 + texture2D(detailMap, vWPos.xz / 41.0).r * 0.45;
-        diffuseColor.rgb *= mix(1.0, 0.72 + 0.56 * dn, 1.0 - smoothstep(3000.0, 26000.0, camD));`,
+        diffuseColor.rgb *= mix(1.0, 0.72 + 0.56 * dn, 1.0 - smoothstep(3000.0, 26000.0, camD));
+        ${edge > 0 ? `float edgeK = smoothstep(${(edge * 1.02).toFixed(1)}, ${(edge * 1.7).toFixed(1)}, max(abs(vWPos.x), abs(vWPos.z)));
+        diffuseColor.rgb = mix(diffuseColor.rgb, edgeHaze, edgeK * 0.9);` : ''}`,
       );
   };
 }
@@ -417,41 +460,35 @@ export function buildScenery(scene: THREE.Scene, t: Terrain, seed: number): Scen
   const terrainMesh = new THREE.Mesh(geo, terrainMat);
   scene.add(terrainMesh);
 
-  // Low-resolution skirt so the world does not end at the map edge; coloured from the edge of the land cover.
-  const g2 = canvas.getContext('2d')!;
-  const edge = g2.getImageData(0, 0, TEX, TEX).data;
-  const sk = new THREE.PlaneGeometry(size * 4, size * 4, 120, 120);
+  // Low-resolution skirt so the world does not end at the map edge: the heightmap and land cover mirrored
+  // outwards, faded into haze so the copy does not read as one.
+  tex.wrapS = tex.wrapT = THREE.MirroredRepeatWrapping;
+  const k = 20;
+  const sk = new THREE.PlaneGeometry(size * 5, size * 5, k * 5, k * 5);
   sk.rotateX(-Math.PI / 2);
   const sp = sk.getAttribute('position') as THREE.BufferAttribute;
-  const skc = new Float32Array(sp.count * 3);
-  const tmp = new THREE.Color();
-  const far = new THREE.Color('#6d7445');
+  const suv = sk.getAttribute('uv') as THREE.BufferAttribute;
+  const mirror = (v: number): number => {
+    const p = (((v + t.half) % (2 * size)) + 2 * size) % (2 * size);
+    return (p < size ? p : 2 * size - p) - t.half;
+  };
   for (let i = 0; i < sp.count; i++) {
     const x = sp.getX(i);
     const y = -sp.getZ(i);
-    const out = Math.max(Math.abs(x), Math.abs(y));
-    const fade = clamp(1 - (out - t.half) / (size * 1.2), 0, 1);
-    sp.setY(i, Math.max(-60, t.heightAt(x, y)) * fade - 25);
-    const ci = clamp(Math.floor(((x + t.half) / size) * TEX), 0, TEX - 1);
-    const cj = clamp(Math.floor(((t.half - y) / size) * TEX), 0, TEX - 1);
-    const o = (cj * TEX + ci) * 4;
-    tmp.setRGB(edge[o] / 255, edge[o + 1] / 255, edge[o + 2] / 255, THREE.SRGBColorSpace);
-    tmp.lerp(far, clamp((out - t.half) / 30000, 0, 0.7));
-    skc[i * 3] = tmp.r;
-    skc[i * 3 + 1] = tmp.g;
-    skc[i * 3 + 2] = tmp.b;
+    const out = Math.max(Math.abs(x), Math.abs(y)) - t.half;
+    const h = t.heightAt(mirror(x), mirror(y));
+    // Inside the map the skirt hides under the real terrain; along the edge it meets it.
+    sp.setY(i, out < -1 ? -400 : out < 1 ? h - 4 : Math.max(-60, h) * (1 - clamp(out / size, 0, 0.7)));
+    suv.setXY(i, (x + t.half) / size, (y + t.half) / size);
   }
-  sk.setAttribute('color', new THREE.BufferAttribute(skc, 3));
   sk.computeVertexNormals();
-  const skirtMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
-  addDetail(skirtMat, detail);
+  const skirtMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0 });
+  addDetail(skirtMat, detail, t.half);
   const skirt = new THREE.Mesh(sk, skirtMat);
-  // Keep the skirt under the real terrain where they overlap.
-  skirt.position.y = -2;
   scene.add(skirt);
 
   const normals = waterNormals();
-  normals.repeat.set(900, 450);
+  normals.repeat.set(2700, 1125);
   const seaMat = new THREE.MeshStandardMaterial({
     color: 0x1b4253,
     roughness: 0.12,
@@ -461,9 +498,9 @@ export function buildScenery(scene: THREE.Scene, t: Terrain, seed: number): Scen
     normalMap: normals,
     normalScale: new THREE.Vector2(0.35, 0.35),
   });
-  const sea = new THREE.Mesh(new THREE.PlaneGeometry(size * 4, size * 2), seaMat);
+  const sea = new THREE.Mesh(new THREE.PlaneGeometry(size * 12, size * 5), seaMat);
   sea.rotateX(-Math.PI / 2);
-  sea.position.set(0, 0, 25000 + size);
+  sea.position.set(0, 0, 25000 + size * 2.5);
   scene.add(sea);
 
   const trees = buildTrees(scene, lc);
@@ -473,7 +510,7 @@ export function buildScenery(scene: THREE.Scene, t: Terrain, seed: number): Scen
   return {
     terrainMesh,
     clearAround(x, y, r) {
-      for (const set of [trees, houses]) {
+      for (const set of [...trees, houses]) {
         let changed = false;
         for (let i = 0; i < set.mesh.count; i++) {
           if (set.hidden[i]) continue;
@@ -502,23 +539,32 @@ interface Scatter {
   hidden: Uint8Array;
 }
 
-/** Canopy clumps in the forests around the defended area. */
-function buildTrees(scene: THREE.Scene, lc: LandCover): Scatter {
+function scatterSet(scene: THREE.Scene, geo: THREE.BufferGeometry, mat: THREE.Material, max: number): Scatter {
+  const mesh = new THREE.InstancedMesh(geo, mat, max);
+  mesh.count = 0;
+  mesh.frustumCulled = false;
+  scene.add(mesh);
+  return { mesh, xy: new Float32Array(max * 2), hidden: new Uint8Array(max) };
+}
+
+/** Broadleaf and conifer trees in the forests around the defended area; conifers take over with height. */
+function buildTrees(scene: THREE.Scene, lc: LandCover): Scatter[] {
   const t = lc.t;
   const rnd = prng(lc.seed ^ 0x7ee5);
-  const max = 42000;
-  const geo = new THREE.IcosahedronGeometry(1, 1);
-  geo.translate(0, 0.75, 0);
-  const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, flatShading: true }), max);
-  const xy = new Float32Array(max * 2);
+  const leafGeo = new THREE.IcosahedronGeometry(1, 1);
+  leafGeo.translate(0, 0.85, 0);
+  const pineGeo = new THREE.ConeGeometry(0.5, 2.6, 6, 1, true);
+  pineGeo.translate(0, 1.3, 0);
+  const mat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
+  const leaf = scatterSet(scene, leafGeo, mat, 22000);
+  const pine = scatterSet(scene, pineGeo, mat, 16000);
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const sc = new THREE.Vector3();
   const p = new THREE.Vector3();
   const col = new THREE.Color();
-  let n = 0;
   const R = 26000;
-  for (let i = 0; i < 400000 && n < max; i++) {
+  for (let i = 0; i < 400000 && (leaf.mesh.count < 22000 || pine.mesh.count < 16000); i++) {
     const a = rnd() * Math.PI * 2;
     const r = Math.sqrt(rnd()) * R;
     const x = Math.cos(a) * r;
@@ -528,23 +574,25 @@ function buildTrees(scene: THREE.Scene, lc: LandCover): Scatter {
     const slope = lc.slopeAt(x, y);
     const f = lc.forest(x, y, h, slope);
     // Dense in the forests, the odd tree along field edges.
-    if (f < 0 && !(f > -0.12 && rnd() < 0.04)) continue;
-    const w = 7 + rnd() * 9;
-    sc.set(w, w * (1.1 + rnd() * 0.6), w);
+    if (f < 0 && !(f > -0.1 && rnd() < 0.012)) continue;
+    const conifer = rnd() < 0.25 + smoothstep(300, 1200, h) * 0.65;
+    const set = conifer ? pine : leaf;
+    const n = set.mesh.count;
+    if (n >= set.xy.length / 2) continue;
+    const w = conifer ? 5 + rnd() * 5 : 6 + rnd() * 7;
+    sc.set(w, conifer ? w * (1.1 + rnd() * 0.5) : w * (0.8 + rnd() * 0.4), w);
     q.setFromAxisAngle(Y_AXIS, rnd() * 6.28);
     p.set(x, t.groundAt(x, y) - 1.5, -y);
     m.compose(p, q, sc);
-    mesh.setMatrixAt(n, m);
-    col.setHSL(0.22 + rnd() * 0.08, 0.35 + rnd() * 0.2, 0.13 + rnd() * 0.07);
-    mesh.setColorAt(n, col);
-    xy[n * 2] = x;
-    xy[n * 2 + 1] = y;
-    n++;
+    set.mesh.setMatrixAt(n, m);
+    if (conifer) col.setHSL(0.3 + rnd() * 0.08, 0.35 + rnd() * 0.2, 0.025 + rnd() * 0.02);
+    else col.setHSL(0.2 + rnd() * 0.1, 0.45 + rnd() * 0.2, 0.035 + rnd() * 0.035);
+    set.mesh.setColorAt(n, col);
+    set.xy[n * 2] = x;
+    set.xy[n * 2 + 1] = y;
+    set.mesh.count = n + 1;
   }
-  mesh.count = n;
-  mesh.frustumCulled = false;
-  scene.add(mesh);
-  return { mesh, xy, hidden: new Uint8Array(max) };
+  return [leaf, pine];
 }
 
 /** Houses, blocks and sheds in each town. */

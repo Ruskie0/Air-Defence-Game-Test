@@ -21,7 +21,8 @@ page.on('pageerror', (e) => errors.push(String(e)));
 page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
 await page.goto(`http://localhost:${port}/`);
 await page.waitForFunction(() => window.game);
-await page.click('[data-close]');
+await page.screenshot({ path: 'playtest/00-menu.png' });
+await page.click('[data-cui="sandbox"]');
 await page.screenshot({ path: 'playtest/00-start.png' });
 
 // Step the sim directly (faster than real time) and sample the state.

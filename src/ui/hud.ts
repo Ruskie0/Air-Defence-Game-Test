@@ -5,6 +5,7 @@ import { missilesOnTrack, timeToGo } from '../sim/tewa';
 import type { Ident, Track } from '../sim/tracker';
 import type { Wcs } from '../sim/tewa';
 import type { World } from '../sim/world';
+import type { Radar } from '../sim/radar';
 import { CLASS_NAME, IDENT_COLOR, IDENT_NAME, fmtTime } from './colors';
 import type { Ppi } from './ppi';
 
@@ -136,6 +137,9 @@ export class Hud {
       case 'emcon':
         w.toggleEmcon(d.code!);
         break;
+      case 'armwatch':
+        w.toggleArmWatch(d.code!);
+        break;
       case 'ciws': {
         const c = w.ciws.find((x) => x.code === d.code);
         if (c) {
@@ -245,6 +249,20 @@ export class Hud {
       return;
     }
     const n = w.scenario.raids.filter((x) => x.launched).length;
+    if (this.campaign) {
+      // Only reported packages are known in advance.
+      const known = w.scenario.raids.filter((x) => !x.launched && !x.unreported);
+      const k = known[0];
+      this.set(
+        'raid',
+        day +
+          (k
+            ? `<span class="lbl">EXPECTED</span><span title="${esc(k.desc)}">${esc(k.name)}</span> <span class="mono">in ${fmtTime(k.t - w.t)}</span>`
+            : '<span class="lbl">INTEL</span><span class="dim">no further packages reported</span>') +
+          `<span class="dim">${n}/${total} packages in</span>`,
+      );
+      return;
+    }
     this.set(
       'raid',
       day +
@@ -268,9 +286,15 @@ export class Hud {
     const r = this.w.radarByCode(code);
     if (!r) return '';
     if (!r.alive) return '<span class="st dead">DESTROYED</span>';
-    if (!r.emitting) return '<span class="st emcon">EMCON</span>';
+    if (!r.emitting) return r.armSilent ? '<span class="st jam" title="Shut down by the automatic ARM response">ARM SILENT</span>' : '<span class="st emcon">EMCON</span>';
     const j = r.sideJnrDb > 0 ? ` <span class="st jam" title="Sidelobe jam-to-noise">J/N ${r.sideJnrDb.toFixed(0)} dB</span>` : '';
     return `<span class="st ok">RADIATE</span>${j}`;
+  }
+
+  private radarButtons(r: Radar): string {
+    const dis = r.alive ? '' : 'disabled';
+    return `<button data-act="emcon" data-code="${r.code}" ${dis}>${r.emitting ? 'EMCON' : 'Radiate'}</button>` +
+      `<button data-act="armwatch" data-code="${r.code}" class="${r.armWatch ? 'on' : ''}" ${dis} title="Automatic ARM response: shut the radar down while an anti-radiation missile is closing on it">ARM auto</button>`;
   }
 
   private updateSystems(): void {
@@ -283,7 +307,7 @@ export class Hud {
       rows.push(`<div class="sys">
         <div class="sys-h"><b>${u.name}</b> ${this.radarState(r.code)}</div>
         <div class="sys-b">Missiles <b>${u.rounds}</b>/${u.maxRounds}${Number.isFinite(u.spares) ? ` +${u.spares}` : ''} · Channels ${active}/${u.channels}${reload.length ? ` · reload ${fmtTime(Math.min(...reload.map((l) => l.reloadAt)) - w.t)}` : ''}
-        <button data-act="emcon" data-code="${r.code}" ${r.alive ? '' : 'disabled'}>${r.emitting ? 'EMCON' : 'Radiate'}</button></div></div>`);
+        ${this.radarButtons(r)}</div></div>`);
     }
     for (const c of w.ciws) {
       const st = !c.site.alive
@@ -306,7 +330,7 @@ export class Hud {
       for (const f of ewr) {
         const r = f.radar!;
         rows.push(`<div class="sys"><div class="sys-h"><b>${r.name}</b> ${this.radarState(r.code)}</div>
-          <div class="sys-b dim">L-band, 250 km <button data-act="emcon" data-code="${r.code}" ${r.alive ? '' : 'disabled'}>${r.emitting ? 'EMCON' : 'Radiate'}</button></div></div>`);
+          <div class="sys-b dim">L-band, 250 km ${this.radarButtons(r)}</div></div>`);
       }
     }
     if (w.gnss.length || w.decoys.length) rows.push('<h3>Electronic warfare</h3>');

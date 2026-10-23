@@ -18,6 +18,8 @@ export interface Raid {
   spawn: (w: World) => void;
   /** Campaign package id, tagged on everything the raid spawns. */
   pkg?: number;
+  /** Not reported by intel: no warning when it launches. */
+  unreported?: boolean;
 }
 
 /** Sandbox scenario: six scripted raids of rising difficulty, plus background civil traffic. */
@@ -116,7 +118,7 @@ export class Scenario {
         w.spawnTag = r.pkg ?? -1;
         r.spawn(w);
         w.spawnTag = -1;
-        w.log(`${r.name}: ${r.desc}`, 'raid');
+        if (!r.unreported) w.log(`${r.name}: ${r.desc}`, 'raid');
       }
     }
     if (this.civil && w.t >= this.nextCivil) {

@@ -322,7 +322,11 @@ export class View3D {
   /** Show another world (a new day, the deployment preview) over the same terrain. */
   setWorld(w: World): void {
     this.world = w;
-    for (const s of this.siteObjs) this.scene.remove(s.root);
+    for (const s of this.siteObjs) {
+      this.scene.remove(s.root);
+      // CSS2D labels only clean up their DOM element when removed directly, not with a parent.
+      s.label.element.remove();
+    }
     this.siteObjs.length = 0;
     this.antennas.length = 0;
     this.turrets.length = 0;
@@ -358,10 +362,11 @@ export class View3D {
     this.camera.updateProjectionMatrix();
   }
 
-  setView(v: 'defended' | 'overview' | 'north'): void {
+  setView(v: 'defended' | 'overview' | 'north' | 'deploy'): void {
     const views = {
       defended: { pos: [6000, 14000, 30000], tgt: [0, 0, -6000] },
       overview: { pos: [0, 190000, 120000], tgt: [0, 0, -15000] },
+      deploy: { pos: [0, 62000, 38000], tgt: [0, 0, -2000] },
       north: { pos: [-15000, 9000, -15000], tgt: [0, 1500, -60000] },
     } as const;
     const s = views[v];

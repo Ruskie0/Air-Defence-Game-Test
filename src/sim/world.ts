@@ -11,7 +11,6 @@ import { Raid, Scenario } from './scenario';
 import { Decoy, FireUnit, GnssJammer, Launcher, Site, SiteKind } from './sites';
 import { Terrain } from './terrain';
 import { Wcs, autoEngage } from './tewa';
-import { valleyRoute } from './threats';
 import { Ident, Track, Tracker } from './tracker';
 
 export type LogLevel = 'info' | 'alert' | 'engage' | 'kill' | 'damage' | 'raid';
@@ -355,8 +354,9 @@ export class World {
 
   launchAlcm(from: Entity, target: V3, name: string): void {
     const start = clone(from.pos);
-    const fromNorth = from.pos.y > 60000 && Math.abs(from.pos.x) < 60000;
-    const route = fromNorth ? valleyRoute(from.pos.x < 0 ? 0 : 1, from.pos.y) : [];
+    const loc = this.terrain.toLocal(from.pos.x, from.pos.y);
+    const overMountains = loc.v > 60000 && Math.abs(loc.u) < 60000;
+    const route = overMountains ? this.terrain.passRoute(loc.u < this.terrain.passU(0, loc.v) / 2 + this.terrain.passU(1, loc.v) / 2 ? 0 : 1, loc.v) : [];
     const cm = new Cruise(this.nextName('ALCM'), start, route, target, name);
     cm.hdg = (from as unknown as { hdg: number }).hdg ?? 180;
     cm.pkg = from.pkg;

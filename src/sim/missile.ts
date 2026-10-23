@@ -143,8 +143,11 @@ export class Interceptor {
     const gate = Math.max(700, 3 * (tr?.sigma ?? 300));
     let best: Entity | null = null;
     let bd = gate;
+    // A jam-only track has no skin return to home on: the seeker can only home on the jamming itself.
+    const hojOnly = !!tr?.jam && !tr.skin;
     for (const e of w.entities) {
       if (!e.alive || !e.airborne) continue;
+      if (hojOnly && !e.jammer?.active) continue;
       let dd = dist(e.pos, est);
       // Home-on-jam: prefer a radiating jammer inside a jam track's large gate.
       if (tr?.jam && e.jammer?.active) dd *= 0.2;

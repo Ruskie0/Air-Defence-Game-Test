@@ -1,8 +1,8 @@
 import { CAMPAIGN_DAYS, Campaign, DayReport } from '../campaign/campaign';
+import { SECTOR_NAMES, sectorOf } from '../campaign/raidgen';
 import type { View3D } from '../render/view3d';
 import { CATALOG, DeployedUnit, UnitType } from '../sim/catalog';
 import { bearingDeg, v3 } from '../sim/math';
-import type { Terrain } from '../sim/terrain';
 import type { World } from '../sim/world';
 import type { Ppi } from './ppi';
 
@@ -15,7 +15,6 @@ const money = (m: number): string => (m > 0 && m < 10 ? `$${m.toFixed(1)}M` : `$
 
 /** Where the campaign screens hand control back to the game loop. */
 export interface CampaignHost {
-  terrain: Terrain;
   view: View3D;
   ppi: Ppi;
   /** Show the planning preview (no simulation running). */
@@ -83,7 +82,7 @@ export class CampaignUi {
       <div class="menu-opts">
         <button data-cui="new" class="big">
           <b>New campaign</b>
-          <small>${CAMPAIGN_DAYS} days. Earn a budget from what still stands, buy and deploy units, and face an enemy that learns from what worked.${saved ? ' Replaces the saved campaign.' : ''}</small>
+          <small>${CAMPAIGN_DAYS} days on a new random map. Earn a budget from what still stands, buy and deploy units, and face an enemy that learns from what worked.${saved ? ' Replaces the saved campaign.' : ''}</small>
         </button>
         ${
           saved
@@ -125,8 +124,15 @@ export class CampaignUi {
   /** Rebuild the preview world after anything on the map changed. */
   private refreshWorld(): void {
     if (!this.c) return;
-    this.host.showPreview(this.c.makeWorld(this.host.terrain, false));
+    this.host.showPreview(this.c.makeWorld(false));
     this.showFocus();
+  }
+
+  /** One line describing the campaign's map for the first briefing. */
+  private mapLine(): string {
+    const L = this.c!.layout;
+    const dir = (b: number): string => SECTOR_NAMES[sectorOf(b)];
+    return `Terrain: the enemy is beyond the mountains to the ${dir(L.rot)}, which two passes cut through towards us. The coast is about ${Math.round(L.coastM / 1000)} km to the ${dir(L.rot + 180)}. Expect low-level attacks down the passes and in from the sea.`;
   }
 
   private label(u: DeployedUnit): string {
@@ -163,6 +169,7 @@ export class CampaignUi {
     const intel = c.intel();
     $('plan-left').innerHTML = `
       <h3>Intelligence briefing, day ${s.day}</h3>
+      ${s.day === 1 ? `<p class="dim">${esc(this.mapLine())}</p>` : ''}
       <ul class="intel">${intel.map((l) => `<li>${esc(l)}</li>`).join('') || '<li class="dim">Nothing reported.</li>'}</ul>
       ${last?.lessons.length ? `<h3>Enemy assessment</h3><ul class="intel">${last.lessons.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
       <h3>Procurement <span class="dim">budget ${money(s.money)}</span></h3>
@@ -235,12 +242,12 @@ export class CampaignUi {
     const v = this.host.view;
     v.onGroundHover = (p) => {
       if (!p) return v.setPreview(null);
-      const err = c.placeError(this.host.terrain, u.type, p.x, p.y, u.uid);
+      const err = c.placeError(c.terrain, u.type, p.x, p.y, u.uid);
       v.setPreview(p, info.rangeKm, !err, info.sector ? { facing: u.facing, half: 60 } : undefined);
       v.renderer.domElement.title = err ?? '';
     };
     v.onGroundClick = (p) => {
-      const err = c.place(this.host.terrain, u, p.x, p.y);
+      const err = c.place(c.terrain, u, p.x, p.y);
       if (err) {
         this.note = err;
         this.render();
@@ -365,7 +372,7 @@ export class CampaignUi {
         return;
       case 'turn':
         if (!u) return;
-        c.turn(this.host.terrain, u, u.facing + Number(d.d));
+        c.turn(c.terrain, u, u.facing + Number(d.d));
         this.focus = u.uid;
         break;
       case 'reload':
@@ -400,7 +407,7 @@ export class CampaignUi {
         this.stopPlacing();
         this.focus = null;
         store(c);
-        this.host.startBattle(c.makeWorld(this.host.terrain), c);
+        this.host.startBattle(c.makeWorld(), c);
         return;
       default:
         return;

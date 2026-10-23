@@ -190,6 +190,12 @@ export class View3D {
   follow = false;
   selected: number | null = null;
   onSelect: (trackId: number) => void = () => {};
+  /** A friendly site's name on the map was clicked. */
+  onSelectSite: (site: Site) => void = () => {};
+  /** A plain click on the map that hit nothing selectable (used to deselect). */
+  onEmptyClick: () => void = () => {};
+  /** Friendly site to mark as selected. */
+  selectedSite: Site | null = null;
   private readonly container: HTMLElement;
   private world: World;
   private terrainMesh: THREE.Mesh | null = null;
@@ -211,6 +217,7 @@ export class View3D {
   private readonly tracerPos: Float32Array;
   private readonly coverage = new THREE.Group();
   private readonly selRing: THREE.Sprite;
+  private readonly siteRing: THREE.Sprite;
   private readonly tmp = new THREE.Vector3();
 
   constructor(container: HTMLElement, world: World) {
@@ -259,15 +266,22 @@ export class View3D {
     this.selRing.renderOrder = 10;
     this.selRing.visible = false;
     this.scene.add(this.selRing);
+    this.siteRing = this.selRing.clone();
+    this.siteRing.material = new THREE.SpriteMaterial({ map: MARKERS.sel, depthTest: false, transparent: true, color: 0x7fd4ff, sizeAttenuation: false });
+    this.scene.add(this.siteRing);
 
     this.scene.add(this.preview);
     const el = this.renderer.domElement;
     el.addEventListener('pointerdown', (e) => (this.down = { x: e.clientX, y: e.clientY }));
     el.addEventListener('pointerup', (e) => {
-      if (!this.down || !this.onGroundClick || e.button !== 0) return;
+      if (!this.down || e.button !== 0) return;
       const moved = Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y);
       this.down = null;
       if (moved > 5) return;
+      if (!this.onGroundClick) {
+        this.onEmptyClick();
+        return;
+      }
       const p = this.pickGround(e.clientX, e.clientY);
       if (p) this.onGroundClick(p);
     });
@@ -441,10 +455,17 @@ export class View3D {
     this.scene.add(sea);
   }
 
-  private siteLabel(text: string): CSS2DObject {
+  private siteLabel(text: string, site?: Site): CSS2DObject {
     const el = document.createElement('div');
     el.className = 'site-label';
     el.textContent = text;
+    if (site) {
+      el.classList.add('pickable');
+      el.addEventListener('pointerdown', (ev) => {
+        ev.stopPropagation();
+        this.onSelectSite(site);
+      });
+    }
     const o = new CSS2DObject(el);
     o.center.set(0.5, -0.4);
     return o;
@@ -547,7 +568,7 @@ export class View3D {
       icon.position.y = s.pos.z - ground + 10;
       icon.renderOrder = 5;
       root.add(icon);
-      const label = this.siteLabel(s.name);
+      const label = this.siteLabel(s.name, s.kind === 'asset' ? undefined : s);
       label.position.y = s.pos.z - ground + 10;
       if (s.kind === 'launcher') label.visible = false;
       root.add(label);
@@ -734,6 +755,9 @@ export class View3D {
     const w = this.world;
     const seen = new Set<number>();
     this.selRing.visible = false;
+    const ss = this.selectedSite;
+    this.siteRing.visible = !!ss;
+    if (ss) this.siteRing.position.set(ss.pos.x, ss.pos.z + 10, -ss.pos.y);
     for (const tr of w.tracker.tracks) {
       if (!tr.confirmed) continue;
       seen.add(tr.id);

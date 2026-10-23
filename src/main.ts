@@ -32,7 +32,6 @@ function show(w: World): void {
 }
 
 const cui = new CampaignUi({
-  terrain,
   view,
   ppi,
   showPreview(w) {

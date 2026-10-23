@@ -1,13 +1,80 @@
 import { RE_EFF } from './constants';
-import { V3, clamp, lerp, smoothstep } from './math';
+import { V3, clamp, lerp, smoothstep, v3 } from './math';
+import { Rng } from './rng';
 
-/** Centre-lines of the two mountain passes the cruise missiles use (x as a function of y). */
-export const valleyX = (which: 0 | 1, y: number): number =>
-  which === 0 ? -18000 + 7000 * Math.sin(y / 13000) : 22000 + 6000 * Math.sin(y / 11000 + 1);
+/** One mountain pass: its centre-line wanders about `u0` across the belt (local frame, metres). */
+export interface PassShape {
+  u0: number;
+  amp: number;
+  wave: number;
+  phase: number;
+  width: number;
+}
+
+/**
+ * The shape of a map, in a local frame where +v points at the mountains (the enemy side) and +u to its
+ * right. `rot` turns that frame onto the world: the bearing of the mountain side.
+ */
+export interface MapLayout {
+  rot: number;
+  /** Distance from the airbase to the coast on the far side from the mountains (m). */
+  coastM: number;
+  /** Where the foothills start and where the belt reaches full height (m along v). */
+  mtnFrom: number;
+  mtnTo: number;
+  mtnHeight: number;
+  /** Horizontal and along-belt scales of the ridges (m). */
+  ridgeU: number;
+  ridgeV: number;
+  /** Rolling relief of the lowlands (m). */
+  hills: number;
+  passes: [PassShape, PassShape];
+}
+
+/** The original map: mountains north, two passes, sea to the south. The sandbox is always fought here. */
+export const CLASSIC_LAYOUT: MapLayout = {
+  rot: 0,
+  coastM: 44000,
+  mtnFrom: 12000,
+  mtnTo: 48000,
+  mtnHeight: 2900,
+  ridgeU: 21000,
+  ridgeV: 13000,
+  hills: 260,
+  passes: [
+    { u0: -18000, amp: 7000, wave: 13000, phase: 0, width: 3200 },
+    { u0: 22000, amp: 6000, wave: 11000, phase: 1, width: 3000 },
+  ],
+};
+
+/** A random map for a campaign: the threat axis, passes, coast and relief all vary with the seed. */
+export function randomLayout(seed: number): MapLayout {
+  const r = new Rng(seed * 9973 + 17);
+  const u0 = r.range(-26000, -10000);
+  return {
+    rot: Math.round(r.range(0, 360) / 5) * 5,
+    coastM: r.range(34000, 62000),
+    mtnFrom: r.range(10000, 18000),
+    mtnTo: r.range(40000, 58000),
+    mtnHeight: r.range(2000, 3400),
+    ridgeU: r.range(15000, 28000),
+    ridgeV: r.range(10000, 17000),
+    hills: r.range(180, 420),
+    passes: [
+      { u0, amp: r.range(3000, 8000), wave: r.range(9000, 16000), phase: r.range(0, 6.28), width: r.range(2600, 3600) },
+      { u0: u0 + r.range(30000, 48000), amp: r.range(3000, 8000), wave: r.range(9000, 16000), phase: r.range(0, 6.28), width: r.range(2600, 3600) },
+    ],
+  };
+}
+
+/** Centre-lines of the two passes of the classic map (local frame, x as a function of y). */
+export const valleyX = (which: 0 | 1, y: number): number => passU(CLASSIC_LAYOUT.passes[which], y);
+
+const passU = (p: PassShape, v: number): number => p.u0 + p.amp * Math.sin(v / p.wave + p.phase);
 
 /**
  * 160 x 160 km procedural heightmap centred on the defended area.
- * Plains around the airbase, a mountain belt to the north cut by two passes, sea to the south.
+ * Plains around the airbase, a mountain belt on the enemy side cut by two passes, sea on the far side.
  */
 export class Terrain {
   readonly half = 80000;
@@ -16,10 +83,28 @@ export class Terrain {
   readonly h: Float32Array;
   readonly rough: Float32Array;
   maxH = 0;
-  private readonly seed: number;
+  readonly seed: number;
+  readonly layout: MapLayout;
+  /** World-coordinate centre-lines of the passes, from the far end of the belt to the plain (500 m steps). */
+  readonly valleys: { x: number; y: number }[][];
+  private readonly cosR: number;
+  private readonly sinR: number;
 
-  constructor(seed: number) {
+  constructor(seed: number, layout: MapLayout = CLASSIC_LAYOUT) {
     this.seed = seed | 0;
+    this.layout = layout;
+    const a = (layout.rot * Math.PI) / 180;
+    // Exact for the classic map so its heights do not move by rounding.
+    this.cosR = layout.rot === 0 ? 1 : Math.cos(a);
+    this.sinR = layout.rot === 0 ? 0 : Math.sin(a);
+    this.valleys = ([0, 1] as const).map((which) => {
+      const pts: { x: number; y: number }[] = [];
+      for (let v = 80000; v >= 9000; v -= 500) {
+        const p = this.toWorld(this.passU(which, v), v);
+        pts.push({ x: p.x, y: p.y });
+      }
+      return pts;
+    });
     this.cell = (2 * this.half) / (this.n - 1);
     this.h = new Float32Array(this.n * this.n);
     this.rough = new Float32Array(this.n * this.n);
@@ -76,17 +161,55 @@ export class Terrain {
     return s / norm;
   }
 
-  private rawHeight(x: number, y: number): number {
-    const base = this.fbm(x / 18000, y / 18000, 5, 1) * 260 + 40;
-    const north = smoothstep(12000, 48000, y);
-    const ridge = this.ridged(x / 21000, y / 13000, 6, 7);
-    let mtn = north * (Math.pow(ridge, 1.5) * 2900 + this.fbm(x / 6000, y / 6000, 4, 3) * 450);
-    const v0 = Math.exp(-Math.pow((x - valleyX(0, y)) / 3200, 2));
-    const v1 = Math.exp(-Math.pow((x - valleyX(1, y)) / 3000, 2));
+  // ------------------------------------------------------------- layout frame
+
+  /** World point from local (u across the threat axis, v towards the mountains). */
+  toWorld(u: number, v: number, z = 0): V3 {
+    return v3(u * this.cosR + v * this.sinR, -u * this.sinR + v * this.cosR, z);
+  }
+
+  /** Local (u, v) of a world point. */
+  toLocal(x: number, y: number): { u: number; v: number } {
+    return { u: x * this.cosR - y * this.sinR, v: x * this.sinR + y * this.cosR };
+  }
+
+  /** Pass centre-line, local frame: u as a function of v. */
+  passU(which: 0 | 1, v: number): number {
+    return passU(this.layout.passes[which], v);
+  }
+
+  /** Does a bearing from the airbase point into the mountain belt (where the passes are)? */
+  mountainSide(bearing: number): boolean {
+    const d = (((bearing - this.layout.rot) % 360) + 540) % 360 - 180;
+    return Math.abs(d) < 45;
+  }
+
+  /** Route down one pass, staying low in the valley, from local distance `fromV` towards the plain. */
+  passRoute(which: 0 | 1, fromV: number): V3[] {
+    const pts: V3[] = [];
+    for (const v of [78000, 62000, 46000, 32000, 20000]) if (v < fromV) pts.push(this.toWorld(this.passU(which, v), v));
+    return pts;
+  }
+
+  waterAt(x: number, y: number): boolean {
+    return this.heightAt(x, y) < 0;
+  }
+
+  private rawHeight(wx: number, wy: number): number {
+    const L = this.layout;
+    const { u: x, v: y } = this.toLocal(wx, wy);
+    const base = this.fbm(x / 18000, y / 18000, 5, 1) * L.hills + 40;
+    const north = smoothstep(L.mtnFrom, L.mtnTo, y);
+    const ridge = this.ridged(x / L.ridgeU, y / L.ridgeV, 6, 7);
+    let mtn = north * (Math.pow(ridge, 1.5) * L.mtnHeight + this.fbm(x / 6000, y / 6000, 4, 3) * 450);
+    const p0 = L.passes[0];
+    const p1 = L.passes[1];
+    const v0 = Math.exp(-Math.pow((x - passU(p0, y)) / p0.width, 2));
+    const v1 = Math.exp(-Math.pow((x - passU(p1, y)) / p1.width, 2));
     mtn *= 1 - 0.88 * Math.max(v0, v1);
     let h = base + mtn;
-    // Coastline to the south.
-    const coast = smoothstep(-44000, -60000, y + 7000 * Math.sin(x / 19000) + 3000 * Math.sin(x / 5100));
+    // Coastline on the far side from the mountains.
+    const coast = smoothstep(-L.coastM, -L.coastM - 16000, y + 7000 * Math.sin(x / 19000) + 3000 * Math.sin(x / 5100));
     h = lerp(h, -80, coast);
     // Flatten the defended plain around the airbase.
     const r = Math.hypot(x, y + 2000);

@@ -84,18 +84,25 @@ export const PKG: Record<PkgKind, PkgDef> = {
 export const SECTOR_NAMES = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 export const sectorOf = (bearing: number): number => Math.round((((bearing % 360) + 360) % 360) / 45) % 8;
 
-export function newEnemy(): EnemyModel {
+/** A fresh enemy whose preferred axis is the map's mountain side (`rot`, deg). */
+export function newEnemy(rot = 0): EnemyModel {
+  const rel = [1.3, 1, 1, 0.8, 0.8, 0.7, 0.9, 1];
+  const k = sectorOf(rot);
   return {
     kindW: { drones: 1.4, cruise: 1, sead: 1, soj: 0.8, bomber: 0.9, tbm: 1, dark: 0.5 },
-    axisW: [1.3, 1, 1, 0.8, 0.8, 0.7, 0.9, 1],
+    axisW: rel.map((_x, a) => rel[(a - k + 8) % 8]),
   };
 }
 
 /** Threat points the enemy can spend on a given day. */
 export const threatBudget = (day: number): number => 8 + day * 7;
 
-/** Build a day's raid plan from the enemy's budget and what it has learned. */
-export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: number): PlannedPkg[] {
+/**
+ * Build a day's raid plan from the enemy's budget and what it has learned. Package sectors are listed
+ * relative to the enemy side of the map (sector 0 = the mountains, bearing `rot`).
+ */
+export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: number, rot = 0): PlannedPkg[] {
+  const k = sectorOf(rot);
   const rng = new Rng(seed * 7919 + day * 104729);
   let budget = threatBudget(day);
   const out: PlannedPkg[] = [];
@@ -107,7 +114,7 @@ export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: n
     // Weighted pick of a kind, then of an approach sector that kind can use.
     const kind = pick(rng, affordable, (k) => enemy.kindW[k]);
     const def = PKG[kind];
-    const sector = pick(rng, def.sectors, (s) => enemy.axisW[s]);
+    const sector = (pick(rng, def.sectors, (s) => enemy.axisW[(s + k) % 8]) + k) % 8;
     const bearing = (sector * 45 + rng.range(-18, 18) + 360) % 360;
     const size = def.size(day, rng);
     budget -= def.cost(size);

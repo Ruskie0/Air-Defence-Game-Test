@@ -1,6 +1,7 @@
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, ROUND_COST, UnitType, launcherOffsets, newUnit } from '../sim/catalog';
 import { hdist, v3 } from '../sim/math';
-import type { Terrain } from '../sim/terrain';
+import { CLASSIC_LAYOUT, MapLayout, Terrain, randomLayout } from '../sim/terrain';
+import { MAP_SEED } from '../sim/world';
 import { World } from '../sim/world';
 import { EnemyModel, PKG, PlannedPkg, SECTOR_NAMES, newEnemy, planDay, sectorOf, toRaids } from './raidgen';
 
@@ -44,6 +45,8 @@ export interface CampaignState {
   history: DayReport[];
   civilLosses: number;
   over: null | { won: boolean; reason: string };
+  /** Seed of this campaign's map; absent in saves from before random maps (the classic map). */
+  mapSeed?: number;
 }
 
 /** Where new units go before the player moves them, in order of preference. */
@@ -74,11 +77,12 @@ export class Campaign {
       deployment: { units: [], assets: DEFENDED_ASSETS.map((a) => ({ name: a.name, hp: 100 })) },
       nextUid: 1,
       nextPkg: 1,
-      enemy: newEnemy(),
+      enemy: newEnemy(randomLayout(seed).rot),
       plan: [],
       history: [],
       civilLosses: 0,
       over: null,
+      mapSeed: seed,
     });
     // Starting order of battle: one MR battery, a SHORAD unit and a CIWS on the airbase.
     c.add('MR');
@@ -99,6 +103,19 @@ export class Campaign {
 
   save(): string {
     return JSON.stringify(this.s, (_k, v) => (v === Infinity ? 'Infinity' : v));
+  }
+
+  private map: Terrain | null = null;
+
+  /** This campaign's map layout (the classic map for old saves). */
+  get layout(): MapLayout {
+    return this.s.mapSeed === undefined ? CLASSIC_LAYOUT : randomLayout(this.s.mapSeed);
+  }
+
+  /** This campaign's terrain, built once and shared by every day and the planning preview. */
+  get terrain(): Terrain {
+    if (!this.map) this.map = this.s.mapSeed === undefined ? new Terrain(MAP_SEED) : new Terrain(this.s.mapSeed, this.layout);
+    return this.map;
   }
 
   get units(): DeployedUnit[] {
@@ -160,14 +177,22 @@ export class Campaign {
 
   /** Add a unit at the first free default spot (the player moves it afterwards). */
   private add(type: UnitType): DeployedUnit {
-    const spots = DEFAULT_SPOTS[type];
-    const taken = (x: number, y: number): boolean => this.units.some((u) => Math.hypot(u.x - x, u.y - y) < 1500);
-    let [x, y] = spots.find(([a, b]) => !taken(a, b)) ?? spots[0];
-    if (taken(x, y)) {
-      x += 2000;
-      y -= 2000;
+    const t = this.terrain;
+    // Default spots are laid out for a threat from the north: turn them to face this map's mountains.
+    const spots = DEFAULT_SPOTS[type].map(([u, v]) => t.toWorld(u, v));
+    const free = (x: number, y: number): boolean =>
+      !this.placeError(t, type, x, y) && !this.units.some((u) => u.type !== 'CAP' && type !== 'CAP' && Math.hypot(u.x - x, u.y - y) < 1500);
+    let spot = spots.find((p) => free(p.x, p.y));
+    // Otherwise spiral out from the first spot until the ground allows it.
+    for (let i = 1; !spot && i < 200; i++) {
+      const a = i * 2.4;
+      const r = 400 * Math.sqrt(i);
+      const x = spots[0].x + Math.sin(a) * r;
+      const y = spots[0].y + Math.cos(a) * r;
+      if (free(x, y)) spot = v3(x, y);
     }
-    const u = newUnit(this.s.nextUid++, type, x, y, 0);
+    const p = spot ?? spots[0];
+    const u = newUnit(this.s.nextUid++, type, Math.round(p.x), Math.round(p.y), CATALOG[type].sector ? t.layout.rot : 0);
     this.units.push(u);
     return u;
   }
@@ -287,7 +312,7 @@ export class Campaign {
   // ------------------------------------------------------------- the day
 
   replan(): void {
-    this.s.plan = planDay(this.s.day, this.s.seed, this.s.enemy, this.s.nextPkg);
+    this.s.plan = planDay(this.s.day, this.s.seed, this.s.enemy, this.s.nextPkg, this.layout.rot);
     this.s.nextPkg += this.s.plan.length;
   }
 
@@ -306,13 +331,13 @@ export class Campaign {
   }
 
   /** The world for today's battle (or, before it starts, the deployment preview). */
-  makeWorld(terrain: Terrain, withRaids = true): World {
+  makeWorld(withRaids = true): World {
     const dep: Deployment = JSON.parse(JSON.stringify(this.s.deployment, (_k, v) => (v === Infinity ? 'Infinity' : v)), (_k, v) =>
       v === 'Infinity' ? Infinity : v,
     );
     return new World({
       seed: this.s.seed * 31 + this.s.day,
-      terrain,
+      terrain: this.terrain,
       deployment: dep,
       raids: withRaids ? toRaids(this.s.plan) : [],
       civil: withRaids,

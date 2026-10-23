@@ -3,13 +3,10 @@
 import { Campaign } from '../src/campaign/campaign';
 import { PKG, SECTOR_NAMES, sectorOf } from '../src/campaign/raidgen';
 import { CATALOG, UnitType } from '../src/sim/catalog';
-import { MAP_SEED } from '../src/sim/world';
-import { Terrain } from '../src/sim/terrain';
 
 const seed = Number(process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 1);
 const verbose = process.argv.includes('--verbose');
 const logDay = Number(process.argv.find((a) => a.startsWith('--log-day='))?.split('=')[1] ?? 0);
-const terrain = new Terrain(MAP_SEED);
 const c = Campaign.create(seed);
 
 /** What the automatic commander buys, in order, while it can afford it. */
@@ -52,7 +49,7 @@ while (!c.s.over) {
   const bought = shop();
   const day = c.s.day;
   const plan = c.s.plan.map((p) => `${PKG[p.kind].name}(${p.size}) ${SECTOR_NAMES[sectorOf(p.bearing)]}@${p.t}s`).join(', ');
-  const w = c.makeWorld(terrain);
+  const w = c.makeWorld();
   for (const j of w.gnss) j.on = true;
   const last = Math.max(0, ...w.scenario.raids.map((r) => r.t));
   while (!w.scenario.done && w.t < last + 1200) w.step();

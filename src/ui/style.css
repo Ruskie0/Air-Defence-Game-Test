@@ -609,6 +609,46 @@ button.big small {
   color: var(--bad);
 }
 
+/* ---------------------------------------------------------------- friendly selection */
+.site-label.pickable {
+  pointer-events: auto;
+  cursor: pointer;
+}
+body[data-mode='plan'] .site-label.pickable {
+  pointer-events: none;
+}
+.site-label.pickable:hover {
+  color: #fff;
+}
+.sys.sel-able {
+  cursor: pointer;
+  border-radius: 4px;
+}
+.sys.sel-able:hover {
+  background: rgba(120, 255, 170, 0.04);
+}
+.sys.focus {
+  background: rgba(120, 255, 170, 0.08);
+  outline: 1px solid var(--panel-border);
+}
+.close-x {
+  float: right;
+  padding: 0 7px;
+  font-size: 13px;
+  line-height: 18px;
+}
+td.link {
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+.unit-targets td small {
+  font-size: 10px;
+}
+.unit-targets button {
+  padding: 0 6px;
+  font-size: 11px;
+}
+
 @media (max-width: 1250px) {
   #right {
     width: 400px;

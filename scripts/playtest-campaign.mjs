@@ -17,7 +17,7 @@ const browser = await chromium.launch({
 });
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
 const errors = [];
-page.on('pageerror', (e) => errors.push(String(e)));
+page.on('pageerror', (e) => { errors.push(String(e)); console.log('PAGE ERROR', String(e)); });
 page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
 await page.goto(`http://localhost:${port}/?mode=campaign&seed=${seed}`);
 await page.waitForFunction(() => window.game?.cui?.campaign);
@@ -34,13 +34,33 @@ console.log('units:', await page.evaluate(() => window.game.cui.campaign.units.m
 
 await page.click('[data-cui="start"]');
 await page.waitForFunction(() => document.body.dataset.mode === 'battle');
-for (let i = 0; i < 40; i++) {
-  const done = await page.evaluate(() => {
+let selectedOnce = false;
+for (let i = 0; i < 80; i++) {
+  const { done, hostile } = await page.evaluate(() => {
     const { world } = window.game;
-    for (let k = 0; k < 3600; k++) world.step();
-    return world.scenario.done;
+    for (let k = 0; k < 1800; k++) world.step();
+    return { done: world.scenario.done, hostile: world.tracker.tracks.some((t) => t.confirmed && t.ident === 'HOS') };
   });
-  if (i === 6) await page.screenshot({ path: 'playtest/c2-battle.png' });
+  if (hostile && !selectedOnce) {
+    selectedOnce = true;
+    // Select our MR battery from the systems panel, check its target list, then deselect. The panel is
+    // re-rendered several times a second, so the press is dispatched directly rather than via a click.
+    const press = (sel) => page.evaluate((q) => document.querySelector(q)?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })), sel);
+    await page.waitForSelector('#systems [data-act="unit"][data-code="MR"]');
+    await press('#systems [data-act="unit"][data-code="MR"]');
+    await page.waitForFunction(() => document.querySelector('#detail')?.textContent.includes('Channels'));
+    await page.screenshot({ path: 'playtest/c2-unit.png' });
+    console.log('unit panel:', (await page.locator('#detail').innerText()).replace(/\n+/g, ' | ').slice(0, 400));
+    if (await page.locator('#detail [data-act="engage-from"]').count()) {
+      await press('#detail [data-act="engage-from"]');
+      await page.waitForFunction(() => document.querySelector('#detail .order'));
+      console.log('order:', await page.locator('#detail .order').textContent());
+    }
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => window.game.hud.unitSel === null && document.querySelector('#detail h3')?.textContent.startsWith('Selection'));
+    console.log('deselected with Esc');
+  }
+  if (i === 12) await page.screenshot({ path: 'playtest/c2-battle.png' });
   if (done) break;
 }
 await page.waitForTimeout(400);

@@ -1,6 +1,5 @@
 import { V3, add, clone, polar, v3 } from './math';
 import { Airliner, Bomber, Cruise, Drone, Sead, Soj, Tbm } from './entities';
-import { valleyX } from './terrain';
 import type { World } from './world';
 
 export type ThreatType = 'drones' | 'cruise' | 'bomber' | 'sead' | 'soj' | 'tbm' | 'airliner' | 'airliner-dark';
@@ -34,13 +33,6 @@ function targetsByName(w: World, names: string[]): Aim[] {
   return picked.length ? picked : all;
 }
 
-/** Route through one of the northern passes, staying low in the valley. */
-export function valleyRoute(which: 0 | 1, fromY: number): V3[] {
-  const pts: V3[] = [];
-  for (const y of [78000, 62000, 46000, 32000, 20000]) if (y < fromY) pts.push(v3(valleyX(which, y), y, 0));
-  return pts;
-}
-
 export function spawnDrones(w: World, n: number, bearing: number, rangeM: number, targets?: string[]): void {
   const aims = targets ? targetsByName(w, targets) : targetsByName(w, ['Airbase', 'Power plant', 'CRC']);
   for (let i = 0; i < n; i++) {
@@ -58,15 +50,18 @@ export function spawnDrones(w: World, n: number, bearing: number, rangeM: number
 
 export function spawnCruise(w: World, n: number, bearing: number, rangeM: number, targets?: string[]): void {
   const aims = targets ? targetsByName(w, targets) : targetsByName(w, ['Airbase', 'CRC', 'LR radar', 'MR radar']);
-  const fromNorth = bearing > 315 || bearing < 45;
+  const t = w.terrain;
+  // From the mountain side they come down the passes; elsewhere straight in, low over the plain or the sea.
+  const viaPasses = t.mountainSide(bearing);
   for (let i = 0; i < n; i++) {
     const aim = aims[i % aims.length];
     let start: V3;
     let route: V3[];
-    if (fromNorth) {
+    if (viaPasses) {
       const which = (i % 2) as 0 | 1;
-      start = v3(valleyX(which, 80000) + w.rng.gauss() * 400, rangeM + i * 2500, 0);
-      route = valleyRoute(which, start.y);
+      const v = rangeM + i * 2500;
+      start = t.toWorld(t.passU(which, 80000) + w.rng.gauss() * 400, v);
+      route = t.passRoute(which, v);
     } else {
       start = add(polar(bearing, rangeM + i * 2500), polar(bearing + 90, w.rng.gauss() * 3000));
       route = [add(polar(bearing + w.rng.range(-30, 30), rangeM * 0.4), v3())];

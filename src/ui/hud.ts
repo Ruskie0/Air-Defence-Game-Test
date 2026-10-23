@@ -1,11 +1,12 @@
 import type { View3D } from '../render/view3d';
-import { bearingDeg, dist, headingOf, v3 } from '../sim/math';
+import { bearingDeg, dist, headingOf, len, v3 } from '../sim/math';
 import { THREAT_LABELS, ThreatType, spawnThreat } from '../sim/threats';
 import { missilesOnTrack, timeToGo } from '../sim/tewa';
 import type { Ident, Track } from '../sim/tracker';
 import type { Wcs } from '../sim/tewa';
 import type { World } from '../sim/world';
 import type { Radar } from '../sim/radar';
+import type { Site } from '../sim/sites';
 import { CLASS_NAME, IDENT_COLOR, IDENT_NAME, fmtTime } from './colors';
 import type { Ppi } from './ppi';
 
@@ -30,6 +31,8 @@ export class Hud {
   private readonly ppi: Ppi;
   private readonly ctl: GameControl;
   selected: number | null = null;
+  /** Selected friendly: a fire unit, CIWS or radar code, or F<index> for a fighter. */
+  unitSel: string | null = null;
   private lastOrder = '';
   private nextSlow = 0;
   private lastLogLen = -1;
@@ -41,6 +44,8 @@ export class Hud {
     this.ppi = ppi;
     this.ctl = ctl;
     view.onSelect = (id) => this.select(id);
+    view.onSelectSite = (site) => this.selectUnit(this.unitAtSite(site));
+    view.onEmptyClick = () => this.clearSelection();
     ppi.onSelect = (id) => this.select(id);
     this.buildStatic();
     document.addEventListener('pointerdown', (e) => this.onAction(e));
@@ -52,7 +57,7 @@ export class Hud {
     this.w = w;
     this.cache.clear();
     this.lastLogLen = -1;
-    this.select(null);
+    this.clearSelection();
     $('spawn').hidden = !!this.campaign;
   }
 
@@ -68,6 +73,37 @@ export class Hud {
     this.view.selected = id;
     this.ppi.selected = id;
     this.nextSlow = 0;
+    if (id !== null) this.selectUnit(null);
+  }
+
+  /** Select one of our own units: the detail panel then shows its status and what it can engage. */
+  selectUnit(code: string | null): void {
+    this.unitSel = code;
+    this.lastOrder = '';
+    this.nextSlow = 0;
+    this.view.selectedSite = code ? this.siteOfUnit(code) : null;
+    if (code !== null && this.selected !== null) {
+      this.selected = null;
+      this.view.selected = null;
+      this.ppi.selected = null;
+    }
+  }
+
+  clearSelection(): void {
+    this.select(null);
+    this.selectUnit(null);
+  }
+
+  private unitAtSite(site: Site): string | null {
+    const f = this.w.fielded.find((x) => x.sites.includes(site));
+    return f?.fu?.code ?? f?.ciws?.code ?? f?.radar?.code ?? null;
+  }
+
+  private siteOfUnit(code: string): Site | null {
+    const w = this.w;
+    const fu = w.unit(code);
+    if (fu) return w.fielded.find((f) => f.fu === fu)?.sites[0] ?? null;
+    return w.fielded.find((f) => f.ciws?.code === code || f.radar?.code === code)?.sites[0] ?? null;
   }
 
   private buildStatic(): void {
@@ -102,7 +138,7 @@ export class Hud {
       this.ctl.speed = SPEEDS[Number(e.code.slice(5)) - 1];
       this.ctl.paused = false;
     } else if (e.code === 'Escape') {
-      this.select(null);
+      this.clearSelection();
       $('help').classList.add('hidden');
     }
   }
@@ -170,8 +206,29 @@ export class Hud {
         w.fighters[Number(d.i)].rtb(w);
         break;
       case 'sel':
-        this.select(Number(d.id));
+        // Clicking the selected track again deselects it.
+        this.select(this.selected === Number(d.id) ? null : Number(d.id));
         break;
+      case 'desel':
+        this.clearSelection();
+        break;
+      case 'unit':
+        this.selectUnit(this.unitSel === d.code ? null : d.code!);
+        break;
+      case 'engage-from': {
+        const tr = w.tracker.get(Number(d.id));
+        if (tr) this.lastOrder = `${w.unit(d.code!)?.name ?? d.code} on ${tr.label}: ${w.engage(tr.id, d.code!)}`;
+        break;
+      }
+      case 'cap-on': {
+        const f = w.fighters[Number(d.i)];
+        const tr = w.tracker.get(Number(d.id));
+        if (f && tr) {
+          f.intercept(w, tr.id);
+          this.lastOrder = `${f.name} committed on ${tr.label}`;
+        }
+        break;
+      }
       case 'engage': {
         const tr = this.resolve();
         if (tr) this.lastOrder = `${w.unit(d.code!)?.name ?? d.code}: ${w.engage(tr.id, d.code!)}`;
@@ -304,7 +361,7 @@ export class Hud {
       const r = u.radar!;
       const active = u.activeTargets(w).size;
       const reload = u.launchers.filter((l) => l.reloadAt > 0 && l.site.alive);
-      rows.push(`<div class="sys">
+      rows.push(`<div class="sys sel-able ${this.unitSel === u.code ? 'focus' : ''}" data-act="unit" data-code="${u.code}">
         <div class="sys-h"><b>${u.name}</b> ${this.radarState(r.code)}</div>
         <div class="sys-b">Missiles <b>${u.rounds}</b>/${u.maxRounds}${Number.isFinite(u.spares) ? ` +${u.spares}` : ''} · Channels ${active}/${u.channels}${reload.length ? ` · reload ${fmtTime(Math.min(...reload.map((l) => l.reloadAt)) - w.t)}` : ''}
         ${this.radarButtons(r)}</div></div>`);
@@ -321,7 +378,7 @@ export class Hud {
               : c.auto
                 ? '<span class="st ok">AUTO</span>'
                 : '<span class="st emcon">HOLD</span>';
-      rows.push(`<div class="sys"><div class="sys-h"><b>${c.name}</b> ${st}</div>
+      rows.push(`<div class="sys sel-able ${this.unitSel === c.code ? 'focus' : ''}" data-act="unit" data-code="${c.code}"><div class="sys-h"><b>${c.name}</b> ${st}</div>
         <div class="sys-b">Rounds <b>${c.ammo}</b>/${c.maxAmmo} <button data-act="ciws" data-code="${c.code}" ${c.site.alive ? '' : 'disabled'}>${c.auto ? 'Hold' : 'Auto'}</button></div></div>`);
     }
     const ewr = w.fielded.filter((f) => f.unit.type === 'EWR' && f.radar);
@@ -329,7 +386,7 @@ export class Hud {
       rows.push('<h3>Sensors</h3>');
       for (const f of ewr) {
         const r = f.radar!;
-        rows.push(`<div class="sys"><div class="sys-h"><b>${r.name}</b> ${this.radarState(r.code)}</div>
+        rows.push(`<div class="sys sel-able ${this.unitSel === r.code ? 'focus' : ''}" data-act="unit" data-code="${r.code}"><div class="sys-h"><b>${r.name}</b> ${this.radarState(r.code)}</div>
           <div class="sys-b dim">L-band, 250 km ${this.radarButtons(r)}</div></div>`);
       }
     }
@@ -346,7 +403,7 @@ export class Hud {
     w.fighters.forEach((f, i) => {
       const tr = f.targetTrackId !== null ? w.tracker.get(f.targetTrackId) : undefined;
       const st = !f.alive ? 'LOST' : f.state === 'ground' ? `REARM ${fmtTime(f.groundUntil - w.t)}` : f.state === 'intercept' ? `INTERCEPT ${tr?.label ?? ''}` : f.state.toUpperCase();
-      rows.push(`<div class="sys"><div class="sys-h"><b>${f.name}</b> <span class="st ${f.alive ? 'ok' : 'dead'}">${st}</span></div>
+      rows.push(`<div class="sys sel-able ${this.unitSel === `F${i}` ? 'focus' : ''}" data-act="unit" data-code="F${i}"><div class="sys-h"><b>${f.name}</b> <span class="st ${f.alive ? 'ok' : 'dead'}">${st}</span></div>
         <div class="sys-b">AAM <b>${f.missiles}</b> · Fuel ${Math.round((100 * f.fuel) / f.maxFuel)}%
         <button data-act="cap-station" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>CAP</button><button data-act="cap-rtb" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>RTB</button></div></div>`);
     });
@@ -403,13 +460,121 @@ export class Hud {
     );
   }
 
+  /** Tracks a friendly unit might be told to engage, most urgent first. */
+  private candidates(): Track[] {
+    const w = this.w;
+    return w.tracker.tracks
+      .filter((t) => t.confirmed && !t.dropped && t.ident !== 'FRD' && t.ident !== 'NEU')
+      .map((t) => ({ t, tgo: timeToGo(w, t), hos: t.ident === 'HOS' ? 0 : 1 }))
+      .sort((a, b) => a.hos - b.hos || a.tgo - b.tgo)
+      .slice(0, 14)
+      .map((x) => x.t);
+  }
+
+  private targetRow(tr: Track, from: { x: number; y: number }, action: string): string {
+    const w = this.w;
+    const p = tr.predict(w.t);
+    const r = Math.hypot(p.x - from.x, p.y - from.y) / 1000;
+    const tgo = timeToGo(w, tr);
+    return `<tr style="color:${IDENT_COLOR[tr.ident]}"><td data-act="sel" data-id="${tr.id}" class="link">${tr.label}</td><td>${tr.ident}</td><td>${tr.cls}</td>
+      <td class="n">${r.toFixed(r < 10 ? 1 : 0)}</td><td class="n">${Number.isFinite(tgo) && tgo < 3600 ? fmtTime(tgo) : '—'}</td><td class="eng">${this.engStatus(tr)}</td><td>${action}</td></tr>`;
+  }
+
+  private targetTable(rows: string[]): string {
+    return `<h3>Targets <span class="dim">km from this unit</span></h3><div class="tbl-wrap unit-targets"><table><thead><tr><th>Track</th><th>ID</th><th>Cls</th><th>km</th><th>TTG</th><th>Eng</th><th></th></tr></thead>
+      <tbody>${rows.join('') || '<tr><td colspan="7" class="dim">No hostile, suspect or unknown tracks</td></tr>'}</tbody></table></div>`;
+  }
+
+  /** Status of the selected friendly unit and the tracks it can be ordered to engage. */
+  private unitDetail(code: string): string | null {
+    const w = this.w;
+    const close = '<button data-act="desel" class="close-x" title="Deselect (Esc)">×</button>';
+    const order = this.lastOrder ? `<div class="order">${esc(this.lastOrder)}</div>` : '';
+    const fu = w.unit(code);
+    if (fu) {
+      const r = fu.radar!;
+      const active = [...fu.activeTargets(w)].map((id) => w.tracker.get(id)?.label ?? `T${id}`);
+      const ready = fu.launchers.filter((l) => l.site.alive && l.rounds > 0).length;
+      const reload = fu.launchers.filter((l) => l.reloadAt > 0 && l.site.alive);
+      const rows = this.candidates().map((tr) => {
+        const f = fu.feasibility(w, tr);
+        return this.targetRow(
+          tr,
+          r.pos,
+          f.ok
+            ? `<button data-act="engage-from" data-code="${fu.code}" data-id="${tr.id}" class="go">Engage</button>`
+            : `<small class="dim" title="${esc(f.reason)}">${esc(f.reason)}</small>`,
+        );
+      });
+      return `<h3>${fu.name} ${this.radarState(r.code)} ${close}</h3>
+        <div class="kv">
+          <span>Missiles</span><b>${fu.rounds}/${fu.maxRounds}${Number.isFinite(fu.spares) ? ` · ${fu.spares} spare` : ''} · ${ready}/${fu.launchers.length} launchers ready</b>
+          <span>Reload</span><b>${reload.length ? `next in ${fmtTime(Math.min(...reload.map((l) => l.reloadAt)) - w.t)}` : 'none pending'}</b>
+          <span>Channels</span><b>${active.length}/${fu.channels}${active.length ? `: ${active.join(', ')}` : ''}</b>
+          <span>Missile</span><b>${fu.spec.name}, ${(fu.spec.maxRangeM / 1000).toFixed(0)} km</b>
+        </div>
+        <div class="row">${this.radarButtons(r)}</div>
+        ${order}${this.targetTable(rows)}`;
+    }
+    const c = w.ciws.find((x) => x.code === code);
+    if (c) {
+      return `<h3>${c.name} ${close}</h3>
+        <div class="kv">
+          <span>Rounds</span><b>${c.ammo}/${c.maxAmmo}</b>
+          <span>State</span><b>${!c.site.alive ? 'destroyed' : c.firing ? `firing at ${c.target?.name ?? ''}` : c.target ? `tracking ${c.target.name}` : c.auto ? 'automatic' : 'hold'}</b>
+        </div>
+        <div class="row"><button data-act="ciws" data-code="${c.code}" ${c.site.alive ? '' : 'disabled'}>${c.auto ? 'Hold fire' : 'Automatic'}</button></div>
+        <div class="dim">The gun engages anything inbound inside about 2 km on its own; it cannot be pointed at a track.</div>`;
+    }
+    if (code.startsWith('F')) {
+      const i = Number(code.slice(1));
+      const f = w.fighters[i];
+      if (!f) return null;
+      const tr = f.targetTrackId !== null ? w.tracker.get(f.targetTrackId) : undefined;
+      const ok = f.alive && f.airborne && f.missiles > 0;
+      const rows = this.candidates()
+        .filter((t) => t.cls !== 'TBM')
+        .map((t) =>
+          this.targetRow(t, f.pos, ok ? `<button data-act="cap-on" data-i="${i}" data-id="${t.id}" class="go">Intercept</button>` : '<small class="dim">not available</small>'),
+        );
+      return `<h3>${f.name} <span class="st ${f.alive ? 'ok' : 'dead'}">${f.alive ? f.state.toUpperCase() : 'LOST'}</span> ${close}</h3>
+        <div class="kv">
+          <span>AAM</span><b>${f.missiles}</b>
+          <span>Fuel</span><b>${Math.round((100 * f.fuel) / f.maxFuel)}%</b>
+          <span>Altitude</span><b>${Math.round(f.pos.z)} m, ${Math.round(len(f.vel))} m/s</b>
+          <span>Target</span><b>${tr ? tr.label : 'none'}</b>
+        </div>
+        <div class="row"><button data-act="cap-station" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>Back to CAP</button><button data-act="cap-rtb" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>RTB</button></div>
+        ${order}${this.targetTable(rows)}`;
+    }
+    const r = w.radarByCode(code);
+    if (r) {
+      return `<h3>${r.name} ${this.radarState(r.code)} ${close}</h3>
+        <div class="kv">
+          <span>Band</span><b>${r.spec.freqGHz} GHz, ${r.spec.maxRangeKm} km</b>
+          <span>Firm tracks</span><b>${r.firm.size}</b>
+          <span>Radiated</span><b>${fmtTime(w.radiating.get(r.code) ?? 0)} this day</b>
+        </div>
+        <div class="row">${this.radarButtons(r)}</div>`;
+    }
+    return null;
+  }
+
   private updateDetail(): void {
     const w = this.w;
+    if (this.unitSel) {
+      const html = this.unitDetail(this.unitSel);
+      if (html) {
+        this.set('detail', html);
+        return;
+      }
+      this.unitSel = null;
+    }
     const tr = this.resolve();
     if (!tr) {
       this.set(
         'detail',
-        `<h3>Track</h3><div class="dim">Select a track in the table, on the PPI, or click its label in the 3D view. Hostiles are engaged automatically under WCS TIGHT (hostile only) and FREE (anything not friend or neutral).</div>`,
+        `<h3>Selection</h3><div class="dim">Select a track in the table, on the PPI, or click its label in the 3D view. Select one of your units in the left panel or click its name on the map to see its status and give it targets. Esc, the × button or a click on empty ground deselects. Hostiles are engaged automatically under WCS TIGHT (hostile only) and FREE (anything not friend or neutral).</div>`,
       );
       return;
     }
@@ -431,7 +596,7 @@ export class Hud {
     const inFlight = missilesOnTrack(w, tr.id);
     this.set(
       'detail',
-      `<h3 style="color:${IDENT_COLOR[tr.ident]}">${tr.label} · ${IDENT_NAME[tr.ident]} · ${CLASS_NAME[tr.cls]}</h3>
+      `<h3 style="color:${IDENT_COLOR[tr.ident]}">${tr.label} · ${IDENT_NAME[tr.ident]} · ${CLASS_NAME[tr.cls]} <button data-act="desel" class="close-x" title="Deselect (Esc)">×</button></h3>
       <div class="kv">
         <span>Range / brg</span><b>${(Math.hypot(p.x, p.y) / 1000).toFixed(1)} km / ${Math.round(bearingDeg(v3(), p))}°</b>
         <span>Alt / speed</span><b>${Math.round(p.z)} m / ${Math.round(tr.speed)} m/s (M${(tr.speed / 340).toFixed(2)})</b>

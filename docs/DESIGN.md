@@ -92,6 +92,12 @@ The main menu offers a ten-day campaign next to the sandbox. Each day has a plan
   plant + 25 x CRC` at full health, $185M a day). It buys units, missiles for reloads, spare rounds
   that reload launchers during the day, extra launchers, replacement fighters and repairs (partial
   repairs spend what is left). Selling returns a fifth of the price.
+- **Random maps.** Each campaign gets its own map from its seed (`randomLayout` in `terrain.ts`): the
+  same ingredients as the sandbox map (a defended plain, a mountain belt on the enemy side cut by two
+  passes, sea on the far side) with the whole layout turned to a random bearing and the coast distance,
+  belt depth and height, ridge scale, lowland relief and pass shapes varied. Threats from the mountain
+  side fly down the passes, raid sectors and the default unit positions turn with the map, and
+  `terrain.valleys` gives the renderer the pass centre-lines. The sandbox keeps the classic map.
 - **Unlocks.** MR, SHORAD, CIWS, early warning radar and GNSS jammer from day 1; decoy and CAP from
   day 2; the LR SAM (the only ballistic missile defence) from day 3. Ballistic missiles first appear on
   day 5 and are always reported the first time.

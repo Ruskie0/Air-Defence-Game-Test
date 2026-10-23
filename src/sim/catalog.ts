@@ -109,11 +109,14 @@ export const CATALOG: Record<UnitType, UnitInfo> = {
 /** Missile prices for rearming, $M per round. */
 export const ROUND_COST: Partial<Record<UnitType, number>> = { LR: LR_MSL.costM, MR: MR_MSL.costM, SH: SH_MSL.costM };
 
-/** The sites the defence exists for. `vuln` scales warhead damage: a large airbase shrugs off more hits than a substation. */
-export const DEFENDED_ASSETS: { name: string; x: number; y: number; radius: number; valueM: number; vuln: number }[] = [
-  { name: 'Airbase', x: 0, y: 0, radius: 320, valueM: 400, vuln: 0.4 },
-  { name: 'CRC', x: -4200, y: -3600, radius: 40, valueM: 150, vuln: 1 },
-  { name: 'Power plant', x: 6500, y: -9000, radius: 160, valueM: 250, vuln: 0.7 },
+/**
+ * The sites the defence exists for (their positions come from the map). `vuln` scales warhead damage:
+ * a large airbase shrugs off more hits than a substation.
+ */
+export const DEFENDED_ASSETS: { name: string; radius: number; valueM: number; vuln: number }[] = [
+  { name: 'Airbase', radius: 320, valueM: 400, vuln: 0.4 },
+  { name: 'CRC', radius: 40, valueM: 150, vuln: 1 },
+  { name: 'Power plant', radius: 160, valueM: 250, vuln: 0.7 },
 ];
 
 /** Default launcher layout around a battery's radar (metres, relative). */
@@ -138,25 +141,4 @@ export function newUnit(uid: number, type: UnitType, x: number, y: number, facin
   const launchers = launcherOffsets(type, n, facing).map(([dx, dy]) => ({ x: x + dx, y: y + dy, rounds: info.perLauncher!, max: info.perLauncher! }));
   const armWatch = type === 'LR' || type === 'MR' || type === 'EWR';
   return { uid, type, x, y, facing, launchers, spares: 0, aircraft: type === 'CAP' ? 2 : 0, armWatch };
-}
-
-/** The fixed order of battle of the sandbox scenario. */
-export function sandboxDeployment(): Deployment {
-  const l = (x: number, y: number, max: number): DeployedLauncher => ({ x, y, rounds: max, max });
-  const u = (uid: number, type: UnitType, x: number, y: number, launchers: DeployedLauncher[] = [], extra: Partial<DeployedUnit> = {}): DeployedUnit => ({
-    uid, type, x, y, facing: 0, launchers, spares: Infinity, aircraft: type === 'CAP' ? 2 : 0, armWatch: type === 'LR' || type === 'MR', ...extra,
-  });
-  return {
-    units: [
-      u(1, 'LR', 2500, 7000, [l(1700, 6300, 4), l(3400, 6200, 4), l(2000, 7900, 4), l(3200, 7800, 4)]),
-      u(2, 'MR', -9000, 9000, [l(-7500, 7000, 6), l(-3000, 2600, 6), l(-11000, 10500, 6)]),
-      u(3, 'SH', 1500, -1600, [l(1500, -1600, 8)]),
-      u(4, 'CIWS', -700, 600),
-      u(5, 'CIWS', 3000, 6500),
-      u(6, 'GNSS', 0, 2500),
-      u(7, 'DECOY', 4800, 8600),
-      u(8, 'CAP', 0, 50000),
-    ],
-    assets: DEFENDED_ASSETS.map((a) => ({ name: a.name, hp: 100 })),
-  };
 }

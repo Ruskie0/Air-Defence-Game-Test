@@ -3,7 +3,7 @@ import type { Campaign } from './campaign/campaign';
 import { CAMPAIGN_DAYS } from './campaign/campaign';
 import { View3D } from './render/view3d';
 import { DT } from './sim/constants';
-import { Terrain } from './sim/terrain';
+import { MAP_TYPE_LIST, MapType, Terrain, typeForSeed } from './sim/terrain';
 import { MAP_SEED, World } from './sim/world';
 import { CampaignUi, loadSaved } from './ui/campaign-ui';
 import { GameControl, Hud } from './ui/hud';
@@ -11,9 +11,21 @@ import { Ppi } from './ui/ppi';
 
 const params = new URLSearchParams(location.search);
 const seed = Number(params.get('seed')) || MAP_SEED;
+const mapParam = params.get('map');
 
-/** One terrain for every world: the sandbox, each campaign day and the deployment preview. */
-const terrain = new Terrain(MAP_SEED);
+/**
+ * A new map for the sandbox: random every time, unless ?seed= (and optionally ?map=) fixes it.
+ * ?map=classic gives the original 160 km map layout.
+ */
+function sandboxTerrain(type?: MapType): Terrain {
+  if (mapParam === 'classic') return new Terrain(MAP_SEED);
+  const s = params.has('seed') ? seed : Math.floor(Math.random() * 1e6) + 1;
+  const t = type ?? (MAP_TYPE_LIST.includes(mapParam as MapType) ? (mapParam as MapType) : typeForSeed(s));
+  return new Terrain(s, t);
+}
+
+/** The map behind the menu, and the last sandbox map. */
+let terrain = sandboxTerrain();
 /** What the menu shows behind it: the sandbox defence with no raids. */
 const backdrop = (): World => new World({ seed, terrain, raids: [], civil: false });
 
@@ -61,9 +73,11 @@ const cui = new CampaignUi({
   startSandbox,
 });
 
-function startSandbox(): void {
+function startSandbox(type?: MapType): void {
   hud.campaign = null;
+  terrain = sandboxTerrain(type);
   const w = new World({ seed, terrain });
+  w.log(`Map: ${terrain.describe()}`, 'raid');
   show(w);
   hud.setWorld(w);
   running = true;

@@ -31,34 +31,36 @@ export class Scenario {
   /** Logged when the last raid is over. */
   doneMsg = 'All raids complete. The sandbox keeps running: use the spawn panel for more.';
 
-  constructor(raids?: Raid[]) {
+  /** `rot` turns the sandbox raids to come from this map's enemy side (they are written for a threat from the north). */
+  constructor(raids?: Raid[], rot = 0) {
     if (raids) {
       this.raids = raids;
       return;
     }
+    const b = (deg: number): number => (deg + rot) % 360;
     this.raids = [
       {
         name: 'Raid 1: Drone swarm',
-        desc: '8 one-way attack drones from the north-east, low and slow, aimed at the airbase, power plant and CRC.',
+        desc: '8 one-way attack drones from the enemy side, low and slow, aimed at the airbase, power plant and CRC.',
         t: 20,
         launched: false,
-        spawn: (w) => spawnDrones(w, 8, 40, 34000),
+        spawn: (w) => spawnDrones(w, 8, b(40), 50000),
       },
       {
         name: 'Raid 2: Cruise missiles in the passes',
-        desc: '6 terrain-following cruise missiles using the two mountain valleys to the north, timed to arrive with the drones.',
-        t: 330,
+        desc: '6 terrain-following cruise missiles from the enemy side, down the mountain passes where there are any, timed to arrive with the drones.',
+        t: 480,
         launched: false,
-        spawn: (w) => spawnCruise(w, 6, 0, 95000),
+        spawn: (w) => spawnCruise(w, 6, b(0), 130000),
       },
       {
         name: 'Raid 3: SEAD under jamming',
-        desc: 'A stand-off jammer sets up 125 km north while a SEAD pair hunts emitting radars with anti-radiation missiles.',
+        desc: 'A stand-off jammer sets up 125 km out while a SEAD pair hunts emitting radars with anti-radiation missiles.',
         t: 900,
         launched: false,
         spawn: (w) => {
-          spawnSoj(w, 352, 125000);
-          spawnSead(w, 2, 330, 165000);
+          spawnSoj(w, b(352), 125000);
+          spawnSead(w, 2, b(330), 165000);
         },
       },
       {
@@ -66,25 +68,25 @@ export class Scenario {
         desc: 'Two bombers launch 8 air-launched cruise missiles from beyond SAM range.',
         t: 1380,
         launched: false,
-        spawn: (w) => spawnBombers(w, 2, 12, 195000),
+        spawn: (w) => spawnBombers(w, 2, b(12), 195000),
       },
       {
         name: 'Raid 5: Ballistic missile salvo',
         desc: '4 short-range ballistic missiles on the airbase, LR radar and CRC. Only the LR SAM can intercept them.',
         t: 1950,
         launched: false,
-        spawn: (w) => spawnTbm(w, 4, 358, ['Airbase', 'LR radar', 'CRC', 'Airbase']),
+        spawn: (w) => spawnTbm(w, 4, b(358), ['Airbase', 'LR radar', 'CRC', 'Airbase']),
       },
       {
         name: 'Raid 6: Combined strike',
-        desc: 'Drones from the east, cruise missiles from the sea, TBMs, another SEAD pair, and an airliner with its transponder off.',
+        desc: 'Drones from a flank, cruise missiles from behind us, TBMs, another SEAD pair, and an airliner with its transponder off.',
         t: 2450,
         launched: false,
         spawn: (w) => {
-          spawnDrones(w, 10, 95, 32000, ['Airbase', 'Power plant', 'SHORAD', 'CRC']);
-          spawnCruise(w, 4, 172, 100000, ['Power plant', 'Airbase', 'CRC']);
-          spawnTbm(w, 2, 5, ['Airbase', 'MR radar']);
-          spawnSead(w, 2, 318, 160000);
+          spawnDrones(w, 10, b(95), 48000, ['Airbase', 'Power plant', 'SHORAD', 'CRC']);
+          spawnCruise(w, 4, b(172), 120000, ['Power plant', 'Airbase', 'CRC']);
+          spawnTbm(w, 2, b(5), ['Airbase', 'MR radar']);
+          spawnSead(w, 2, b(318), 160000);
           spawnDarkAirliner(w);
         },
       },

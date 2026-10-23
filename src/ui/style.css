@@ -744,3 +744,9 @@ td.link {
     height: 180px;
   }
 }
+.diff.maps {
+  grid-template-columns: repeat(3, 1fr);
+}
+.diff button.on {
+  border-color: var(--accent);
+}

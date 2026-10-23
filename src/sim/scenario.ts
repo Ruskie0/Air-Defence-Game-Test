@@ -73,7 +73,7 @@ export class Scenario {
           spawnDrones(w, 10, 95, 32000, ['Airbase', 'Power plant', 'SHORAD', 'CRC']);
           spawnCruise(w, 4, 172, 100000, ['Power plant', 'Airbase', 'CRC']);
           spawnTbm(w, 2, 5, ['Airbase', 'MR radar']);
-          spawnSead(w, 2, 300, 160000);
+          spawnSead(w, 2, 318, 160000);
           spawnDarkAirliner(w);
         },
       },

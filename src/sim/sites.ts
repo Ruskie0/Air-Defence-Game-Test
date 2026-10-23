@@ -142,15 +142,36 @@ export class FireUnit {
     return s;
   }
 
-  /** Predicted intercept point from `from`, iterating on time of flight. */
+  /**
+   * Earliest predicted intercept point from `from`: the first time along the target's predicted path
+   * (below the missile ceiling and before a ballistic target lands) that the missile can reach in time.
+   * Returns tof = Infinity when there is no intercept inside the missile's time of flight.
+   */
   pip(w: World, tr: Track, from: V3): { pip: V3; tof: number } {
-    let tof = dist(from, tr.predict(w.t)) / this.spec.avgSpd;
-    let p = tr.predict(w.t + tof);
-    for (let i = 0; i < 8; i++) {
-      p = tr.predict(w.t + tof);
-      tof = dist(from, p) / this.spec.avgSpd;
+    const s = this.spec;
+    const late = (tau: number): number => dist(from, tr.predict(w.t + tau)) / s.avgSpd - tau;
+    let prev = -1;
+    for (let tau = 0; tau <= s.maxTof; tau += 0.5) {
+      const p = tr.predict(w.t + tau);
+      if (tr.ballistic && p.z < w.terrain.groundAt(p.x, p.y)) break;
+      if (p.z > s.maxAltM) {
+        prev = -1;
+        continue;
+      }
+      if (late(tau) <= 0) {
+        // Refine between the last sample that was too late and this one.
+        let lo = prev < 0 ? tau : prev;
+        let hi = tau;
+        for (let i = 0; i < 8 && hi - lo > 0.02; i++) {
+          const mid = (lo + hi) / 2;
+          if (late(mid) <= 0) hi = mid;
+          else lo = mid;
+        }
+        return { pip: tr.predict(w.t + hi), tof: hi };
+      }
+      prev = tau;
     }
-    return { pip: p, tof };
+    return { pip: tr.predict(w.t), tof: Infinity };
   }
 
   feasibility(w: World, tr: Track): Feasibility {
@@ -162,6 +183,7 @@ export class FireUnit {
     if (!tr.confirmed) return no('track not firm');
     if (w.t - tr.t > (this.remote ? 5 : 3)) return no('track stale');
     if (tr.cls === 'TBM' && !s.tbmRangeM) return no('not TBM capable');
+    if (!tr.skin && tr.sigma > 3000) return no(`jammer fix too coarse (${(tr.sigma / 1000).toFixed(0)} km)`);
     if (this.code === 'LR') {
       const lr = tr.sources.get('LR') ?? -1e9;
       const esm = tr.sources.get('ESM') ?? -1e9;
@@ -174,8 +196,12 @@ export class FireUnit {
     for (const l of ready) if (dist(l.site.pos, tr.pos) < dist(best.site.pos, tr.pos)) best = l;
     const { pip, tof } = this.pip(w, tr, best.site.pos);
     const range = dist(best.site.pos, pip);
-    if (tof > s.maxTof * 0.85) return no('cannot catch target');
     const maxR = tr.cls === 'TBM' ? s.tbmRangeM : s.maxRangeM;
+    if (!Number.isFinite(tof)) {
+      if (range > maxR) return no(`out of range (${(range / 1000).toFixed(0)} km)`);
+      return no(pip.z > s.maxAltM ? 'above ceiling' : 'cannot catch target');
+    }
+    if (tof > s.maxTof * 0.85) return no('cannot catch target');
     if (range > maxR) return no(`out of range (${(range / 1000).toFixed(0)} km)`);
     if (range < s.minRangeM) return no('inside minimum range');
     if (pip.z > s.maxAltM) return no('above ceiling');
@@ -198,7 +224,7 @@ export class FireUnit {
 
   update(w: World): void {
     for (const l of this.launchers) {
-      if (l.rounds === 0 && l.reloadAt > 0 && w.t >= l.reloadAt && l.site.alive) {
+      if (l.reloadAt > 0 && w.t >= l.reloadAt && l.site.alive) {
         l.rounds = l.max;
         l.reloadAt = 0;
         w.log(`${this.name} launcher reloaded`, 'info');
@@ -214,7 +240,8 @@ export class FireUnit {
       for (const c of ready) if (dist(c.site.pos, tr.pos) < dist(l.site.pos, tr.pos)) l = c;
       const { pip } = this.pip(w, tr, l.site.pos);
       l.rounds--;
-      if (l.rounds === 0) l.reloadAt = w.t + this.reloadS;
+      // The reload crew starts on a launcher as soon as it has fired.
+      if (l.reloadAt === 0) l.reloadAt = w.t + this.reloadS;
       const from = clone(l.site.pos);
       from.z += 4;
       w.missiles.push(new Interceptor(w, this.spec, this.code, from, pip, null, tr.id));

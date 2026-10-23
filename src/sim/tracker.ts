@@ -17,6 +17,10 @@ export class Track {
   confirmed = false;
   /** Rough 1-sigma position error (m). */
   sigma: number;
+  /** Per-axis Kalman covariance [pos var, pos-vel cov, vel var] for x, y, z (constant-velocity model). */
+  readonly cov: [number, number, number][];
+  /** 1-sigma speed uncertainty (m/s): kinematic classification waits until this is small. */
+  velSigma = 1000;
   readonly sources = new Map<string, number>();
   iffM5 = 0;
   iffM3 = 0;
@@ -36,13 +40,20 @@ export class Track {
   kaUntil = 0;
   dropped = false;
 
-  constructor(id: number, pos: V3, t: number, sigma: number) {
+  constructor(id: number, pos: V3, t: number, sigma: number, sigmaH = sigma, sigmaZ = sigma) {
     this.id = id;
     this.label = `T${String(id).padStart(3, '0')}`;
     this.pos = clone(pos);
     this.t = t;
     this.born = t;
     this.sigma = sigma;
+    // Velocity starts unknown: anything up to TBM speeds.
+    const v0 = 1500 * 1500;
+    this.cov = [
+      [sigmaH * sigmaH, 0, v0],
+      [sigmaH * sigmaH, 0, v0],
+      [sigmaZ * sigmaZ, 0, v0],
+    ];
   }
 
   predict(t: number): V3 {
@@ -110,31 +121,38 @@ export class Tracker {
     return best;
   }
 
+  /** Kalman update, decoupled per axis, with white-acceleration process noise. */
   private update(tr: Track, r: Report): void {
-    const dtp = r.t - tr.t;
+    const dtp = Math.max(0, r.t - tr.t);
     const pred = tr.predict(r.t);
-    const sp = tr.sigma + 15 * Math.max(0, dtp);
-    if (dtp < 0.05) {
-      tr.pos = v3(lerp(pred.x, r.pos.x, 0.35), lerp(pred.y, r.pos.y, 0.35), lerp(pred.z, r.pos.z, 0.35));
-    } else if (tr.hits === 1) {
-      tr.vel = sub(r.pos, tr.pos);
-      tr.vel.x /= dtp;
-      tr.vel.y /= dtp;
-      tr.vel.z /= dtp;
-      tr.pos = clone(r.pos);
-      tr.t = r.t;
-    } else {
-      const k = Math.min(tr.hits, 30);
-      const wq = clamp((1.5 * sp * sp) / (sp * sp + r.sigma * r.sigma), 0.15, 1);
-      const a = Math.max(0.3, (2 * (2 * k - 1)) / (k * (k + 1))) * wq;
-      const b = Math.max(0.06, 6 / (k * (k + 1))) * wq;
-      const res = sub(r.pos, pred);
-      const v = tr.velAt(r.t);
-      tr.pos = addScaled(pred, res, a);
-      tr.vel = addScaled(v, res, b / dtp);
-      tr.t = r.t;
+    const vp = tr.velAt(r.t);
+    const q = tr.ballistic ? 20 : 50;
+    const m = [r.pos.x, r.pos.y, r.pos.z];
+    const p = [pred.x, pred.y, pred.z];
+    const v = [vp.x, vp.y, vp.z];
+    for (let i = 0; i < 3; i++) {
+      const c = tr.cov[i];
+      // Predict.
+      const pp = c[0] + 2 * dtp * c[1] + dtp * dtp * c[2] + (q * dtp * dtp * dtp) / 3;
+      const pv = c[1] + dtp * c[2] + (q * dtp * dtp) / 2;
+      const vv = c[2] + q * dtp;
+      // Update.
+      const R = i < 2 ? r.sigmaH * r.sigmaH : r.sigmaZ * r.sigmaZ;
+      const S = pp + R;
+      const kp = pp / S;
+      const kv = pv / S;
+      const res = m[i] - p[i];
+      p[i] += kp * res;
+      v[i] += kv * res;
+      c[0] = (1 - kp) * pp;
+      c[1] = (1 - kp) * pv;
+      c[2] = Math.max(vv - kv * pv, 1);
     }
-    tr.sigma = clamp(1.3 / Math.sqrt(1 / (sp * sp) + 1 / (r.sigma * r.sigma)), 5, 20000);
+    tr.pos = v3(p[0], p[1], p[2]);
+    tr.vel = v3(v[0], v[1], v[2]);
+    tr.t = Math.max(tr.t, r.t);
+    tr.sigma = clamp(Math.sqrt(tr.cov[0][0] + tr.cov[1][0] + tr.cov[2][0]), 5, 20000);
+    tr.velSigma = Math.sqrt(tr.cov[0][2] + tr.cov[1][2] + tr.cov[2][2]);
     tr.hits++;
     tr.sources.set(r.sensor, r.t);
     if (r.iff === 'M5') tr.iffM5++;
@@ -145,7 +163,7 @@ export class Tracker {
   }
 
   private create(r: Report): Track {
-    const tr = new Track(this.nextNum++, r.pos, r.t, r.sigma);
+    const tr = new Track(this.nextNum++, r.pos, r.t, r.sigma, r.sigmaH, r.sigmaZ);
     tr.sources.set(r.sensor, r.t);
     tr.rcsDb = toDb(r.rcs);
     if (r.iff === 'M5') tr.iffM5++;
@@ -195,16 +213,23 @@ export class Tracker {
         }
       }
     }
-    // A skin track that coincides with a triangulated jammer becomes the jammer.
+    // A skin track that coincides with a triangulated jammer becomes the jammer. Friends and civil
+    // traffic are never correlated: a CAP fighter pressing the jammer must not inherit its identity.
     for (const jt of live.filter((t) => t.jam && !t.skin && !t.dropped)) {
+      let best: Track | null = null;
+      let bd = clamp(jt.sigma * 2, 5000, 12000);
       for (const st of live) {
-        if (!st.skin || st.dropped || st.cls === 'CIV') continue;
-        if (hdist(st.predict(w.t), jt.predict(w.t)) < Math.max(8000, jt.sigma * 2)) {
-          st.jam = true;
-          this.mergeInto(w, st, jt);
-          w.log(`${st.label} correlated with jam strobes: jammer skin-tracked`, 'alert');
-          break;
+        if (!st.skin || st.dropped || st.jam || st.cls === 'CIV' || st.ident === 'FRD' || st.ident === 'NEU' || st.iffM5 > 0) continue;
+        const d = hdist(st.predict(w.t), jt.predict(w.t));
+        if (d < bd) {
+          bd = d;
+          best = st;
         }
+      }
+      if (best) {
+        best.jam = true;
+        this.mergeInto(w, best, jt);
+        w.log(`${best.label} correlated with jam strobes: jammer skin-tracked`, 'alert');
       }
     }
     for (const tr of this.tracks) if (tr.dropped) w.onTrackDropped(tr);
@@ -229,17 +254,23 @@ export class Tracker {
 
   private classify(w: World, tr: Track): void {
     const spd = tr.speed;
+    // Speeds the track is confidently above / below (2 sigma).
+    const lo = spd - 2 * tr.velSigma;
+    const hi = spd + 2 * tr.velSigma;
     const alt = tr.pos.z;
     const agl = alt - w.terrain.groundAt(tr.pos.x, tr.pos.y);
     let cls: TrackClass;
     if (tr.jam) cls = 'JAM';
     else if (tr.hits < 4) cls = 'UNK';
-    else if (spd > 1300 || (alt > 22000 && spd > 600)) cls = 'TBM';
-    else if (spd > 520) cls = 'MSL';
-    else if (spd < 85 && alt < 6000) cls = 'UAV';
-    else if (agl < 350 && spd > 150 && tr.rcsDb < -6) cls = 'CM';
-    else if (tr.iffM3 >= 2 && alt > 6000 && spd > 170 && spd < 300) cls = 'CIV';
-    else cls = 'FW';
+    else if (tr.hits >= 6 && w.t - tr.born > 2.5 && (lo > 1300 || (alt > 22000 && lo > 600))) cls = 'TBM';
+    else if (tr.hits >= 6 && w.t - tr.born > 2.5 && lo > 520) cls = 'MSL';
+    else if (hi > 520) cls = tr.cls === 'TBM' || tr.cls === 'MSL' ? tr.cls : 'UNK';
+    // Nothing with wings flies below ~75 m/s: slower than that and low is a drone.
+    else if (spd < 75 && hi < 140 && alt < 6000) cls = 'UAV';
+    else if (agl < 350 && spd > 150 && tr.velSigma < 80 && tr.rcsDb < -6) cls = 'CM';
+    else if (tr.iffM3 >= 2 && alt > 6000 && lo > 150 && hi < 320) cls = 'CIV';
+    else if (lo > 75 && tr.velSigma < 60) cls = 'FW';
+    else cls = tr.cls;
     if (cls !== tr.cls && tr.confirmed && tr.cls !== 'UNK' && (cls === 'TBM' || cls === 'MSL' || cls === 'CM')) {
       w.log(`${tr.label} reclassified ${cls}`, 'alert');
     }
@@ -290,6 +321,8 @@ export class Tracker {
       }
     }
     for (const f of fixes) {
+      // Poor crossing geometry gives fixes that are tens of km out in range: only use good ones.
+      if (f.s > 12000) continue;
       const skinJam = this.tracks.find((t) => t.jam && t.skin && !t.dropped && hdist(t.predict(w.t), f.p) < Math.max(20000, f.s * 3));
       if (skinJam) {
         skinJam.sources.set('ESM', w.t);
@@ -345,6 +378,7 @@ function intersect(a: Strobe, b: Strobe): { p: V3; s: number } | null {
   const tb = (ox * da.y - oy * da.x) / den;
   if (ta < 5000 || tb < 5000 || ta > 320000 || tb > 320000) return null;
   const p = v3(a.origin.x + da.x * ta, a.origin.y + da.y * ta, 9000);
-  const s = (Math.max(ta, tb) * 0.4 * DEG) / sinAng;
+  // Position error of a two-bearing fix: each bearing error displaces the fix along the other line.
+  const s = Math.hypot(ta * a.sigmaDeg * DEG, tb * b.sigmaDeg * DEG) / sinAng;
   return { p, s };
 }

@@ -22,6 +22,9 @@ const PREFERENCE: Record<TrackClass, ('LR' | 'MR' | 'SH')[]> = {
   UNK: ['MR', 'SH'],
 };
 
+/** MR rounds held back from drones. */
+export const MR_RESERVE = 6;
+
 export const salvoFor = (tr: Track): number => (tr.cls === 'TBM' ? 2 : 1);
 
 /** Seconds until the track reaches its nearest defended site, or Infinity if it is not inbound. */
@@ -49,13 +52,19 @@ export function autoEngage(w: World): void {
     .filter((tr) => tr.confirmed && !tr.dropped && w.t - tr.t < 3 && w.t > tr.kaUntil && wcsAllows(w.wcs, tr.ident))
     .map((tr) => ({ tr, tgo: timeToGo(w, tr) * (tr.cls === 'TBM' ? 0.3 : 1) }))
     .sort((a, b) => a.tgo - b.tgo);
+  const friends = w.tracker.tracks.filter((t) => t.ident === 'FRD' && !t.dropped);
   for (const { tr, tgo } of cands) {
     if (missilesOnTrack(w, tr.id) > 0) continue;
+    // Hold fire while a friendly is close enough to the target to be taken by the seeker or the fuze.
+    const p = tr.predict(w.t);
+    if (friends.some((f) => dist(f.predict(w.t), p) < Math.max(6000, 3 * tr.sigma))) continue;
     if (w.fighters.some((f) => f.alive && f.state === 'intercept' && f.targetTrackId === tr.id)) continue;
     const prefs = [...PREFERENCE[tr.cls]];
     if (tr.cls === 'UAV' && tgo < 90) prefs.push('LR');
     for (const code of prefs) {
       const u = w.unit(code);
+      // Magazine discipline: keep the last MR rounds for cruise missiles, ARMs and aircraft.
+      if (code === 'MR' && tr.cls === 'UAV' && u && u.rounds <= MR_RESERVE) continue;
       if (u && u.feasibility(w, tr).ok) {
         u.fire(w, tr, salvoFor(tr));
         break;

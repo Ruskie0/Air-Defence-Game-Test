@@ -24,13 +24,13 @@ system, not copies of any real system.
 | `world.ts` | Owns everything. Fixed 60 Hz step; one seeded RNG stream (`?seed=` in the URL) so a run replays identically for the same inputs. |
 | `terrain.ts` | 160 x 160 km procedural heightmap at 500 m: plains around the airbase, a mountain belt to the north cut by two passes, sea to the south. Line of sight samples the path with a 4/3-earth bulge (`d1*d2 / 2Re`), so low flyers drop below the radar horizon as well as behind hills. |
 | `radar.ts` | Radar range equation in physical units (Pt, G, lambda, B, NF, L, coherent pulses). Swerling-1 detection, `Pd = Pfa^(1/(1+SINR))`, rolled per dwell. Ground clutter when the beam footprint touches the ground (scaled by terrain relief, reduced by the MTI improvement factor), and a zero-Doppler notch for slow radial speeds in clutter. Rotating radars detect as the beam sweeps past; phased arrays sweep a sector and revisit firm tracks at the track rate. Noise jamming through the antenna pattern with sidelobes and sidelobe cancellers; main-lobe jamming above 10 dB J/N produces a jam strobe. Measurement noise follows the SNR. IFF Mode 5 / Mode 3C interrogation. |
-| `tracker.ts` | Central fusion: every report from every sensor is gated and associated to one track picture, filtered with an alpha-beta filter (gravity-aided for ballistic tracks), confirmed M-of-N, coasted and dropped. Duplicate tracks are merged. Strobes from separated sensors are cross-fixed into jammer tracks. Kinematic classification (TBM, fast missile, cruise missile, UAV, fixed wing, civil) plus IFF give the identity: hostile, suspect, pending, neutral, friend. A weapon launch observed from a track marks it hostile. |
+| `tracker.ts` | Central fusion: every report from every sensor is gated and associated to one track picture, filtered with a per-axis constant-velocity Kalman filter (separate horizontal and vertical measurement noise, so a fan-beam radar's poor height barely moves the track; gravity-aided for ballistic tracks), confirmed M-of-N, coasted and dropped. Duplicate tracks are merged. Strobes from separated sensors are cross-fixed into jammer tracks, and only fixes with good crossing geometry are used. Kinematic classification (TBM, fast missile, cruise missile, UAV, fixed wing, civil) waits until the filter's velocity uncertainty is small enough to be sure, so a noisy new track is not called a missile. Classification plus IFF give the identity: hostile, suspect, pending, neutral, friend. A weapon launch observed from a track marks it hostile. |
 | `missile.ts` | Interceptor kinematics (boost, drag with altitude, g limit falling with speed and air density, gravity) and zero-effort-miss proportional navigation with lofting. Guidance modes: track-via-missile (LR), active radar homing with engage-on-remote midcourse (MR, AAM) and command to line of sight (SHORAD). Proximity fuze on the closest approach inside each step, Pk falling with miss distance. |
 | `sites.ts` | Damageable ground sites, the SAM fire units (launchers, channels, reload, feasibility and predicted intercept point), the radar decoy and the GNSS jammer. |
 | `ciws.ts` | Gun system with its own search radar, an alpha-beta fire-control track, a lead solution with drag and gravity drop, and every round flown individually with dispersion and a per-round hit test. |
 | `fighter.ts` | CAP fighters: airborne radar (contributes to the picture and gets jammed), Mode 5, AAMs, fuel, RTB and rearm. |
 | `entities.ts` | Threat behaviour: GNSS-guided drones, terrain-following cruise missiles, ballistic missiles, ARMs with memory and seeker re-acquisition, bombers with stand-off ALCMs, SEAD fighters using ESM, the stand-off jammer, and civil airliners. |
-| `tewa.ts` | Threat evaluation and weapon assignment under the weapons control status (HOLD, TIGHT, FREE): orders threats by time to go, picks the cheapest effective weapon, and commits CAP forward of the SAM belt. |
+| `tewa.ts` | Threat evaluation and weapon assignment under the weapons control status (HOLD, TIGHT, FREE): orders threats by time to go, picks the cheapest effective weapon, holds the last MR rounds back from drones, holds fire while a friendly is near the target, and commits CAP forward of the SAM belt. Fire units solve for the earliest predicted intercept point along the target's path (below the missile ceiling and, for ballistic targets, before impact). |
 | `scenario.ts`, `threats.ts` | The six-raid sandbox scenario, background civil traffic, and spawn helpers used by the spawn panel. |
 
 ### Order of a step
@@ -107,7 +107,18 @@ The prototype is a single sandbox. The next layers, in order:
 
 ## Testing
 
-`scripts/playtest.mjs` builds nothing itself: run `npm run build` first. It serves `dist/` with
-`vite preview`, opens it in headless Chromium, closes the help screen, steps the sim straight through the
-raids, prints the state every simulated minute, saves screenshots to `playtest/` and fails on any page
-error.
+- `npm run sim -- [simSeconds] [seed] [--log]` runs the scenario headless in Node (about 6 s for all six
+  raids) and prints the fate of every threat by raid, damage to sites, missiles fired and rounds left.
+  This is the tool for balancing: the sim is deterministic for a seed, so a change shows up as a diff.
+- `scripts/playtest.mjs` builds nothing itself: run `npm run build` first. It serves `dist/` with
+  `vite preview`, opens it in headless Chromium (`CHROMIUM_PATH` picks the browser), closes the help
+  screen, steps the sim straight through the raids, prints the state every simulated minute, saves
+  screenshots to `playtest/` and fails on any page error.
+
+### Balance baseline (automatic defence only, WCS TIGHT, no player input)
+
+Seeds 20261023, 7, 42 and 99: raids 1 to 5 are almost entirely defeated (an occasional ALCM or ARM gets
+through), with no fratricide and no civil losses. Raid 6 saturates the MR SAM with drones and ARMs, and
+the two sea-skimming cruise missiles from the south, seen late by the SHORAD radar only, destroy the
+power plant. That is the intended gap for the player to close: EMCON or the decoy against the ARMs,
+the GNSS jammer against the drones, and manual engagements.

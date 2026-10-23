@@ -43,7 +43,11 @@ export interface Report {
   sensor: string;
   t: number;
   pos: V3;
+  /** Overall 1-sigma position error (m), used for gating. */
   sigma: number;
+  /** Per-axis 1-sigma errors (m): horizontal (worst of range and cross-range) and vertical. */
+  sigmaH: number;
+  sigmaZ: number;
   sinr: number;
   rcs: number;
   iff: 'M5' | 'M3C' | 'NONE' | null;
@@ -55,6 +59,8 @@ export interface Strobe {
   sensor: string;
   origin: V3;
   az: number;
+  /** 1-sigma bearing error (deg). */
+  sigmaDeg: number;
   jnrDb: number;
   t: number;
 }
@@ -208,6 +214,8 @@ export class Radar implements Emitter {
       t: w.t,
       pos: addScaled(this.pos, dirAzEl(azm, elm), Rm),
       sigma: Math.hypot(sR, R * sA, R * sE * 0.5),
+      sigmaH: Math.max(sR, R * sA),
+      sigmaZ: Math.hypot(R * sE, sR * Math.sin(el * DEG)),
       sinr,
       rcs: e.rcs * w.rng.exp(),
       iff,
@@ -227,10 +235,12 @@ export class Radar implements Emitter {
     const jnr = toDb(J / this.noiseW);
     if (jnr < 10) return;
     this.strobes = this.strobes.filter((s) => Math.abs(wrap180(s.az - az)) > 3 * this.spec.bwAzDeg);
+    const sigmaDeg = this.spec.bwAzDeg * 0.15;
     this.strobes.push({
       sensor: this.code,
       origin: clone(this.pos),
-      az: wrap360(az + w.rng.gauss() * this.spec.bwAzDeg * 0.15),
+      az: wrap360(az + w.rng.gauss() * sigmaDeg),
+      sigmaDeg,
       jnrDb: jnr,
       t: w.t,
     });
@@ -244,7 +254,7 @@ export class Radar implements Emitter {
       const az = this.boresight + w.rng.range(-half, half);
       const p = addScaled(this.pos, dirAzEl(az, 0), R);
       p.z = w.terrain.groundAt(p.x, p.y) + w.rng.range(60, 3000);
-      out.push({ sensor: this.code, t: w.t, pos: p, sigma: 300, sinr: 12, rcs: w.rng.range(0.05, 2), iff: this.spec.iff ? 'NONE' : null, truth: null });
+      out.push({ sensor: this.code, t: w.t, pos: p, sigma: 300, sigmaH: 300, sigmaZ: 300, sinr: 12, rcs: w.rng.range(0.05, 2), iff: this.spec.iff ? 'NONE' : null, truth: null });
     }
   }
 
@@ -328,7 +338,7 @@ export const LR_RADAR: RadarSpec = {
 
 /** MR SAM 3D surveillance radar (X-band), rotating 30 rpm. No sidelobe canceller. */
 export const MR_RADAR: RadarSpec = {
-  freqGHz: 9.5, peakKW: 25, gainDb: 35, bwMHz: 1, nfDb: 4, lossDb: 8, nPulses: 10,
+  freqGHz: 9.5, peakKW: 25, gainDb: 35, bwMHz: 1, nfDb: 4, lossDb: 8, nPulses: 32,
   bwAzDeg: 2, bwElDeg: 2.5, sllDb: -27, slcDb: 0, maxRangeKm: 75, minElDeg: -2, maxElDeg: 60,
   scan: { kind: 'rotating', rpm: 30 },
   mtiDb: 52, notchMps: 12, cnr10Db: 58, rangeAccM: 30, angleAccDeg: 0.1, pfa: 1e-6, iff: true, falseAlarmsPerScan: 0.25,
@@ -336,7 +346,7 @@ export const MR_RADAR: RadarSpec = {
 
 /** SHORAD search-on-the-move radar (S-band), fan beam, rotating 60 rpm. */
 export const SH_RADAR: RadarSpec = {
-  freqGHz: 3.2, peakKW: 12, gainDb: 28, bwMHz: 2, nfDb: 4, lossDb: 7, nPulses: 8,
+  freqGHz: 3.2, peakKW: 12, gainDb: 28, bwMHz: 2, nfDb: 4, lossDb: 7, nPulses: 32,
   bwAzDeg: 3, bwElDeg: 25, sllDb: -25, slcDb: 0, maxRangeKm: 25, minElDeg: -3, maxElDeg: 60,
   scan: { kind: 'rotating', rpm: 60 },
   mtiDb: 50, notchMps: 10, cnr10Db: 55, rangeAccM: 25, angleAccDeg: 0.3, pfa: 1e-6, iff: true, falseAlarmsPerScan: 0.15,
@@ -352,7 +362,7 @@ export const CIWS_RADAR: RadarSpec = {
 
 /** Fighter fire-control radar (X-band), +/-60 deg mechanically scanned. */
 export const AI_RADAR: RadarSpec = {
-  freqGHz: 10, peakKW: 12, gainDb: 34, bwMHz: 1, nfDb: 4, lossDb: 8, nPulses: 10,
+  freqGHz: 10, peakKW: 12, gainDb: 36, bwMHz: 1, nfDb: 4, lossDb: 8, nPulses: 128,
   bwAzDeg: 3.3, bwElDeg: 3.3, sllDb: -28, slcDb: 0, maxRangeKm: 150, minElDeg: -30, maxElDeg: 30,
   scan: { kind: 'sector', halfWidthDeg: 60, frameS: 3, trackHz: 1 },
   mtiDb: 45, notchMps: 25, cnr10Db: 55, rangeAccM: 40, angleAccDeg: 0.2, pfa: 1e-6, iff: true, falseAlarmsPerScan: 0.1,

@@ -34,7 +34,7 @@ export interface MissileSpec {
 export const LR_MSL: MissileSpec = {
   code: 'LR', name: 'LR SAM', maxRangeM: 120000, minRangeM: 3000, tbmRangeM: 40000, maxAltM: 24000,
   boostAcc: 330, boostT: 4.5, dragK: 1.6e-5, maxG: 30, lethalR: 12, pk: 0.85, seeker: 'tvm', seekerRangeM: 0,
-  maxTof: 150, avgSpd: 1000, nav: 4, launchElDeg: 38, costM: 3.5,
+  maxTof: 150, avgSpd: 960, nav: 4, launchElDeg: 38, costM: 3.5,
 };
 
 /** Medium-range SAM: active radar homing, can engage on any fused track (engage on remote). */
@@ -77,6 +77,7 @@ export class Interceptor {
   private nextAcq = 0;
   private nextTrail = 0;
   private missT = 0;
+  private targetGone = false;
 
   constructor(w: World, spec: MissileSpec, unit: string, from: V3, aimAt: V3, launchVel: V3 | null, trackId: number) {
     this.spec = spec;
@@ -165,10 +166,15 @@ export class Interceptor {
     if (!this.home && est) this.tryAcquire(w, est.pos, tr);
     if (this.home) {
       if (!this.home.alive || !this.homeValid(w, this.home)) {
-        if (!this.home.alive) this.home = null;
+        if (!this.home.alive) {
+          // Target destroyed by another round of the salvo: nothing left to guide on.
+          this.home = null;
+          this.targetGone = true;
+        }
       } else {
         const ref = this.spec.seeker === 'cmd' ? (w.radarByCode('SH')?.pos ?? this.pos) : this.pos;
-        const sigma = (this.spec.seeker === 'cmd' ? 0.0004 : this.spec.seeker === 'tvm' ? 0.0008 : 0.001) * dist(ref, this.home.pos) + 0.4;
+        // Angle noise grows with range from the guidance sensor; the floor is glint and fuze timing.
+        const sigma = (this.spec.seeker === 'cmd' ? 0.0004 : this.spec.seeker === 'tvm' ? 0.0008 : 0.001) * dist(ref, this.home.pos) + 1.5;
         this.noise = v3(
           lerp(this.noise.x, w.rng.gauss() * sigma, 0.1),
           lerp(this.noise.y, w.rng.gauss() * sigma, 0.1),
@@ -247,6 +253,7 @@ export class Interceptor {
     else if (age > this.spec.maxTof) this.selfDestruct(w, 'time of flight exceeded');
     else if (age > this.spec.boostT + 2 && spd < 280) this.selfDestruct(w, 'out of energy');
     else if (this.missed && w.t - this.missT > 1.5) this.selfDestruct(w, '');
+    else if (this.targetGone) this.selfDestruct(w, 'target already destroyed');
   }
 
   private detonate(w: World, miss: number): void {

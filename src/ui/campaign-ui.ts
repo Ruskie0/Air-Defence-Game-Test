@@ -302,7 +302,7 @@ export class CampaignUi {
           r.killsBy && Object.keys(r.killsBy).length
             ? `<span class="dim">by unit</span><b class="dim">${Object.entries(r.killsBy)
                 .sort((a, b) => b[1] - a[1])
-                .map(([k, n]) => `${esc(k)} ${n}`)
+                .map(([k, n]) => `${esc(k)}: ${n}`)
                 .join(' · ')}</b>`
             : ''
         }

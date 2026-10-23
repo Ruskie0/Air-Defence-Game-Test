@@ -489,6 +489,158 @@ export class Effects {
     }
   }
 
+  // ---------------------------------------------------------------- wrecks
+
+  /**
+   * Fire and a thick smoke trail behind a falling wreck. `acc` carries the emission clock between frames;
+   * size is about 1 for a cruise missile and 3 for an airliner.
+   */
+  wreckTrail(x: number, y: number, z: number, size: number, dt: number, acc: { t: number }): void {
+    if (dt <= 0) return;
+    acc.t += dt;
+    const step = 0.06 / Math.sqrt(size);
+    for (; acc.t >= step; acc.t -= step) {
+      this.puff({
+        x: x + sym(size),
+        y: y + sym(size),
+        z: z + sym(size),
+        vx: sym(1.5),
+        vy: sym(1.5),
+        vz: sym(1.5),
+        life: 22 + rnd() * 14,
+        size0: 5 * size,
+        size1: (30 + rnd() * 20) * size,
+        alpha: 0.75,
+        minPx: 1.5,
+        c0: [0.05, 0.045, 0.04],
+        c1: [0.28, 0.28, 0.29],
+        drag: 0.6,
+        lift: 0.5,
+      });
+    }
+    const life = Math.max(0.08, dt * 1.6);
+    this.fire.spawn({ x, y, z, life, size0: 7 * size, size1: 5 * size, c0: [9, 4, 1.1], minPx: 3, windK: 0 });
+    this.fire.spawn({ x: x + sym(size), y: y + sym(size), z: z + sym(size), life: life * 2, size0: 12 * size, size1: 4 * size, alpha: 0.6, c0: [3, 1.1, 0.25], windK: 0 });
+  }
+
+  /** A wreck hits the ground (or the sea): fuel fireball, dirt and debris, or a splash. */
+  crash(x: number, g: number, z: number, size: number, water: boolean): void {
+    if (water) {
+      for (let i = 0; i < 30 * size; i++) {
+        const a = rnd() * Math.PI * 2;
+        const sp = (2 + rnd() * 8) * size;
+        this.puff({
+          x,
+          y: g + 1,
+          z,
+          vx: Math.cos(a) * sp,
+          vy: (10 + rnd() * 25) * Math.sqrt(size),
+          vz: Math.sin(a) * sp,
+          life: 3 + rnd() * 3,
+          size0: 3 * size,
+          size1: (12 + rnd() * 10) * size,
+          alpha: 0.85,
+          c0: [0.95, 0.97, 1],
+          c1: [0.85, 0.88, 0.9],
+          drag: 0.8,
+          lift: -9.8,
+        });
+      }
+      return;
+    }
+    const s = 0.7 + size * 0.6;
+    this.flash(x, g + 3, z, 26 * s, 0.2, [18, 10, 4], 6);
+    for (let i = 0; i < 14 + 10 * size; i++) {
+      this.v.set(sym(1), rnd() * 0.9 + 0.1, sym(1)).normalize().multiplyScalar((5 + rnd() * 12) * s);
+      this.fire.spawn({
+        x,
+        y: g + 2,
+        z,
+        vx: this.v.x,
+        vy: this.v.y,
+        vz: this.v.z,
+        life: (0.8 + rnd() * 0.9) * Math.sqrt(s),
+        size0: 10 * s,
+        size1: (24 + rnd() * 16) * s,
+        c0: [8, 3.8, 1.2],
+        c1: [0.45, 0.1, 0.02],
+        drag: 1.6,
+        lift: 5,
+        windK: 0.3,
+      });
+    }
+    for (let i = 0; i < 8 + 6 * size; i++) {
+      this.puff({
+        x: x + sym(4 * s),
+        y: g + 3 + rnd() * 6 * s,
+        z: z + sym(4 * s),
+        vx: sym(3),
+        vy: 4 + rnd() * 8,
+        vz: sym(3),
+        life: 18 + rnd() * 12,
+        size0: 14 * s,
+        size1: (50 + rnd() * 30) * s,
+        alpha: 0.8,
+        c0: [0.05, 0.045, 0.04],
+        c1: [0.3, 0.3, 0.31],
+        drag: 0.8,
+        lift: 1,
+      });
+    }
+    this.dust(x, g, z, Math.min(1.6, 0.35 + size * 0.35), false);
+    if (size >= 1) {
+      for (let i = 0; i < Math.round(size * 2); i++) {
+        this.v.set(sym(1), 0.5 + rnd() * 0.6, sym(1)).normalize().multiplyScalar(20 + rnd() * 35);
+        this.debris.push({ x, y: g + 2, z, vx: this.v.x, vy: this.v.y, vz: this.v.z, age: 0, life: 1.5 + rnd() * 3, nextSmoke: 0, fire: true });
+      }
+    }
+  }
+
+  /** A wreck burning on the ground; k fades from 1 (fully alight) to 0 (cold). */
+  groundFire(x: number, g: number, z: number, size: number, k: number, dt: number, acc: { t: number }): void {
+    if (dt <= 0 || k <= 0) return;
+    acc.t += dt;
+    const step = (0.2 / Math.sqrt(size)) / Math.max(0.15, k);
+    const spread = 1.5 * size;
+    for (; acc.t >= step; acc.t -= step) {
+      this.puff({
+        x: x + sym(spread),
+        y: g + 2,
+        z: z + sym(spread),
+        vx: sym(1.5),
+        vy: 3 + rnd() * 4,
+        vz: sym(1.5),
+        life: 30 + rnd() * 20,
+        size0: 6 * size,
+        size1: (40 + rnd() * 30) * size,
+        alpha: 0.45 + 0.3 * k,
+        c0: k > 0.4 ? [0.05, 0.045, 0.04] : [0.2, 0.2, 0.2],
+        c1: [0.32, 0.32, 0.33],
+        drag: 0.3,
+        lift: 1.2,
+      });
+      if (k > 0.3) {
+        for (let f = 0; f < 2; f++) {
+          this.fire.spawn({
+            x: x + sym(spread * 0.6),
+            y: g + 0.5,
+            z: z + sym(spread * 0.6),
+            vx: sym(1),
+            vy: 2 + rnd() * 4,
+            vz: sym(1),
+            life: 0.5 + rnd() * 0.6,
+            size0: 4 * size * k,
+            size1: 1.5 * size,
+            c0: [6, 2.6, 0.7],
+            c1: [0.6, 0.1, 0.01],
+            minPx: 1.2,
+            windK: 0.4,
+          });
+        }
+      }
+    }
+  }
+
   /** CIWS tracer streaks, muzzle flash and gun smoke. */
   private guns(w: World, dt: number): void {
     let n = 0;

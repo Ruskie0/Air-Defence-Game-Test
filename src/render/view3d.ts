@@ -7,7 +7,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { SoundEngine } from '../audio/sound';
 import { DEG } from '../sim/constants';
-import type { Entity, Kind } from '../sim/entities';
+import type { Entity } from '../sim/entities';
 import { V3, clamp, polar } from '../sim/math';
 import type { Radar } from '../sim/radar';
 import type { Ciws } from '../sim/ciws';
@@ -16,8 +16,10 @@ import { MAP_SEED, type World } from '../sim/world';
 import { IDENT_COLOR } from '../ui/colors';
 import { CameraRig } from './camera';
 import { Effects } from './effects';
-import { WorldEvents } from './events';
+import { type FrameEvents, WorldEvents } from './events';
+import { airModel, groundGeometry, interceptorModel } from './models';
 import { Scenery, buildScenery, buildSky, terrainSeed, updateHaze } from './terrain3d';
+import { Wrecks } from './wrecks';
 
 /** Sim frame (x east, y north, z up) to three.js frame (x east, y up, z south). */
 export const toThree = (p: V3, out = new THREE.Vector3()): THREE.Vector3 => out.set(p.x, p.z, -p.y);
@@ -69,59 +71,6 @@ const MARKERS = {
 
 const mat = (c: number): THREE.MeshLambertMaterial => new THREE.MeshLambertMaterial({ color: c });
 
-/** Build a small procedural model with +Z as the nose direction. */
-function model(kind: Kind | 'interceptor'): THREE.Object3D {
-  const g = new THREE.Group();
-  const add = (geo: THREE.BufferGeometry, m: THREE.Material, x = 0, y = 0, z = 0, rx = 0): void => {
-    const mesh = new THREE.Mesh(geo, m);
-    mesh.position.set(x, y, z);
-    mesh.rotation.x = rx;
-    g.add(mesh);
-  };
-  switch (kind) {
-    case 'fighter':
-    case 'sead':
-    case 'bomber':
-    case 'soj':
-    case 'airliner': {
-      const L = kind === 'airliner' ? 40 : kind === 'bomber' ? 45 : kind === 'soj' ? 35 : 15;
-      const color = kind === 'fighter' ? 0x8899aa : kind === 'airliner' ? 0xeeeeee : 0x6b5a50;
-      const m = mat(color);
-      add(new THREE.CylinderGeometry(L * 0.05, L * 0.07, L, 8), m, 0, 0, 0, Math.PI / 2);
-      add(new THREE.BoxGeometry(L * (kind === 'fighter' || kind === 'sead' ? 0.7 : 1.0), L * 0.02, L * 0.18), m, 0, 0, -L * 0.05);
-      add(new THREE.BoxGeometry(L * 0.3, L * 0.02, L * 0.08), m, 0, 0, -L * 0.45);
-      add(new THREE.BoxGeometry(L * 0.02, L * 0.15, L * 0.1), m, 0, L * 0.08, -L * 0.45);
-      if (kind === 'soj') add(new THREE.CylinderGeometry(L * 0.25, L * 0.25, L * 0.04, 16), mat(0x332222), 0, L * 0.1, -L * 0.1);
-      break;
-    }
-    case 'drone': {
-      const shape = new THREE.Shape();
-      shape.moveTo(0, 1.8);
-      shape.lineTo(1.8, -1.2);
-      shape.lineTo(-1.8, -1.2);
-      shape.closePath();
-      const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.25, bevelEnabled: false });
-      geo.rotateX(Math.PI / 2);
-      add(geo, mat(0x4a4a3a));
-      break;
-    }
-    case 'cruise':
-      add(new THREE.CylinderGeometry(0.3, 0.3, 6, 8), mat(0x777777), 0, 0, 0, Math.PI / 2);
-      add(new THREE.BoxGeometry(2.6, 0.05, 0.5), mat(0x777777));
-      break;
-    case 'tbm':
-      add(new THREE.ConeGeometry(0.5, 4, 10), mat(0x553333), 0, 0, 0, Math.PI / 2);
-      break;
-    case 'arm':
-      add(new THREE.CylinderGeometry(0.15, 0.15, 4.2, 8), mat(0xaa6633), 0, 0, 0, Math.PI / 2);
-      break;
-    case 'interceptor':
-      add(new THREE.CylinderGeometry(0.2, 0.2, 5, 8), mat(0xffffff), 0, 0, 0, Math.PI / 2);
-      break;
-  }
-  return g;
-}
-
 interface TrailObj {
   line: THREE.Line;
   pos: Float32Array;
@@ -161,12 +110,23 @@ function setTrail(t: TrailObj, pts: V3[], head?: V3): void {
 }
 
 interface EntityObj {
+  e: Entity;
   root: THREE.Group;
   body: THREE.Object3D;
   marker: THREE.Sprite;
   trail: TrailObj | null;
   hist: V3[];
   nextHist: number;
+}
+
+/** Reads the sim's death record (Entity.fate): `air` is true for kills in the air, which leave a falling wreck. */
+function isKill(fate: unknown): boolean {
+  if (!fate) return false;
+  if (typeof fate === 'string') return fate === 'killed';
+  const f = fate as Record<string, unknown>;
+  if (typeof f.air === 'boolean') return f.air;
+  const how = String(f.how ?? f.cause ?? f.kind ?? f.type ?? 'killed');
+  return !/detonat|impact|exit|left|leak/i.test(how);
 }
 
 export class View3D {
@@ -194,6 +154,7 @@ export class View3D {
   private terrainMesh: THREE.Mesh | null = null;
   private scenery!: Scenery;
   private readonly fx: Effects;
+  private readonly wrecks: Wrecks;
   private readonly events = new WorldEvents();
   private readonly composer: EffectComposer;
   private readonly bloom: UnrealBloomPass;
@@ -211,7 +172,7 @@ export class View3D {
   private readonly entityObjs = new Map<number, EntityObj>();
   private readonly missileObjs = new Map<number, { body: THREE.Object3D; trail: TrailObj }>();
   private readonly trackLabels = new Map<number, { obj: CSS2DObject; el: HTMLDivElement; last: string }>();
-  private readonly siteObjs: { site: Site; root: THREE.Group; mats: THREE.MeshLambertMaterial[]; label: CSS2DObject; dead: boolean }[] = [];
+  private readonly siteObjs: { site: Site; root: THREE.Group; mats: { color: THREE.Color }[]; label: CSS2DObject; dead: boolean }[] = [];
   private readonly antennas: { radar: Radar; obj: THREE.Object3D }[] = [];
   private readonly turrets: { ciws: Ciws; yaw: THREE.Object3D; pitch: THREE.Object3D }[] = [];
   private readonly coverage = new THREE.Group();
@@ -250,6 +211,7 @@ export class View3D {
     this.buildSites();
     this.buildCoverage();
     this.fx = new Effects(this.scene);
+    this.wrecks = new Wrecks(this.scene, this.fx);
 
     // The composer renders off-screen, so the canvas's own antialiasing does not apply: multisample the target.
     this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
@@ -360,6 +322,7 @@ export class View3D {
     this.missileObjs.clear();
     // Sound state resets on its own when it sees a different world.
     this.fx.reset();
+    this.wrecks.reset();
     for (const l of this.trackLabels.values()) {
       this.scene.remove(l.obj);
       l.el.remove();
@@ -429,7 +392,7 @@ export class View3D {
       const root = new THREE.Group();
       const ground = w.terrain.groundAt(s.pos.x, s.pos.y);
       root.position.set(s.pos.x, ground, -s.pos.y);
-      const mats: THREE.MeshLambertMaterial[] = [];
+      const mats: { color: THREE.Color }[] = [];
       const m = (c: number): THREE.MeshLambertMaterial => {
         const x = mat(c);
         mats.push(x);
@@ -440,6 +403,18 @@ export class View3D {
         b.position.set(x, y + sy / 2, z);
         root.add(b);
         return b;
+      };
+      // Vertex-coloured unit models get a material of their own per site, so a destroyed one can be darkened.
+      let unitMat: THREE.MeshStandardMaterial | null = null;
+      const part = (name: string, parent: THREE.Object3D = root, y = 0): THREE.Mesh => {
+        if (!unitMat) {
+          unitMat = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.15, roughness: 0.8 });
+          mats.push(unitMat);
+        }
+        const mesh = new THREE.Mesh(groundGeometry(name), unitMat);
+        mesh.position.y = y;
+        parent.add(mesh);
+        return mesh;
       };
       const olive = 0x5b6236;
       switch (s.kind) {
@@ -463,44 +438,36 @@ export class View3D {
           }
           break;
         case 'radar': {
-          box(8, 3, 6, olive);
           const radar = w.radars.find((r) => r.pos === s.pos || (r.pos.x === s.pos.x && r.pos.y === s.pos.y));
+          const sig = radar?.signature ?? 'MR';
+          const hm = s.pos.z - ground;
+          const base = part(sig === 'SH' ? 'shorad-hull' : sig === 'LR' ? 'radar-base-LR' : 'radar-base');
+          base.rotation.y = -(radar?.boresight ?? 0) * DEG;
+          const deck = sig === 'SH' ? 3.0 : 3.4;
+          if (hm - deck > 1) part(`mast-${Math.round(hm - deck)}`, root, deck);
           const ant = new THREE.Group();
-          ant.position.y = s.pos.z - ground;
-          const kind = radar?.signature;
-          const [pw, ph] = kind === 'LR' ? [6, 6] : kind === 'EW' ? [14, 5] : [7, 3];
-          const plate = new THREE.Mesh(new THREE.BoxGeometry(pw, ph, 0.5), m(0x4b5230));
-          plate.rotation.x = kind === 'LR' ? -0.4 : -0.2;
-          ant.add(plate);
-          const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, s.pos.z - ground, 6), m(0x555555));
-          mast.position.y = (s.pos.z - ground) / 2;
-          root.add(mast);
+          ant.position.y = Math.max(hm, deck + 1);
+          const face = part(`antenna-${sig}`, ant);
+          face.rotation.x = sig === 'LR' ? -0.35 : sig === 'EW' ? -0.12 : -0.2;
           root.add(ant);
           if (radar) this.antennas.push({ radar, obj: ant });
           break;
         }
         case 'launcher': {
-          box(7, 2.5, 3, olive);
-          const can = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2, 7), m(0x50572f));
-          can.position.set(0, 3.6, 0);
-          can.rotation.x = -0.6;
-          root.add(can);
+          const fu = w.units.find((u) => u.launchers.some((l) => l.site === s));
+          const l = part(fu?.type === 'LR' ? 'launcher-LR' : 'launcher-MR');
+          l.rotation.y = -(fu?.radar?.boresight ?? 0) * DEG;
           break;
         }
         case 'ciws': {
           const c = w.ciws.find((x) => x.site === s);
-          box(4, 2, 4, olive);
+          part('ciws-base');
           const yaw = new THREE.Group();
-          yaw.position.y = 2;
-          const dome = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.1, 2.6, 12), m(0xdddddd));
-          dome.position.y = 1.6;
-          yaw.add(dome);
+          yaw.position.set(0, 2.3, 1.2);
+          part('ciws-yaw', yaw);
           const pitch = new THREE.Group();
-          pitch.position.y = 1.2;
-          const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 3.5, 6), m(0x333333));
-          barrel.rotation.x = Math.PI / 2;
-          barrel.position.z = 1.8;
-          pitch.add(barrel);
+          pitch.position.y = 1.4;
+          part('ciws-gun', pitch);
           yaw.add(pitch);
           root.add(yaw);
           if (c) this.turrets.push({ ciws: c, yaw, pitch });
@@ -574,7 +541,7 @@ export class View3D {
     let o = this.entityObjs.get(e.id);
     if (o) return o;
     const root = new THREE.Group();
-    const body = model(e.kind);
+    const body = airModel(e.kind, e.munition);
     root.add(body);
     const tex = e.side === 'red' ? MARKERS.red : e.side === 'blue' ? MARKERS.blue : MARKERS.neutral;
     const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, sizeAttenuation: false }));
@@ -584,12 +551,12 @@ export class View3D {
     const trail = e.kind === 'tbm' || e.kind === 'arm' ? makeTrail(e.kind === 'tbm' ? 0xffa060 : 0xff7040, 240, 0.8) : null;
     if (trail) this.scene.add(trail.line);
     this.scene.add(root);
-    o = { root, body, marker, trail, hist: [], nextHist: 0 };
+    o = { e, root, body, marker, trail, hist: [], nextHist: 0 };
     this.entityObjs.set(e.id, o);
     return o;
   }
 
-  private syncEntities(): void {
+  private syncEntities(ev: FrameEvents): void {
     const w = this.world;
     const seen = new Set<number>();
     const camPos = this.camera.position;
@@ -618,6 +585,10 @@ export class View3D {
     }
     for (const [id, o] of this.entityObjs) {
       if (seen.has(id)) continue;
+      if (o.root.visible && this.shotDown(o.e, ev)) {
+        o.root.remove(o.body);
+        this.wrecks.add(o.e, o.body, o.root.position);
+      }
       this.scene.remove(o.root);
       if (o.trail) this.scene.remove(o.trail.line);
       this.entityObjs.delete(id);
@@ -632,7 +603,7 @@ export class View3D {
       seen.add(m.id);
       let o = this.missileObjs.get(m.id);
       if (!o) {
-        const body = model('interceptor');
+        const body = interceptorModel(m.spec.code);
         // Thin guide line over the whole flight; the motor smoke and flame come from Effects.
         const trail = makeTrail(m.spec.code === 'AAM' ? 0xcfe8ff : 0xf0f0f0, 170, 0.28);
         this.scene.add(body, trail.line);
@@ -728,6 +699,18 @@ export class View3D {
     this.coverage.visible = this.showCoverage;
   }
 
+  /**
+   * Whether an entity that just disappeared was shot down (and should fall as a wreck) rather than having
+   * reached its target or left the map. Uses the sim's record of how it died when there is one, otherwise
+   * an air burst at its last position this frame (detonations on target are 'ground' or 'big' effects).
+   */
+  private shotDown(e: Entity, ev: FrameEvents): boolean {
+    if (e.alive) return false;
+    const fate = (e as { fate?: unknown }).fate;
+    if (fate !== undefined) return isKill(fate);
+    return ev.blasts.some((f) => f.kind === 'blast' && Math.hypot(f.pos.x - e.pos.x, f.pos.y - e.pos.y, f.pos.z - e.pos.z) < 300);
+  }
+
   /** What the player can see of an entity: own side, recent detections, or everything with "show undetected". */
   isVisible(e: Entity): boolean {
     return e.airborne && (this.showTruth || e.side === 'blue' || this.world.t - e.lastDetected < 12);
@@ -749,7 +732,8 @@ export class View3D {
     const visible = (e: Entity): boolean => this.isVisible(e);
     this.syncClearings();
     this.syncStatic();
-    this.syncEntities();
+    if (ev.reset) this.wrecks.reset();
+    this.syncEntities(ev);
     this.syncMissiles();
     this.syncTrackLabels();
     this.rig.following = this.follow && this.selected !== null;
@@ -757,6 +741,7 @@ export class View3D {
     this.controls.update();
     this.rig.clampAboveGround();
     this.fx.update(this.world, ev, visible);
+    this.wrecks.update(ev.simDt, this.world.terrain, this.camera.position);
     this.scenery.update(realDt);
     updateHaze(this.scene, this.camera.position.y);
     this.camera.updateMatrixWorld();

@@ -1,0 +1,596 @@
+import * as THREE from 'three';
+import { Sky } from 'three/addons/objects/Sky.js';
+import { clamp, smoothstep } from '../sim/math';
+import { Terrain, valleyX } from '../sim/terrain';
+import { fbm, hash2, prng, tileNoise, vnoise } from './noise';
+
+/**
+ * Presentation-only scenery: sky, lighting, land cover, water, trees and towns.
+ * The terrain mesh uses the simulation heightmap unchanged, so line of sight on screen matches the sim;
+ * everything else here is decoration.
+ */
+
+/** Afternoon sun from the south-west, as a three.js direction (x east, y up, z south). */
+export const SUN_DIR = (() => {
+  const az = 215 * (Math.PI / 180);
+  const el = 36 * (Math.PI / 180);
+  return new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el)).normalize();
+})();
+
+/** Haze colour at the horizon, shared by fog and the far edge of the world. */
+export const HAZE = new THREE.Color('#b4c3cf');
+
+export function buildSky(renderer: THREE.WebGLRenderer, scene: THREE.Scene): void {
+  const sky = new Sky();
+  sky.scale.setScalar(1000);
+  const u = sky.material.uniforms;
+  u.turbidity.value = 4.5;
+  u.rayleigh.value = 1.4;
+  u.mieCoefficient.value = 0.004;
+  u.mieDirectionalG.value = 0.8;
+  u.sunPosition.value.copy(SUN_DIR);
+  const skyScene = new THREE.Scene();
+  skyScene.add(sky);
+
+  const cube = new THREE.WebGLCubeRenderTarget(512, { type: THREE.HalfFloatType });
+  const cubeCam = new THREE.CubeCamera(1, 5000, cube);
+  cubeCam.update(renderer, skyScene);
+  scene.background = cube.texture;
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(skyScene, 0, 1, 5000).texture;
+  scene.environmentIntensity = 0.55;
+  pmrem.dispose();
+
+  scene.fog = new THREE.FogExp2(HAZE.getHex(), 1e-5);
+  scene.add(new THREE.HemisphereLight(0xc6d8ea, 0x5d5443, 0.9));
+  const sun = new THREE.DirectionalLight(0xfff0d8, 3.2);
+  sun.position.copy(SUN_DIR).multiplyScalar(100000);
+  scene.add(sun);
+}
+
+/** Aerial perspective is a low-level effect: thin the haze as the camera climbs so the overview stays clear. */
+export function updateHaze(scene: THREE.Scene, cameraY: number): void {
+  const f = scene.fog as THREE.FogExp2 | null;
+  if (f) f.density = 1.15e-5 / (1 + Math.max(0, cameraY) / 22000);
+}
+
+// ---------------------------------------------------------------- land cover
+
+const TEX = 2048;
+
+type RGB = [number, number, number];
+const hex = (h: string): RGB => {
+  const n = parseInt(h.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+};
+const C = {
+  deep: hex('#183745'),
+  shallow: hex('#3d6d70'),
+  sand: hex('#c4b58a'),
+  grass: hex('#6a7a3c'),
+  grass2: hex('#83894b'),
+  scrub: hex('#7a7350'),
+  forest: hex('#2b3f22'),
+  forest2: hex('#3a4c27'),
+  rock: hex('#776f63'),
+  rock2: hex('#8f897f'),
+  alpine: hex('#7a8256'),
+  snow: hex('#eef1f4'),
+  town: hex('#8d8981'),
+  town2: hex('#a69d8e'),
+};
+const CROPS: RGB[] = ['#b9a35a', '#6d8c39', '#86a04f', '#7d674c', '#a3a168', '#c6bb4f', '#5e7f34', '#9b8558', '#8f9a55'].map(hex);
+
+export interface Town {
+  x: number;
+  y: number;
+  r: number;
+}
+
+const GRID = 513;
+
+/** Shared land-cover rules, so the texture and the 3D trees and buildings agree. */
+class LandCover {
+  readonly towns: Town[] = [];
+  /** Low-frequency noise fields cached on a coarse grid (they vary over kilometres, the texture over 80 m). */
+  private readonly forestN = new Float32Array(GRID * GRID);
+  private readonly farmN = new Float32Array(GRID * GRID);
+  private readonly scrubN = new Float32Array(GRID * GRID);
+
+  constructor(
+    readonly t: Terrain,
+    readonly seed: number,
+  ) {
+    const step = (2 * t.half) / (GRID - 1);
+    for (let j = 0; j < GRID; j++) {
+      for (let i = 0; i < GRID; i++) {
+        const x = -t.half + i * step;
+        const y = -t.half + j * step;
+        const k = j * GRID + i;
+        this.forestN[k] = fbm(x / 4300, y / 4300, 4, seed + 101);
+        this.farmN[k] = fbm(x / 11000, y / 11000, 3, seed + 55);
+        this.scrubN[k] = fbm(x / 7000, y / 7000, 2, seed + 13);
+      }
+    }
+    this.placeTowns();
+  }
+
+  private sample(f: Float32Array, x: number, y: number): number {
+    const step = (2 * this.t.half) / (GRID - 1);
+    const gx = clamp((x + this.t.half) / step, 0, GRID - 1.0001);
+    const gy = clamp((y + this.t.half) / step, 0, GRID - 1.0001);
+    const i = Math.floor(gx);
+    const j = Math.floor(gy);
+    const fx = gx - i;
+    const fy = gy - j;
+    const k = j * GRID + i;
+    const a = f[k] + (f[k + 1] - f[k]) * fx;
+    const b = f[k + GRID] + (f[k + GRID + 1] - f[k + GRID]) * fx;
+    return a + (b - a) * fy;
+  }
+
+  scrub(x: number, y: number): number {
+    return this.sample(this.scrubN, x, y);
+  }
+
+  slopeAt(x: number, y: number): number {
+    const d = 120;
+    const t = this.t;
+    return Math.hypot(t.heightAt(x + d, y) - t.heightAt(x - d, y), t.heightAt(x, y + d) - t.heightAt(x, y - d)) / (2 * d);
+  }
+
+  /** > 0 inside forest. */
+  forest(x: number, y: number, h: number, slope: number): number {
+    if (h < 12 || h > 1950) return -1;
+    const n = this.sample(this.forestN, x, y);
+    const elev = smoothstep(60, 500, h) * 0.16 - smoothstep(1500, 1950, h) * 0.5;
+    return n + elev + Math.min(slope, 0.5) * 0.45 - 0.6 - this.townness(x, y) * 0.6;
+  }
+
+  /** True where the plains are farmed. */
+  farm(x: number, y: number, h: number, slope: number): boolean {
+    return h > 8 && h < 650 && slope < 0.11 && this.sample(this.farmN, x, y) > 0.33;
+  }
+
+  townness(x: number, y: number): number {
+    let best = 0;
+    for (const tw of this.towns) {
+      const d = Math.hypot(x - tw.x, y - tw.y) / tw.r;
+      if (d < 1.6) best = Math.max(best, 1 - smoothstep(0.55, 1.4, d + (vnoise(x / 500, y / 500, this.seed + 3) - 0.5) * 0.5));
+    }
+    return best;
+  }
+
+  private placeTowns(): void {
+    const rnd = prng(this.seed ^ 0x51ed);
+    for (let i = 0; i < 5000 && this.towns.length < 13; i++) {
+      const x = (rnd() * 2 - 1) * 72000;
+      const y = (rnd() * 2 - 1) * 72000;
+      const h = this.t.heightAt(x, y);
+      if (h < 12 || h > 420 || this.slopeAt(x, y) > 0.04) continue;
+      if (Math.hypot(x, y) < 6500) continue;
+      if (this.towns.some((tw) => Math.hypot(tw.x - x, tw.y - y) < 10000)) continue;
+      const big = this.towns.length < 2;
+      this.towns.push({ x, y, r: big ? 2200 + rnd() * 600 : 800 + rnd() * 900 });
+    }
+  }
+}
+
+function paintLandCover(lc: LandCover): HTMLCanvasElement {
+  const t = lc.t;
+  const N = TEX;
+  const half = t.half;
+  const px = (2 * half) / N;
+  const H = new Float32Array(N * N);
+  for (let j = 0; j < N; j++) {
+    const y = half - (j + 0.5) * px;
+    for (let i = 0; i < N; i++) H[j * N + i] = t.heightAt(-half + (i + 0.5) * px, y);
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = N;
+  const g = canvas.getContext('2d')!;
+  const img = g.createImageData(N, N);
+  const d = img.data;
+  const at = (i: number, j: number): number => H[clamp(j, 0, N - 1) * N + clamp(i, 0, N - 1)];
+  const s = lc.seed;
+  const c: RGB = [0, 0, 0];
+  const mix = (a: RGB, b: RGB, k: number): void => {
+    c[0] = a[0] + (b[0] - a[0]) * k;
+    c[1] = a[1] + (b[1] - a[1]) * k;
+    c[2] = a[2] + (b[2] - a[2]) * k;
+  };
+  const toward = (b: RGB, k: number): void => {
+    c[0] += (b[0] - c[0]) * k;
+    c[1] += (b[1] - c[1]) * k;
+    c[2] += (b[2] - c[2]) * k;
+  };
+  for (let j = 0; j < N; j++) {
+    const y = half - (j + 0.5) * px;
+    for (let i = 0; i < N; i++) {
+      const x = -half + (i + 0.5) * px;
+      const h = H[j * N + i];
+      const slope = Math.hypot(at(i + 1, j) - at(i - 1, j), at(i, j + 1) - at(i, j - 1)) / (2 * px);
+      const n1 = vnoise(x / 900, y / 900, s + 11);
+      const n2 = vnoise(x / 170, y / 170, s + 12);
+      if (h < -1) {
+        mix(C.shallow, C.deep, clamp(-h / 70, 0, 1));
+      } else if (h < 7 + n1 * 7) {
+        mix(C.sand, C.grass2, clamp((h - 4) / 10, 0, 0.4));
+      } else {
+        // Base: lowland grass and scrub.
+        mix(C.grass, C.grass2, n1 * 0.8);
+        toward(C.scrub, clamp(lc.scrub(x, y) - 0.45, 0, 0.5));
+        const forest = lc.forest(x, y, h, slope);
+        const town = lc.townness(x, y);
+        if (lc.farm(x, y, h, slope) && forest < 0.02) {
+          const a = (vnoise(x / 30000, y / 30000, s + 5) - 0.5) * 1.4;
+          const ca = Math.cos(a);
+          const sa = Math.sin(a);
+          const fu = (x * ca + y * sa) / 640;
+          const cu = Math.floor(fu);
+          const fv = (-x * sa + y * ca) / 430 + hash2(cu, 0, s + 6) * 3;
+          const cv = Math.floor(fv);
+          const crop = CROPS[Math.floor(hash2(cu, cv, s + 9) * CROPS.length)];
+          // Field edges read as hedgerows and tracks.
+          const edge = Math.min(fu - cu, 1 - (fu - cu)) < 0.05 || Math.min(fv - cv, 1 - (fv - cv)) < 0.07;
+          mix(crop, edge ? C.forest2 : crop, edge ? 0.45 : 0);
+          toward(C.grass2, (n2 - 0.5) * 0.25 + 0.08);
+        }
+        if (forest > 0) mix(C.forest, C.forest2, n2 * 0.6 + clamp(1 - forest * 8, 0, 0.4));
+        else if (forest > -0.05) toward(C.forest2, 0.35);
+        if (h > 1250) toward(C.alpine, smoothstep(1250, 1600, h) * (forest > 0 ? 0.3 : 1));
+        const rocky = smoothstep(0.28, 0.6, slope) + smoothstep(1700, 2300, h) * 0.8;
+        if (rocky > 0) {
+          const rk: RGB = n2 > 0.5 ? C.rock2 : C.rock;
+          toward(rk, clamp(rocky, 0, 1));
+        }
+        const snowLine = 2200 + (n1 - 0.5) * 500;
+        if (h > snowLine && slope < 1.1) toward(C.snow, clamp((h - snowLine) / 220, 0, 1) * (1 - smoothstep(0.7, 1.1, slope)));
+        if (town > 0) mix(n2 > 0.55 ? C.town2 : C.town, c, 1 - clamp(town * 1.3, 0, 1));
+      }
+      // Cheap ambient occlusion: valleys darker, ridges brighter.
+      const avg = (at(i - 3, j) + at(i + 3, j) + at(i, j - 3) + at(i, j + 3)) * 0.25;
+      const ao = h > 0 ? 1 + clamp((h - avg) / 90, -0.16, 0.1) : 1;
+      const grain = 0.94 + n2 * 0.12;
+      const o = (j * N + i) * 4;
+      d[o] = clamp(c[0] * ao * grain, 0, 255);
+      d[o + 1] = clamp(c[1] * ao * grain, 0, 255);
+      d[o + 2] = clamp(c[2] * ao * grain, 0, 255);
+      d[o + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+
+  // Vector features: rivers and roads.
+  const P = (x: number, y: number): [number, number] => [(x + half) / px, (half - y) / px];
+  const stroke = (pts: [number, number][], color: string, width: number): void => {
+    g.beginPath();
+    pts.forEach(([x, y], k) => {
+      const [u, v] = P(x, y);
+      if (k === 0) g.moveTo(u, v);
+      else g.lineTo(u, v);
+    });
+    g.strokeStyle = color;
+    g.lineWidth = width;
+    g.lineJoin = 'round';
+    g.lineCap = 'round';
+    g.stroke();
+  };
+  for (const which of [0, 1] as const) {
+    const pts: [number, number][] = [];
+    for (let y = 78000; y > 14000; y -= 500) pts.push([valleyX(which, y) + 250 * Math.sin(y / 1300), y]);
+    const x0 = pts[pts.length - 1][0];
+    for (let y = 14000; y > -72000; y -= 500) {
+      const k = (14000 - y) / 86000;
+      const drift = which === 0 ? -6000 * k : 5000 * k;
+      pts.push([x0 + drift + 2600 * Math.sin((14000 - y) / 7000 + which) * Math.min(1, k * 4) + 300 * Math.sin(y / 1100), y]);
+    }
+    stroke(pts, '#3c6879', 1.6);
+  }
+  // Roads: each town to its two nearest neighbours (the airbase counts as one), plus a road up each pass.
+  const nodes = [{ x: 0, y: -1500 }, ...lc.towns];
+  const roads = new Set<string>();
+  const road = (a: { x: number; y: number }, b: { x: number; y: number }, k: number): void => {
+    const pts: [number, number][] = [];
+    const nx = -(b.y - a.y);
+    const ny = b.x - a.x;
+    const bend = (hash2(k, 1, s) - 0.5) * 0.25;
+    for (let q = 0; q <= 24; q++) {
+      const f = q / 24;
+      const w = Math.sin(f * Math.PI) * bend + Math.sin(f * Math.PI * 3) * 0.02;
+      pts.push([a.x + (b.x - a.x) * f + nx * w, a.y + (b.y - a.y) * f + ny * w]);
+    }
+    stroke(pts, 'rgba(92,88,80,0.9)', 1.1);
+  };
+  nodes.forEach((a, ia) => {
+    const near = nodes
+      .map((b, ib) => ({ ib, dd: Math.hypot(a.x - b.x, a.y - b.y) }))
+      .filter((o) => o.ib !== ia)
+      .sort((p, q) => p.dd - q.dd)
+      .slice(0, 2);
+    for (const { ib, dd } of near) {
+      const key = ia < ib ? `${ia}-${ib}` : `${ib}-${ia}`;
+      if (roads.has(key) || dd > 45000) continue;
+      roads.add(key);
+      road(a, nodes[ib], ia * 31 + ib);
+    }
+  });
+  for (const which of [0, 1] as const) {
+    const pts: [number, number][] = [];
+    for (let y = 9000; y < 80000; y += 600) pts.push([valleyX(which, y) + 420, y]);
+    stroke(pts, 'rgba(92,88,80,0.9)', 1.0);
+  }
+  return canvas;
+}
+
+function detailTexture(): THREE.DataTexture {
+  const n = 256;
+  const data = new Uint8Array(n * n * 4);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const v =
+        tileNoise(i / 16, j / 16, 16, 71) * 0.5 + tileNoise(i / 8, j / 8, 32, 72) * 0.3 + tileNoise(i / 3, j / 3, 86, 73) * 0.2;
+      const o = (j * n + i) * 4;
+      data[o] = data[o + 1] = data[o + 2] = v * 255;
+      data[o + 3] = 255;
+    }
+  }
+  const t = new THREE.DataTexture(data, n, n);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.magFilter = THREE.LinearFilter;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.generateMipmaps = true;
+  t.needsUpdate = true;
+  return t;
+}
+
+function waterNormals(): THREE.DataTexture {
+  const n = 256;
+  const hgt = new Float32Array(n * n);
+  for (let j = 0; j < n; j++)
+    for (let i = 0; i < n; i++) hgt[j * n + i] = tileNoise(i / 16, j / 16, 16, 91) + 0.5 * tileNoise(i / 6, j / 6, 43, 92) + 0.25 * tileNoise(i / 2.5, j / 2.5, 103, 93);
+  const data = new Uint8Array(n * n * 4);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const dx = hgt[j * n + ((i + 1) % n)] - hgt[j * n + ((i + n - 1) % n)];
+      const dy = hgt[((j + 1) % n) * n + i] - hgt[((j + n - 1) % n) * n + i];
+      const v = new THREE.Vector3(-dx * 3, -dy * 3, 1).normalize();
+      const o = (j * n + i) * 4;
+      data[o] = (v.x * 0.5 + 0.5) * 255;
+      data[o + 1] = (v.y * 0.5 + 0.5) * 255;
+      data[o + 2] = (v.z * 0.5 + 0.5) * 255;
+      data[o + 3] = 255;
+    }
+  }
+  const t = new THREE.DataTexture(data, n, n);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.generateMipmaps = true;
+  t.needsUpdate = true;
+  return t;
+}
+
+/** Adds world-space detail noise to a terrain material, faded out with distance. */
+function addDetail(m: THREE.MeshStandardMaterial, detail: THREE.Texture): void {
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.detailMap = { value: detail };
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nuniform sampler2D detailMap;')
+      .replace(
+        '#include <map_fragment>',
+        `#include <map_fragment>
+        float camD = distance(vWPos, cameraPosition);
+        float dn = texture2D(detailMap, vWPos.xz / 260.0).r * 0.55 + texture2D(detailMap, vWPos.xz / 41.0).r * 0.45;
+        diffuseColor.rgb *= mix(1.0, 0.72 + 0.56 * dn, 1.0 - smoothstep(3000.0, 26000.0, camD));`,
+      );
+  };
+}
+
+export interface Scenery {
+  terrainMesh: THREE.Mesh;
+  /** Hide trees and buildings within r metres of a sim position, so units placed there stay visible. */
+  clearAround(x: number, y: number, r: number): void;
+  update(dt: number): void;
+}
+
+export function buildScenery(scene: THREE.Scene, t: Terrain, seed: number): Scenery {
+  const lc = new LandCover(t, seed);
+  const canvas = paintLandCover(lc);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  const detail = detailTexture();
+
+  const size = t.half * 2;
+  const seg = t.n - 1;
+  const geo = new THREE.PlaneGeometry(size, size, seg, seg);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  for (let i = 0; i < pos.count; i++) pos.setY(i, t.heightAt(pos.getX(i), -pos.getZ(i)));
+  geo.computeVertexNormals();
+  const terrainMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, metalness: 0 });
+  addDetail(terrainMat, detail);
+  const terrainMesh = new THREE.Mesh(geo, terrainMat);
+  scene.add(terrainMesh);
+
+  // Low-resolution skirt so the world does not end at the map edge; coloured from the edge of the land cover.
+  const g2 = canvas.getContext('2d')!;
+  const edge = g2.getImageData(0, 0, TEX, TEX).data;
+  const sk = new THREE.PlaneGeometry(size * 4, size * 4, 120, 120);
+  sk.rotateX(-Math.PI / 2);
+  const sp = sk.getAttribute('position') as THREE.BufferAttribute;
+  const skc = new Float32Array(sp.count * 3);
+  const tmp = new THREE.Color();
+  const far = new THREE.Color('#6d7445');
+  for (let i = 0; i < sp.count; i++) {
+    const x = sp.getX(i);
+    const y = -sp.getZ(i);
+    const out = Math.max(Math.abs(x), Math.abs(y));
+    const fade = clamp(1 - (out - t.half) / (size * 1.2), 0, 1);
+    sp.setY(i, Math.max(-60, t.heightAt(x, y)) * fade - 25);
+    const ci = clamp(Math.floor(((x + t.half) / size) * TEX), 0, TEX - 1);
+    const cj = clamp(Math.floor(((t.half - y) / size) * TEX), 0, TEX - 1);
+    const o = (cj * TEX + ci) * 4;
+    tmp.setRGB(edge[o] / 255, edge[o + 1] / 255, edge[o + 2] / 255, THREE.SRGBColorSpace);
+    tmp.lerp(far, clamp((out - t.half) / 30000, 0, 0.7));
+    skc[i * 3] = tmp.r;
+    skc[i * 3 + 1] = tmp.g;
+    skc[i * 3 + 2] = tmp.b;
+  }
+  sk.setAttribute('color', new THREE.BufferAttribute(skc, 3));
+  sk.computeVertexNormals();
+  const skirtMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
+  addDetail(skirtMat, detail);
+  const skirt = new THREE.Mesh(sk, skirtMat);
+  // Keep the skirt under the real terrain where they overlap.
+  skirt.position.y = -2;
+  scene.add(skirt);
+
+  const normals = waterNormals();
+  normals.repeat.set(900, 450);
+  const seaMat = new THREE.MeshStandardMaterial({
+    color: 0x1b4253,
+    roughness: 0.12,
+    metalness: 0.1,
+    transparent: true,
+    opacity: 0.9,
+    normalMap: normals,
+    normalScale: new THREE.Vector2(0.35, 0.35),
+  });
+  const sea = new THREE.Mesh(new THREE.PlaneGeometry(size * 4, size * 2), seaMat);
+  sea.rotateX(-Math.PI / 2);
+  sea.position.set(0, 0, 25000 + size);
+  scene.add(sea);
+
+  const trees = buildTrees(scene, lc);
+  const houses = buildTowns(scene, lc);
+
+  let time = 0;
+  return {
+    terrainMesh,
+    clearAround(x, y, r) {
+      for (const set of [trees, houses]) {
+        let changed = false;
+        for (let i = 0; i < set.mesh.count; i++) {
+          if (set.hidden[i]) continue;
+          if (Math.hypot(set.xy[i * 2] - x, set.xy[i * 2 + 1] - y) < r) {
+            set.hidden[i] = 1;
+            set.mesh.setMatrixAt(i, ZERO);
+            changed = true;
+          }
+        }
+        if (changed) set.mesh.instanceMatrix.needsUpdate = true;
+      }
+    },
+    update(dt) {
+      time += dt;
+      normals.offset.set(time * 0.004, time * 0.0025);
+    },
+  };
+}
+
+const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+
+interface Scatter {
+  mesh: THREE.InstancedMesh;
+  xy: Float32Array;
+  hidden: Uint8Array;
+}
+
+/** Canopy clumps in the forests around the defended area. */
+function buildTrees(scene: THREE.Scene, lc: LandCover): Scatter {
+  const t = lc.t;
+  const rnd = prng(lc.seed ^ 0x7ee5);
+  const max = 42000;
+  const geo = new THREE.IcosahedronGeometry(1, 1);
+  geo.translate(0, 0.75, 0);
+  const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, flatShading: true }), max);
+  const xy = new Float32Array(max * 2);
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const sc = new THREE.Vector3();
+  const p = new THREE.Vector3();
+  const col = new THREE.Color();
+  let n = 0;
+  const R = 26000;
+  for (let i = 0; i < 400000 && n < max; i++) {
+    const a = rnd() * Math.PI * 2;
+    const r = Math.sqrt(rnd()) * R;
+    const x = Math.cos(a) * r;
+    const y = Math.sin(a) * r - 2000;
+    const h = t.heightAt(x, y);
+    if (h < 10) continue;
+    const slope = lc.slopeAt(x, y);
+    const f = lc.forest(x, y, h, slope);
+    // Dense in the forests, the odd tree along field edges.
+    if (f < 0 && !(f > -0.12 && rnd() < 0.04)) continue;
+    const w = 7 + rnd() * 9;
+    sc.set(w, w * (1.1 + rnd() * 0.6), w);
+    q.setFromAxisAngle(Y_AXIS, rnd() * 6.28);
+    p.set(x, t.groundAt(x, y) - 1.5, -y);
+    m.compose(p, q, sc);
+    mesh.setMatrixAt(n, m);
+    col.setHSL(0.22 + rnd() * 0.08, 0.35 + rnd() * 0.2, 0.13 + rnd() * 0.07);
+    mesh.setColorAt(n, col);
+    xy[n * 2] = x;
+    xy[n * 2 + 1] = y;
+    n++;
+  }
+  mesh.count = n;
+  mesh.frustumCulled = false;
+  scene.add(mesh);
+  return { mesh, xy, hidden: new Uint8Array(max) };
+}
+
+/** Houses, blocks and sheds in each town. */
+function buildTowns(scene: THREE.Scene, lc: LandCover): Scatter {
+  const t = lc.t;
+  const rnd = prng(lc.seed ^ 0x70e1);
+  const max = 9000;
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  geo.translate(0, 0.5, 0);
+  const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0 }), max);
+  const xy = new Float32Array(max * 2);
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const sc = new THREE.Vector3();
+  const p = new THREE.Vector3();
+  const col = new THREE.Color();
+  const palette = ['#c9c1b0', '#b9a58c', '#a65f47', '#9b9b98', '#d6d0c4', '#8a5040', '#7f8580'].map((c) => new THREE.Color(c));
+  let n = 0;
+  for (const tw of lc.towns) {
+    const grid = rnd() * Math.PI;
+    const count = Math.min(max - n, Math.round((tw.r * tw.r) / 9000));
+    for (let k = 0; k < count; k++) {
+      const a = rnd() * Math.PI * 2;
+      const r = Math.abs(rnd() + rnd() - 1) * tw.r * 1.1;
+      const x = tw.x + Math.cos(a) * r;
+      const y = tw.y + Math.sin(a) * r;
+      if (lc.slopeAt(x, y) > 0.15 || t.heightAt(x, y) < 6) continue;
+      const centre = 1 - r / (tw.r * 1.1);
+      const big = tw.r > 2000 && centre > 0.6 && rnd() < 0.35;
+      const w = big ? 25 + rnd() * 25 : 9 + rnd() * 10;
+      const d = big ? 20 + rnd() * 30 : 8 + rnd() * 8;
+      const hgt = big ? 14 + rnd() * 30 : 5 + rnd() * 5;
+      sc.set(w, hgt, d);
+      q.setFromAxisAngle(Y_AXIS, grid + (rnd() < 0.8 ? 0 : Math.PI / 2) + (rnd() - 0.5) * 0.15);
+      p.set(x, t.groundAt(x, y) - 0.5, -y);
+      m.compose(p, q, sc);
+      mesh.setMatrixAt(n, m);
+      col.copy(palette[Math.floor(rnd() * palette.length)]).multiplyScalar(0.85 + rnd() * 0.2);
+      mesh.setColorAt(n, col);
+      xy[n * 2] = x;
+      xy[n * 2 + 1] = y;
+      n++;
+    }
+  }
+  mesh.count = n;
+  mesh.frustumCulled = false;
+  scene.add(mesh);
+  return { mesh, xy, hidden: new Uint8Array(max) };
+}

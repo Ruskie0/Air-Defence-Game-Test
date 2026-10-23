@@ -60,7 +60,7 @@ export function spawnCruise(w: World, n: number, bearing: number, rangeM: number
     if (viaPasses) {
       const which = (i % 2) as 0 | 1;
       const v = rangeM + i * 2500;
-      start = t.toWorld(t.passU(which, 80000) + w.rng.gauss() * 400, v);
+      start = t.toWorld(t.passU(which, v) + w.rng.gauss() * 400, v);
       route = t.passRoute(which, v);
     } else {
       start = add(polar(bearing, rangeM + i * 2500), polar(bearing + 90, w.rng.gauss() * 3000));
@@ -127,9 +127,9 @@ export function spawnDarkAirliner(w: World): void {
 export function spawnThreat(w: World, type: ThreatType, bearing: number): void {
   switch (type) {
     case 'drones':
-      return spawnDrones(w, 6, bearing, 30000);
+      return spawnDrones(w, 6, bearing, 45000);
     case 'cruise':
-      return spawnCruise(w, 4, bearing, 95000);
+      return spawnCruise(w, 4, bearing, 120000);
     case 'bomber':
       return spawnBombers(w, 1, bearing, 190000);
     case 'sead':

@@ -1,8 +1,8 @@
 import { CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty } from '../campaign/campaign';
-import { SECTOR_NAMES, sectorOf } from '../campaign/raidgen';
 import type { View3D } from '../render/view3d';
 import { CATALOG, DeployedUnit, UnitType } from '../sim/catalog';
 import { bearingDeg, v3 } from '../sim/math';
+import { MAP_TYPES, MAP_TYPE_LIST, MapType } from '../sim/terrain';
 import type { World } from '../sim/world';
 import type { Ppi } from './ppi';
 
@@ -23,7 +23,8 @@ export interface CampaignHost {
   startBattle(w: World, c: Campaign): void;
   /** Back to the main menu. */
   toMenu(): void;
-  startSandbox(): void;
+  /** Start the sandbox on a new map (of this type, or a random one). */
+  startSandbox(type?: MapType): void;
 }
 
 /** Saved campaign in this browser, if any. Storage can be unavailable, so every access is guarded. */
@@ -56,6 +57,8 @@ export class CampaignUi {
   private focus: number | null = null;
   private confirmSell: number | null = null;
   private note = '';
+  /** Map type picked on the menu (undefined = random). */
+  private mapPick: MapType | undefined;
 
   constructor(host: CampaignHost) {
     this.host = host;
@@ -94,14 +97,21 @@ export class CampaignUi {
         }
         <button data-cui="sandbox" class="big">
           <b>Sandbox</b>
-          <small>A fixed, fully equipped defence against six scripted raids, with a panel to spawn any threat. Good for learning the systems.</small>
+          <small>A fully equipped defence against six scripted raids on a new map, with a panel to spawn any threat. Good for learning the systems.</small>
         </button>
+        <div class="big-group">
+          <div class="big-h"><b>Map</b><small>Every new campaign and sandbox gets a new 300 km map: pick its kind, or leave it to chance.</small></div>
+          <div class="diff maps">
+            <button data-cui="map" data-map="" class="${this.mapPick ? '' : 'on'}"><b>Random</b><small>Any of the five</small></button>
+            ${MAP_TYPE_LIST.map((m) => `<button data-cui="map" data-map="${m}" class="${this.mapPick === m ? 'on' : ''}" title="${esc(MAP_TYPES[m].blurb)}"><b>${MAP_TYPES[m].name}</b><small>${esc(MAP_TYPES[m].blurb)}</small></button>`).join('')}
+          </div>
+        </div>
       </div>
       <p class="dim">Press <b>?</b> in the top bar at any time for how the systems work.</p>`;
   }
 
-  newCampaign(seed = Math.floor(Math.random() * 1e6) + 1, difficulty: Difficulty = 'normal'): void {
-    this.c = Campaign.create(seed, difficulty);
+  newCampaign(seed = Math.floor(Math.random() * 1e6) + 1, difficulty: Difficulty = 'normal', mapType: MapType | undefined = this.mapPick): void {
+    this.c = Campaign.create(seed, difficulty, mapType);
     store(this.c);
     this.note = 'Your first units are in their default positions. Move them, buy more, then start the day.';
     this.showPlanning();
@@ -131,11 +141,9 @@ export class CampaignUi {
     this.showFocus();
   }
 
-  /** One line describing the campaign's map for the first briefing. */
+  /** The campaign's map for the briefing. */
   private mapLine(): string {
-    const L = this.c!.layout;
-    const dir = (b: number): string => SECTOR_NAMES[sectorOf(b)];
-    return `Terrain: the enemy is beyond the mountains to the ${dir(L.rot)}, which two passes cut through towards us. The coast is about ${Math.round(L.coastM / 1000)} km to the ${dir(L.rot + 180)}. Expect low-level attacks down the passes and in from the sea.`;
+    return `Terrain: ${this.c!.terrain.describe()}`;
   }
 
   private label(u: DeployedUnit): string {
@@ -172,7 +180,7 @@ export class CampaignUi {
     const intel = c.intel();
     $('plan-left').innerHTML = `
       <h3>Intelligence briefing, day ${s.day}</h3>
-      ${s.day === 1 ? `<p class="dim">${esc(this.mapLine())}</p>` : ''}
+      <p class="dim">${esc(this.mapLine())}</p>
       <ul class="intel">${intel.map((l) => `<li>${esc(l)}</li>`).join('') || '<li class="dim">Nothing reported.</li>'}</ul>
       ${last?.lessons.length ? `<h3>Enemy assessment</h3><ul class="intel">${last.lessons.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
       <h3>Procurement <span class="dim">budget ${money(s.money)}</span></h3>
@@ -345,7 +353,11 @@ export class CampaignUi {
         return;
       }
       case 'sandbox':
-        this.host.startSandbox();
+        this.host.startSandbox(this.mapPick);
+        return;
+      case 'map':
+        this.mapPick = (d.map || undefined) as MapType | undefined;
+        this.showMenu();
         return;
       case 'menu':
         $('debrief').classList.add('hidden');

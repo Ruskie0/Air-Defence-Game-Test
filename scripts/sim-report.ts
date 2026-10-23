@@ -1,6 +1,7 @@
 // Headless balance report: runs the sandbox scenario with no browser and summarises every raid.
-// Usage: npm run sim -- [simSeconds] [seed] [--log]
+// Usage: npm run sim -- [simSeconds] [seed] [--log] [--map=mountain|coastal|peninsula|lakes|highlands]
 import { World } from '../src/sim/world';
+import { MapType, Terrain } from '../src/sim/terrain';
 import type { Entity } from '../src/sim/entities';
 
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
@@ -8,7 +9,9 @@ const showLog = process.argv.includes('--log');
 const simSeconds = Number(args[0] ?? 3300);
 const seed = Number(args[1] ?? 20261023);
 
-const w = new World(seed);
+const mapType = process.argv.find((a) => a.startsWith('--map='))?.split('=')[1] as MapType | undefined;
+const w = new World({ seed, terrain: mapType ? new Terrain(seed, mapType) : undefined });
+if (mapType) console.log(w.terrain.describe());
 const seen = new Map<number, { e: Entity; raid: string; born: number }>();
 const fate = new Map<number, string>();
 let raid = 'Background';

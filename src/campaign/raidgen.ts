@@ -40,13 +40,13 @@ export const PKG: Record<PkgKind, PkgDef> = {
   drones: {
     name: 'Drone swarm', cost: (n) => 1 + n * 0.9, minDay: 1, sectors: [0, 1, 2, 3, 4, 5, 6, 7],
     size: (d, r) => Math.min(14, 4 + d + r.int(0, 2)),
-    spawn: (w, b, n) => spawnDrones(w, n, b, 34000),
+    spawn: (w, b, n) => spawnDrones(w, n, b, 50000),
     describe: (n) => `${n} one-way attack drones, low and slow`,
   },
   cruise: {
     name: 'Cruise missiles', cost: (n) => 2 + n * 2, minDay: 1, sectors: [0, 2, 3, 4, 5, 6],
     size: (d, r) => Math.min(8, 2 + Math.floor(d / 2) + r.int(0, 1)),
-    spawn: (w, b, n) => spawnCruise(w, n, b, 95000),
+    spawn: (w, b, n) => spawnCruise(w, n, b, 130000),
     describe: (n) => `${n} terrain-following cruise missiles`,
   },
   sead: {

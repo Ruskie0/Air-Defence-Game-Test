@@ -1,9 +1,10 @@
 import { DT } from './constants';
 import { Ciws } from './ciws';
-import { Arm, Cruise, Emitter, Entity } from './entities';
+import { Arm, Cruise, Emitter, Entity, Fate } from './entities';
 import { Fighter } from './fighter';
-import { V3, add, clone, dist, norm, scale, sub, v3 } from './math';
-import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, UnitType, sandboxDeployment } from './catalog';
+import { V3, add, bearingDeg, clone, dist, norm, scale, sub, v3 } from './math';
+import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, UnitType } from './catalog';
+import { sandboxDeployment } from './deploy';
 import { Interceptor, LR_MSL, MR_MSL, MissileSpec, SH_MSL } from './missile';
 import { CIWS_RADAR, EW_RADAR, LR_RADAR, MR_RADAR, Radar, RadarSpec, Report, SH_RADAR } from './radar';
 import { Rng } from './rng';
@@ -103,6 +104,8 @@ export class World {
   readonly radiating = new Map<string, number>();
   /** Package tag given to everything spawned while it is set. */
   spawnTag = -1;
+  /** Everything that died or left in the last 20 s, newest last (for wrecks and kill feeds). */
+  deaths: Entity[] = [];
   /** Track id remaps from fusion merges, so the UI can follow a selected track. */
   readonly remapped = new Map<number, number>();
   private readonly byId = new Map<number, Entity>();
@@ -120,15 +123,16 @@ export class World {
     this.seed = o.seed ?? MAP_SEED;
     this.rng = new Rng(this.seed);
     this.terrain = o.terrain ?? new Terrain(MAP_SEED);
-    const dep = o.deployment ?? sandboxDeployment();
+    const dep = o.deployment ?? sandboxDeployment(this.terrain);
     for (const a of DEFENDED_ASSETS) {
-      const s = this.addSite(a.name, 'asset', a.x, a.y, 0, a.radius, true);
+      const p = this.terrain.asset(a.name);
+      const s = this.addSite(a.name, 'asset', p.x, p.y, 0, a.radius, true);
       s.hp = dep.assets.find((x) => x.name === a.name)?.hp ?? 100;
       s.vuln = a.vuln;
       s.alive = s.hp > 0;
     }
     for (const u of dep.units) this.field(u);
-    this.scenario = new Scenario(o.raids);
+    this.scenario = new Scenario(o.raids, this.terrain.layout.rot);
     if (o.civil ?? true) this.scenario.start(this);
   }
 
@@ -312,11 +316,27 @@ export class World {
     this.pending.push({ t: this.t + delay, e });
   }
 
+  /** Record how an entity died or left, once. */
+  setFate(e: Entity, how: Fate['how'], by: string, extra: Partial<Fate> = {}): void {
+    if (e.fate) return;
+    e.fate = { how, by, t: this.t, pos: clone(e.pos), vel: clone(e.vel), air: how === 'missile' || how === 'gun' || how === 'laser', ...extra };
+    this.deaths.push(e);
+  }
+
+  /** An entity leaves the battle without being destroyed (egress, landing, end of flight). */
+  retire(e: Entity): void {
+    e.alive = false;
+    this.setFate(e, 'exit', '');
+  }
+
   /** A red warhead functions: damage every site inside its lethal radius. */
   detonate(e: Entity): void {
     e.alive = false;
     const wh = e.warhead;
-    if (!wh) return;
+    if (!wh) {
+      this.setFate(e, 'impact', e.targetName, { hit: false });
+      return;
+    }
     const nearGround = e.pos.z - this.terrain.groundAt(e.pos.x, e.pos.y) < 60;
     this.effect(e.pos, e.kind === 'tbm' || e.kind === 'cruise' ? 'big' : nearGround ? 'ground' : 'blast');
     let hit = false;
@@ -329,6 +349,7 @@ export class World {
         hit = true;
       }
     }
+    this.setFate(e, 'impact', e.targetName, { hit });
     if (hit) {
       this.stats.leakers++;
       if (e.pkg >= 0) this.pkgHits.set(e.pkg, (this.pkgHits.get(e.pkg) ?? 0) + 1);
@@ -339,9 +360,10 @@ export class World {
   }
 
   /** Destroy an entity in the air (missile kill, gun kill). */
-  killEntity(e: Entity, by: string, shooter = by): void {
+  killEntity(e: Entity, by: string, shooter = by, how: 'missile' | 'gun' | 'laser' = 'missile'): void {
     if (!e.alive) return;
     e.alive = false;
+    this.setFate(e, how, shooter);
     this.effect(e.pos, 'blast');
     if (e.side === 'red') {
       this.stats.kills++;
@@ -361,7 +383,7 @@ export class World {
   launchAlcm(from: Entity, target: V3, name: string): void {
     const start = clone(from.pos);
     const loc = this.terrain.toLocal(from.pos.x, from.pos.y);
-    const overMountains = loc.v > 60000 && Math.abs(loc.u) < 60000;
+    const overMountains = this.terrain.mountainSide(bearingDeg(v3(), from.pos)) && loc.v > this.terrain.layout.mtnFrom + 10000 && Math.abs(loc.u) < 60000;
     const route = overMountains ? this.terrain.passRoute(loc.u < this.terrain.passU(0, loc.v) / 2 + this.terrain.passU(1, loc.v) / 2 ? 0 : 1, loc.v) : [];
     const cm = new Cruise(this.nextName('ALCM'), start, route, target, name);
     cm.hdg = (from as unknown as { hdg: number }).hdg ?? 180;
@@ -547,11 +569,13 @@ export class World {
     if (this.entities.some((e) => !e.alive)) {
       this.entities = this.entities.filter((e) => {
         if (e.alive || e instanceof Fighter) return true;
+        if (!e.fate) this.setFate(e, 'exit', '');
         this.byId.delete(e.id);
         return false;
       });
     }
     if (this.missiles.some((m) => !m.alive)) this.missiles = this.missiles.filter((m) => m.alive);
+    if (this.deaths.length && this.t - this.deaths[0].fate!.t > 20) this.deaths = this.deaths.filter((e) => this.t - e.fate!.t <= 20);
     if (this.effects.length && this.t - this.effects[0].t0 > 6) this.effects = this.effects.filter((f) => this.t - f.t0 <= 6);
   }
 }

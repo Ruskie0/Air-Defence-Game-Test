@@ -1,15 +1,13 @@
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, ROUND_COST, UnitType, launcherOffsets, newUnit } from '../sim/catalog';
+import { CAP_RADIUS, DEPLOY_RADIUS, nearestFree, placeError } from '../sim/deploy';
 import { hdist, v3 } from '../sim/math';
-import { CLASSIC_LAYOUT, MapLayout, Terrain, randomLayout } from '../sim/terrain';
+import { CLASSIC_LAYOUT, MapLayout, MapType, Terrain, legacyLayout, randomLayout, typeForSeed } from '../sim/terrain';
 import { MAP_SEED } from '../sim/world';
 import { World } from '../sim/world';
 import { EnemyModel, PKG, PlannedPkg, SECTOR_NAMES, newEnemy, planDay, sectorOf, toRaids } from './raidgen';
 
 export const CAMPAIGN_DAYS = 10;
-/** Furthest a ground unit may stand from the airbase (m). */
-export const DEPLOY_RADIUS = 35000;
-/** Furthest a CAP station may be (m). */
-export const CAP_RADIUS = 90000;
+export { CAP_RADIUS, DEPLOY_RADIUS };
 /** Price of a replacement fighter for a pair that lost one, $M. */
 export const AIRCRAFT_COST = 85;
 /** Shooting down this many airliners ends the campaign. */
@@ -58,6 +56,8 @@ export interface CampaignState {
   over: null | { won: boolean; reason: string };
   /** Seed of this campaign's map; absent in saves from before random maps (the classic map). */
   mapSeed?: number;
+  /** Map type; absent in saves from before map types (their maps are rebuilt the old way). */
+  mapType?: MapType;
   difficulty?: Difficulty;
 }
 
@@ -80,7 +80,7 @@ export class Campaign {
     this.s = state;
   }
 
-  static create(seed: number, difficulty: Difficulty = 'normal'): Campaign {
+  static create(seed: number, difficulty: Difficulty = 'normal', mapType: MapType = typeForSeed(seed)): Campaign {
     const c = new Campaign({
       version: 1,
       seed,
@@ -89,12 +89,13 @@ export class Campaign {
       deployment: { units: [], assets: DEFENDED_ASSETS.map((a) => ({ name: a.name, hp: 100 })) },
       nextUid: 1,
       nextPkg: 1,
-      enemy: newEnemy(randomLayout(seed).rot),
+      enemy: newEnemy(randomLayout(seed, mapType).rot),
       plan: [],
       history: [],
       civilLosses: 0,
       over: null,
       mapSeed: seed,
+      mapType,
       difficulty,
     });
     // Starting order of battle: one MR battery, a SHORAD unit and a CIWS on the airbase.
@@ -126,7 +127,8 @@ export class Campaign {
 
   /** This campaign's map layout (the classic map for old saves). */
   get layout(): MapLayout {
-    return this.s.mapSeed === undefined ? CLASSIC_LAYOUT : randomLayout(this.s.mapSeed);
+    if (this.s.mapSeed === undefined) return CLASSIC_LAYOUT;
+    return this.s.mapType ? randomLayout(this.s.mapSeed, this.s.mapType) : legacyLayout(this.s.mapSeed);
   }
 
   /** This campaign's terrain, built once and shared by every day and the planning preview. */
@@ -199,16 +201,9 @@ export class Campaign {
     const spots = DEFAULT_SPOTS[type].map(([u, v]) => t.toWorld(u, v));
     const free = (x: number, y: number): boolean =>
       !this.placeError(t, type, x, y) && !this.units.some((u) => u.type !== 'CAP' && type !== 'CAP' && Math.hypot(u.x - x, u.y - y) < 1500);
-    let spot = spots.find((p) => free(p.x, p.y));
+    const spot = spots.find((p) => free(p.x, p.y));
     // Otherwise spiral out from the first spot until the ground allows it.
-    for (let i = 1; !spot && i < 200; i++) {
-      const a = i * 2.4;
-      const r = 400 * Math.sqrt(i);
-      const x = spots[0].x + Math.sin(a) * r;
-      const y = spots[0].y + Math.cos(a) * r;
-      if (free(x, y)) spot = v3(x, y);
-    }
-    const p = spot ?? spots[0];
+    const p = spot ?? nearestFree(t, type, spots[0].x, spots[0].y, this.units, -1, 1500);
     const u = newUnit(this.s.nextUid++, type, Math.round(p.x), Math.round(p.y), CATALOG[type].sector ? t.layout.rot : 0);
     this.units.push(u);
     return u;
@@ -281,15 +276,7 @@ export class Campaign {
 
   /** Why a unit cannot stand at (x, y), or null if it can. */
   placeError(t: Terrain, type: UnitType, x: number, y: number, uid = -1): string | null {
-    const r = Math.hypot(x, y);
-    if (type === 'CAP') return r > CAP_RADIUS ? `CAP stations must be within ${CAP_RADIUS / 1000} km` : null;
-    if (r > DEPLOY_RADIUS) return `Too far out: units must stand within ${DEPLOY_RADIUS / 1000} km of the airbase`;
-    if (t.groundAt(x, y) < 3) return 'That is water';
-    const slope = Math.abs(t.groundAt(x + 150, y) - t.groundAt(x - 150, y)) + Math.abs(t.groundAt(x, y + 150) - t.groundAt(x, y - 150));
-    if (slope > 90) return 'Too steep to emplace';
-    for (const a of DEFENDED_ASSETS) if (Math.hypot(a.x - x, a.y - y) < a.radius + 150) return `On top of the ${a.name}`;
-    for (const u of this.units) if (u.uid !== uid && u.type !== 'CAP' && Math.hypot(u.x - x, u.y - y) < 300) return 'Too close to another unit';
-    return null;
+    return placeError(t, type, x, y, this.units, uid);
   }
 
   /** Move a unit (and its launchers with it). */
@@ -304,7 +291,7 @@ export class Campaign {
       l.x += dx;
       l.y += dy;
       // Launchers that would end up in the sea or off the map stay close to the radar instead.
-      if (t.groundAt(l.x, l.y) < 3) {
+      if (!t.buildable(l.x, l.y)) {
         l.x = x;
         l.y = y;
       }
@@ -319,7 +306,7 @@ export class Campaign {
     u.launchers.forEach((l, i) => {
       const nx = u.x + offs[i][0];
       const ny = u.y + offs[i][1];
-      if (t.groundAt(nx, ny) >= 3) {
+      if (t.buildable(nx, ny)) {
         l.x = nx;
         l.y = ny;
       }

@@ -1,0 +1,225 @@
+import { V3, clone, dist } from './math';
+import type { Emitter } from './entities';
+import { Interceptor, MissileSpec } from './missile';
+import type { Radar } from './radar';
+import type { Track } from './tracker';
+import type { World } from './world';
+
+export type SiteKind = 'asset' | 'radar' | 'launcher' | 'ciws' | 'gnss' | 'decoy';
+
+/** A ground object that can be damaged: a defended asset or a piece of air defence equipment. */
+export class Site {
+  readonly name: string;
+  readonly kind: SiteKind;
+  readonly pos: V3;
+  readonly radius: number;
+  readonly defended: boolean;
+  hp = 100;
+  alive = true;
+  onDestroyed: (() => void) | null = null;
+
+  constructor(name: string, kind: SiteKind, pos: V3, radius: number, defended = false) {
+    this.name = name;
+    this.kind = kind;
+    this.pos = clone(pos);
+    this.radius = radius;
+    this.defended = defended;
+  }
+
+  damage(w: World, amount: number, by: string): void {
+    if (!this.alive) return;
+    this.hp = Math.max(0, this.hp - amount);
+    w.log(`${this.name} hit by ${by} (${Math.round(this.hp)}% remaining)`, 'damage');
+    if (this.hp <= 0) {
+      this.alive = false;
+      w.log(`${this.name} DESTROYED`, 'damage');
+      this.onDestroyed?.();
+    }
+  }
+}
+
+/** Emitter that mimics the LR radar's signature to draw anti-radiation missiles. */
+export class Decoy implements Emitter {
+  readonly name = 'Radar decoy';
+  readonly signature = 'LR' as const;
+  readonly site: Site;
+  on = false;
+
+  constructor(site: Site) {
+    this.site = site;
+  }
+
+  get pos(): V3 {
+    return this.site.pos;
+  }
+
+  get alive(): boolean {
+    return this.site.alive;
+  }
+
+  isEmitting(): boolean {
+    return this.site.alive && this.on;
+  }
+}
+
+/** Ground GNSS jammer: degrades navigation of GNSS-dependent threats inside its radius (with line of sight). */
+export class GnssJammer {
+  readonly site: Site;
+  readonly rangeM = 30000;
+  on = false;
+
+  constructor(site: Site) {
+    this.site = site;
+  }
+
+  get active(): boolean {
+    return this.on && this.site.alive;
+  }
+}
+
+export interface Launcher {
+  site: Site;
+  rounds: number;
+  max: number;
+  reloadAt: number;
+}
+
+export interface Feasibility {
+  ok: boolean;
+  reason: string;
+  pip?: V3;
+  tof?: number;
+  rangeM?: number;
+}
+
+const no = (reason: string): Feasibility => ({ ok: false, reason });
+
+/** A SAM fire unit: its own radar (if any), launchers and fire channels. */
+export class FireUnit {
+  readonly code: 'LR' | 'MR' | 'SH';
+  readonly name: string;
+  readonly spec: MissileSpec;
+  readonly radar: Radar | null;
+  readonly launchers: Launcher[];
+  readonly channels: number;
+  readonly reloadS: number;
+  /** MR can fire on any fused track; LR (TVM) and SHORAD (command guidance) need their own radar. */
+  readonly remote: boolean;
+  private queue: { t: number; trackId: number }[] = [];
+
+  constructor(
+    code: 'LR' | 'MR' | 'SH',
+    name: string,
+    spec: MissileSpec,
+    radar: Radar | null,
+    launchers: Launcher[],
+    channels: number,
+    reloadS: number,
+    remote: boolean,
+  ) {
+    this.code = code;
+    this.name = name;
+    this.spec = spec;
+    this.radar = radar;
+    this.launchers = launchers;
+    this.channels = channels;
+    this.reloadS = reloadS;
+    this.remote = remote;
+  }
+
+  get rounds(): number {
+    return this.launchers.reduce((s, l) => s + (l.site.alive ? l.rounds : 0), 0);
+  }
+
+  get maxRounds(): number {
+    return this.launchers.reduce((s, l) => s + l.max, 0);
+  }
+
+  activeTargets(w: World): Set<number> {
+    const s = new Set<number>();
+    for (const m of w.missiles) if (m.alive && m.unit === this.code) s.add(m.trackId);
+    for (const q of this.queue) s.add(q.trackId);
+    return s;
+  }
+
+  /** Predicted intercept point from `from`, iterating on time of flight. */
+  pip(w: World, tr: Track, from: V3): { pip: V3; tof: number } {
+    let tof = dist(from, tr.predict(w.t)) / this.spec.avgSpd;
+    let p = tr.predict(w.t + tof);
+    for (let i = 0; i < 8; i++) {
+      p = tr.predict(w.t + tof);
+      tof = dist(from, p) / this.spec.avgSpd;
+    }
+    return { pip: p, tof };
+  }
+
+  feasibility(w: World, tr: Track): Feasibility {
+    const s = this.spec;
+    if (this.radar && !this.radar.alive && !this.remote) return no('radar destroyed');
+    if (this.radar && !this.remote && !this.radar.emitting) return no('radar in EMCON');
+    const ready = this.launchers.filter((l) => l.site.alive && l.rounds > 0);
+    if (!ready.length) return no('no missiles ready');
+    if (!tr.confirmed) return no('track not firm');
+    if (w.t - tr.t > (this.remote ? 5 : 3)) return no('track stale');
+    if (tr.cls === 'TBM' && !s.tbmRangeM) return no('not TBM capable');
+    if (this.code === 'LR') {
+      const lr = tr.sources.get('LR') ?? -1e9;
+      const esm = tr.sources.get('ESM') ?? -1e9;
+      if (w.t - lr > 4 && !(tr.jam && w.t - esm < 4)) return no('LR radar not tracking');
+    }
+    if (this.code === 'SH' && this.radar && !w.terrain.los(this.radar.pos, tr.predict(w.t))) return no('no tracker line of sight');
+    const active = this.activeTargets(w);
+    if (!active.has(tr.id) && active.size >= this.channels) return no('all fire channels busy');
+    let best = ready[0];
+    for (const l of ready) if (dist(l.site.pos, tr.pos) < dist(best.site.pos, tr.pos)) best = l;
+    const { pip, tof } = this.pip(w, tr, best.site.pos);
+    const range = dist(best.site.pos, pip);
+    if (tof > s.maxTof * 0.85) return no('cannot catch target');
+    const maxR = tr.cls === 'TBM' ? s.tbmRangeM : s.maxRangeM;
+    if (range > maxR) return no(`out of range (${(range / 1000).toFixed(0)} km)`);
+    if (range < s.minRangeM) return no('inside minimum range');
+    if (pip.z > s.maxAltM) return no('above ceiling');
+    if (tr.cls === 'TBM' && pip.z < 3000) return no('too late for TBM intercept');
+    return { ok: true, reason: `PIP ${(range / 1000).toFixed(1)} km, TOF ${tof.toFixed(0)} s`, pip, tof, rangeM: range };
+  }
+
+  fire(w: World, tr: Track, salvo: number): boolean {
+    const f = this.feasibility(w, tr);
+    if (!f.ok) return false;
+    const n = Math.min(salvo, this.rounds);
+    for (let i = 0; i < n; i++) this.queue.push({ t: w.t + i * 1.2, trackId: tr.id });
+    w.log(`${this.name} engaging ${tr.label} (${tr.cls}) with ${n}: ${f.reason}`, 'engage');
+    return true;
+  }
+
+  remap(from: number, to: number): void {
+    for (const q of this.queue) if (q.trackId === from) q.trackId = to;
+  }
+
+  update(w: World): void {
+    for (const l of this.launchers) {
+      if (l.rounds === 0 && l.reloadAt > 0 && w.t >= l.reloadAt && l.site.alive) {
+        l.rounds = l.max;
+        l.reloadAt = 0;
+        w.log(`${this.name} launcher reloaded`, 'info');
+      }
+    }
+    while (this.queue.length && this.queue[0].t <= w.t) {
+      const q = this.queue.shift()!;
+      const tr = w.tracker.get(q.trackId);
+      if (!tr) continue;
+      const ready = this.launchers.filter((l) => l.site.alive && l.rounds > 0);
+      if (!ready.length) continue;
+      let l = ready[0];
+      for (const c of ready) if (dist(c.site.pos, tr.pos) < dist(l.site.pos, tr.pos)) l = c;
+      const { pip } = this.pip(w, tr, l.site.pos);
+      l.rounds--;
+      if (l.rounds === 0) l.reloadAt = w.t + this.reloadS;
+      const from = clone(l.site.pos);
+      from.z += 4;
+      w.missiles.push(new Interceptor(w, this.spec, this.code, from, pip, null, tr.id));
+      w.stats.fired[this.code]++;
+      w.stats.costM += this.spec.costM;
+    }
+  }
+}

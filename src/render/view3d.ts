@@ -1,14 +1,23 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { SoundEngine } from '../audio/sound';
 import { DEG } from '../sim/constants';
 import type { Entity, Kind } from '../sim/entities';
 import { V3, clamp, polar } from '../sim/math';
 import type { Radar } from '../sim/radar';
 import type { Ciws } from '../sim/ciws';
 import type { Site } from '../sim/sites';
-import type { World } from '../sim/world';
+import { MAP_SEED, type World } from '../sim/world';
 import { IDENT_COLOR } from '../ui/colors';
+import { CameraRig } from './camera';
+import { Effects } from './effects';
+import { WorldEvents } from './events';
+import { Scenery, buildScenery, buildSky, terrainSeed, updateHaze } from './terrain3d';
 
 /** Sim frame (x east, y north, z up) to three.js frame (x east, y up, z south). */
 export const toThree = (p: V3, out = new THREE.Vector3()): THREE.Vector3 => out.set(p.x, p.z, -p.y);
@@ -22,24 +31,6 @@ function canvasTexture(size: number, draw: (g: CanvasRenderingContext2D, s: numb
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
-
-const glowTex = canvasTexture(64, (g, s) => {
-  const grd = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
-  grd.addColorStop(0, 'rgba(255,255,230,1)');
-  grd.addColorStop(0.25, 'rgba(255,190,90,0.9)');
-  grd.addColorStop(0.6, 'rgba(200,80,20,0.35)');
-  grd.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = grd;
-  g.fillRect(0, 0, s, s);
-});
-
-const smokeTex = canvasTexture(64, (g, s) => {
-  const grd = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
-  grd.addColorStop(0, 'rgba(120,110,100,0.8)');
-  grd.addColorStop(1, 'rgba(80,70,60,0)');
-  g.fillStyle = grd;
-  g.fillRect(0, 0, s, s);
-});
 
 function markerTex(color: string, shape: 'circle' | 'diamond' | 'square' | 'dot' | 'ring'): THREE.CanvasTexture {
   return canvasTexture(64, (g, s) => {
@@ -184,6 +175,8 @@ export class View3D {
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
   readonly controls: OrbitControls;
+  readonly rig: CameraRig;
+  readonly sound = new SoundEngine();
   showTruth = false;
   showLabels = true;
   showCoverage = true;
@@ -199,8 +192,15 @@ export class View3D {
   private readonly container: HTMLElement;
   private world: World;
   private terrainMesh: THREE.Mesh | null = null;
-  /** Terrain, skirt and sea, rebuilt when a campaign is on another map. */
-  private ground = new THREE.Group();
+  private scenery!: Scenery;
+  private readonly fx: Effects;
+  private readonly events = new WorldEvents();
+  private readonly composer: EffectComposer;
+  private readonly bloom: UnrealBloomPass;
+  private lastFrame = performance.now();
+  private clearedKey = '';
+  /** The terrain the scenery was built for; a world on a different map rebuilds it. */
+  private sceneryTerrain: World['terrain'] | null = null;
   private readonly preview = new THREE.Group();
   private readonly raycaster = new THREE.Raycaster();
   private down: { x: number; y: number } | null = null;
@@ -209,14 +209,11 @@ export class View3D {
   /** Called with the ground point under the pointer while onGroundClick is set. */
   onGroundHover: ((p: V3 | null) => void) | null = null;
   private readonly entityObjs = new Map<number, EntityObj>();
-  private readonly missileObjs = new Map<number, { body: THREE.Object3D; trail: TrailObj; flame: THREE.Sprite }>();
-  private readonly effectObjs = new Map<number, THREE.Sprite>();
+  private readonly missileObjs = new Map<number, { body: THREE.Object3D; trail: TrailObj }>();
   private readonly trackLabels = new Map<number, { obj: CSS2DObject; el: HTMLDivElement; last: string }>();
   private readonly siteObjs: { site: Site; root: THREE.Group; mats: THREE.MeshLambertMaterial[]; label: CSS2DObject; dead: boolean }[] = [];
   private readonly antennas: { radar: Radar; obj: THREE.Object3D }[] = [];
   private readonly turrets: { ciws: Ciws; yaw: THREE.Object3D; pitch: THREE.Object3D }[] = [];
-  private readonly tracers: THREE.Points;
-  private readonly tracerPos: Float32Array;
   private readonly coverage = new THREE.Group();
   private readonly selRing: THREE.Sprite;
   private readonly siteRing: THREE.Sprite;
@@ -227,6 +224,8 @@ export class View3D {
     this.world = world;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 0.9;
     container.appendChild(this.renderer.domElement);
     this.labels = new CSS2DRenderer();
     this.labels.domElement.className = 'labels3d';
@@ -239,28 +238,25 @@ export class View3D {
     this.controls.maxPolarAngle = Math.PI * 0.495;
     this.controls.minDistance = 60;
     this.controls.maxDistance = 420000;
-    this.setView('defended');
+    this.rig = new CameraRig(this.camera, this.controls, (x, z) => this.world.terrain.groundAt(x, -z));
+    this.rig.onManual = () => {
+      this.follow = false;
+    };
+    this.rig.onHome = () => this.setView('defended');
+    this.setView('defended', true);
 
-    const sky = new THREE.Color('#a9bccb');
-    this.scene.background = sky;
-    this.scene.fog = new THREE.Fog(sky, 90000, 340000);
-    this.scene.add(new THREE.HemisphereLight(0xdfe9f3, 0x4a4535, 1.1));
-    const sun = new THREE.DirectionalLight(0xfff4e0, 2.2);
-    sun.position.set(-60000, 90000, 50000);
-    this.scene.add(sun);
-
+    buildSky(this.renderer, this.scene);
     this.buildTerrain();
     this.buildSites();
     this.buildCoverage();
+    this.fx = new Effects(this.scene);
 
-    const cap = 6000;
-    this.tracerPos = new Float32Array(cap * 3);
-    const tg = new THREE.BufferGeometry();
-    tg.setAttribute('position', new THREE.BufferAttribute(this.tracerPos, 3));
-    tg.setDrawRange(0, 0);
-    this.tracers = new THREE.Points(tg, new THREE.PointsMaterial({ color: 0xffd27a, size: 2.5, sizeAttenuation: false }));
-    this.tracers.frustumCulled = false;
-    this.scene.add(this.tracers);
+    // The composer renders off-screen, so the canvas's own antialiasing does not apply: multisample the target.
+    this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.55, 0.5, 1.6);
+    this.composer.addPass(this.bloom);
+    this.composer.addPass(new OutputPass());
 
     this.selRing = new THREE.Sprite(new THREE.SpriteMaterial({ map: MARKERS.sel, depthTest: false, transparent: true }));
     this.selRing.scale.setScalar(0.045);
@@ -337,17 +333,11 @@ export class View3D {
 
   /** Show another world (a new day, the deployment preview) over the same terrain. */
   setWorld(w: World): void {
-    const newMap = w.terrain !== this.world.terrain;
     this.world = w;
-    if (newMap) {
-      this.scene.remove(this.ground);
-      this.ground.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (!m.isMesh) return;
-        m.geometry.dispose();
-        (m.material as THREE.Material).dispose();
-      });
+    if (w.terrain !== this.sceneryTerrain) {
+      this.scenery.dispose();
       this.buildTerrain();
+      this.clearedKey = '';
     }
     for (const s of this.siteObjs) {
       this.scene.remove(s.root);
@@ -368,8 +358,8 @@ export class View3D {
     this.entityObjs.clear();
     for (const o of this.missileObjs.values()) this.scene.remove(o.body, o.trail.line);
     this.missileObjs.clear();
-    for (const o of this.effectObjs.values()) this.scene.remove(o);
-    this.effectObjs.clear();
+    // Sound state resets on its own when it sees a different world.
+    this.fx.reset();
     for (const l of this.trackLabels.values()) {
       this.scene.remove(l.obj);
       l.el.remove();
@@ -384,12 +374,16 @@ export class View3D {
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
     this.renderer.setSize(w, h);
+    this.composer.setPixelRatio(this.renderer.getPixelRatio());
+    this.composer.setSize(w, h);
+    this.bloom.resolution.set(w / 2, h / 2);
     this.labels.setSize(w, h);
     this.camera.aspect = w / Math.max(h, 1);
     this.camera.updateProjectionMatrix();
+    this.fx.setViewport(h * this.renderer.getPixelRatio(), this.camera.fov);
   }
 
-  setView(v: 'defended' | 'overview' | 'north' | 'deploy'): void {
+  setView(v: 'defended' | 'overview' | 'north' | 'deploy', instant = false): void {
     const views = {
       defended: { pos: [6000, 14000, 30000], tgt: [0, 0, -6000] },
       overview: { pos: [0, 190000, 120000], tgt: [0, 0, -15000] },
@@ -397,77 +391,20 @@ export class View3D {
       north: { pos: [-15000, 9000, -15000], tgt: [0, 1500, -60000] },
     } as const;
     const s = views[v];
-    this.camera.position.set(s.pos[0], s.pos[1], s.pos[2]);
-    this.controls.target.set(s.tgt[0], s.tgt[1], s.tgt[2]);
+    const pos = new THREE.Vector3(s.pos[0], s.pos[1], s.pos[2]);
+    const tgt = new THREE.Vector3(s.tgt[0], s.tgt[1], s.tgt[2]);
     this.follow = false;
-    this.controls.update();
+    if (instant) {
+      this.camera.position.copy(pos);
+      this.controls.target.copy(tgt);
+      this.controls.update();
+    } else this.rig.flyTo(pos, tgt);
   }
 
   private buildTerrain(): void {
-    const t = this.world.terrain;
-    this.ground = new THREE.Group();
-    this.scene.add(this.ground);
-    const size = t.half * 2;
-    const seg = t.n - 1;
-    const geo = new THREE.PlaneGeometry(size, size, seg, seg);
-    geo.rotateX(-Math.PI / 2);
-    const pos = geo.getAttribute('position') as THREE.BufferAttribute;
-    for (let i = 0; i < pos.count; i++) pos.setY(i, t.heightAt(pos.getX(i), -pos.getZ(i)));
-    geo.computeVertexNormals();
-    const nrm = geo.getAttribute('normal') as THREE.BufferAttribute;
-    const colors = new Float32Array(pos.count * 3);
-    const c = new THREE.Color();
-    const plains = new THREE.Color('#6e7446');
-    const plains2 = new THREE.Color('#857b52');
-    const rock = new THREE.Color('#7b7262');
-    const highRock = new THREE.Color('#8f8b86');
-    const snow = new THREE.Color('#eef2f5');
-    const sand = new THREE.Color('#b9a77a');
-    const seabed = new THREE.Color('#304a52');
-    for (let i = 0; i < pos.count; i++) {
-      const h = pos.getY(i);
-      const slope = 1 - nrm.getY(i);
-      const x = pos.getX(i);
-      const z = pos.getZ(i);
-      const n = 0.5 + 0.5 * Math.sin(x / 2300 + Math.sin(z / 3100) * 2) * Math.sin(z / 1900);
-      if (h < -5) c.copy(seabed);
-      else if (h < 8) c.copy(sand);
-      else if (h < 450) c.copy(plains).lerp(plains2, n * 0.7);
-      else if (h < 1400) c.copy(plains2).lerp(rock, clamp((h - 450) / 900, 0, 1));
-      else if (h < 2300) c.copy(rock).lerp(highRock, clamp((h - 1400) / 900, 0, 1));
-      else c.copy(highRock).lerp(snow, clamp((h - 2300) / 300, 0, 1));
-      if (slope > 0.25 && h > 100) c.lerp(rock, clamp((slope - 0.25) * 2.5, 0, 0.8));
-      colors[i * 3] = c.r;
-      colors[i * 3 + 1] = c.g;
-      colors[i * 3 + 2] = c.b;
-    }
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    const terrain = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
-    this.ground.add(terrain);
-    this.terrainMesh = terrain;
-
-    // Low-resolution skirt so the world does not end at the map edge.
-    const sk = new THREE.PlaneGeometry(size * 4, size * 4, 120, 120);
-    sk.rotateX(-Math.PI / 2);
-    const sp = sk.getAttribute('position') as THREE.BufferAttribute;
-    for (let i = 0; i < sp.count; i++) {
-      const x = sp.getX(i);
-      const y = -sp.getZ(i);
-      const out = Math.max(Math.abs(x), Math.abs(y));
-      const fade = clamp(1 - (out - t.half) / (size * 1.2), 0, 1);
-      sp.setY(i, Math.max(-60, t.heightAt(x, y)) * fade - 25);
-    }
-    sk.computeVertexNormals();
-    const skirt = new THREE.Mesh(sk, new THREE.MeshLambertMaterial({ color: 0x606846 }));
-    this.ground.add(skirt);
-
-    const sea = new THREE.Mesh(
-      // Sea level everywhere: the land hides it, so the coast can face any way on a random map.
-      new THREE.PlaneGeometry(size * 4, size * 4),
-      new THREE.MeshPhongMaterial({ color: 0x24506e, transparent: true, opacity: 0.9, shininess: 80, specular: 0x557799 }),
-    );
-    sea.rotateX(-Math.PI / 2);
-    this.ground.add(sea);
+    this.scenery = buildScenery(this.scene, this.world.terrain, terrainSeed(this.world.terrain, MAP_SEED));
+    this.sceneryTerrain = this.world.terrain;
+    this.terrainMesh = this.scenery.terrainMesh;
   }
 
   private siteLabel(text: string, site?: Site): CSS2DObject {
@@ -660,7 +597,7 @@ export class View3D {
       if (!e.alive) continue;
       seen.add(e.id);
       const o = this.entityObj(e);
-      const visible = e.airborne && (this.showTruth || e.side === 'blue' || w.t - e.lastDetected < 12);
+      const visible = this.isVisible(e);
       o.root.visible = visible;
       toThree(e.pos, o.root.position);
       const d = camPos.distanceTo(o.root.position);
@@ -696,12 +633,10 @@ export class View3D {
       let o = this.missileObjs.get(m.id);
       if (!o) {
         const body = model('interceptor');
-        const trail = makeTrail(m.spec.code === 'AAM' ? 0xcfe8ff : 0xf0f0f0, 170, 0.65);
-        const flame = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, sizeAttenuation: false }));
-        flame.scale.setScalar(0.01);
-        body.add(flame);
+        // Thin guide line over the whole flight; the motor smoke and flame come from Effects.
+        const trail = makeTrail(m.spec.code === 'AAM' ? 0xcfe8ff : 0xf0f0f0, 170, 0.28);
         this.scene.add(body, trail.line);
-        o = { body, trail, flame };
+        o = { body, trail };
         this.missileObjs.set(m.id, o);
       }
       toThree(m.pos, o.body.position);
@@ -709,7 +644,6 @@ export class View3D {
       o.body.scale.setScalar(clamp(d / 1400, 1, 80));
       this.tmp.set(m.pos.x + m.vel.x, m.pos.z + m.vel.z, -(m.pos.y + m.vel.y));
       o.body.lookAt(this.tmp);
-      o.flame.visible = w.t - m.t0 < m.spec.boostT;
       setTrail(o.trail, m.trail, m.pos);
     }
     for (const [id, o] of this.missileObjs) {
@@ -717,53 +651,6 @@ export class View3D {
       this.scene.remove(o.body, o.trail.line);
       this.missileObjs.delete(id);
     }
-  }
-
-  private syncEffects(): void {
-    const w = this.world;
-    const seen = new Set<number>();
-    for (const f of w.effects) {
-      seen.add(f.id);
-      let s = this.effectObjs.get(f.id);
-      if (!s) {
-        const smoke = f.kind === 'ground';
-        s = new THREE.Sprite(
-          new THREE.SpriteMaterial({ map: smoke ? smokeTex : glowTex, blending: smoke ? THREE.NormalBlending : THREE.AdditiveBlending, depthWrite: false, transparent: true }),
-        );
-        toThree(f.pos, s.position);
-        this.scene.add(s);
-        this.effectObjs.set(f.id, s);
-      }
-      const age = w.t - f.t0;
-      const dur = f.kind === 'big' ? 4 : f.kind === 'ground' ? 5 : 2.2;
-      const base = f.kind === 'small' ? 40 : f.kind === 'blast' ? 90 : f.kind === 'big' ? 260 : 140;
-      const k = clamp(age / dur, 0, 1);
-      s.scale.setScalar(base * (0.4 + 2.2 * Math.sqrt(k)));
-      s.material.opacity = 1 - k;
-      s.visible = k < 1;
-    }
-    for (const [id, s] of this.effectObjs) {
-      if (seen.has(id)) continue;
-      this.scene.remove(s);
-      s.material.dispose();
-      this.effectObjs.delete(id);
-    }
-  }
-
-  private syncTracers(): void {
-    let n = 0;
-    const max = this.tracerPos.length / 3;
-    for (const c of this.world.ciws) {
-      for (const r of c.rounds) {
-        if (n >= max) break;
-        this.tracerPos[n * 3] = r.pos.x;
-        this.tracerPos[n * 3 + 1] = r.pos.z;
-        this.tracerPos[n * 3 + 2] = -r.pos.y;
-        n++;
-      }
-    }
-    this.tracers.geometry.setDrawRange(0, n);
-    (this.tracers.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
   }
 
   private syncTrackLabels(): void {
@@ -804,7 +691,12 @@ export class View3D {
       if (this.selected === tr.id) {
         this.selRing.position.copy(l.obj.position);
         this.selRing.visible = true;
-        if (this.follow) this.controls.target.lerp(l.obj.position, 0.08);
+        if (this.follow) {
+          // Carry the camera along with the pivot so following keeps the same viewing angle.
+          this.tmp.copy(l.obj.position).sub(this.controls.target).multiplyScalar(0.08);
+          this.controls.target.add(this.tmp);
+          this.camera.position.add(this.tmp);
+        }
       }
     }
     for (const [id, l] of this.trackLabels) {
@@ -836,15 +728,40 @@ export class View3D {
     this.coverage.visible = this.showCoverage;
   }
 
+  /** What the player can see of an entity: own side, recent detections, or everything with "show undetected". */
+  isVisible(e: Entity): boolean {
+    return e.airborne && (this.showTruth || e.side === 'blue' || this.world.t - e.lastDetected < 12);
+  }
+
+  /** Clear trees and houses around every site whenever the set of sites changes, so nothing is buried in a forest. */
+  private syncClearings(): void {
+    const key = this.world.sites.map((s) => `${Math.round(s.pos.x)},${Math.round(s.pos.y)}`).join(';');
+    if (key === this.clearedKey) return;
+    this.clearedKey = key;
+    for (const s of this.world.sites) this.scenery.clearAround(s.pos.x, s.pos.y, s.radius + (s.kind === 'asset' ? 250 : 60));
+  }
+
   render(): void {
+    const now = performance.now();
+    const realDt = Math.min(0.25, (now - this.lastFrame) / 1000);
+    this.lastFrame = now;
+    const ev = this.events.poll(this.world);
+    const visible = (e: Entity): boolean => this.isVisible(e);
+    this.syncClearings();
     this.syncStatic();
     this.syncEntities();
     this.syncMissiles();
-    this.syncEffects();
-    this.syncTracers();
     this.syncTrackLabels();
+    this.rig.following = this.follow && this.selected !== null;
+    this.rig.update(realDt);
     this.controls.update();
-    this.renderer.render(this.scene, this.camera);
+    this.rig.clampAboveGround();
+    this.fx.update(this.world, ev, visible);
+    this.scenery.update(realDt);
+    updateHaze(this.scene, this.camera.position.y);
+    this.camera.updateMatrixWorld();
+    this.sound.update(this.world, ev, this.camera, visible, realDt);
+    this.composer.render();
     this.labels.render(this.scene, this.camera);
   }
 }

@@ -1,4 +1,5 @@
 import { dist, dot, norm, sub } from './math';
+import type { FireUnit } from './sites';
 import type { Ident, Track, TrackClass } from './tracker';
 import type { World } from './world';
 
@@ -22,8 +23,8 @@ const PREFERENCE: Record<TrackClass, ('LR' | 'MR' | 'SH')[]> = {
   UNK: ['MR', 'SH'],
 };
 
-/** MR rounds held back from drones. */
-export const MR_RESERVE = 6;
+/** Share of an MR battery's rounds held back from drones. */
+export const MR_RESERVE = 1 / 3;
 
 export const salvoFor = (tr: Track): number => (tr.cls === 'TBM' ? 2 : 1);
 
@@ -61,12 +62,18 @@ export function autoEngage(w: World): void {
     if (w.fighters.some((f) => f.alive && f.state === 'intercept' && f.targetTrackId === tr.id)) continue;
     const prefs = [...PREFERENCE[tr.cls]];
     if (tr.cls === 'UAV' && tgo < 90) prefs.push('LR');
-    for (const code of prefs) {
-      const u = w.unit(code);
-      // Magazine discipline: keep the last MR rounds for cruise missiles, ARMs and aircraft.
-      if (code === 'MR' && tr.cls === 'UAV' && u && u.rounds <= MR_RESERVE) continue;
-      if (u && u.feasibility(w, tr).ok) {
-        u.fire(w, tr, salvoFor(tr));
+    for (const type of prefs) {
+      // Of the batteries of this type that can take the shot, the one with the earliest intercept.
+      let best: { u: FireUnit; tof: number } | null = null;
+      for (const u of w.units) {
+        if (u.type !== type) continue;
+        // Magazine discipline: keep the last MR rounds for cruise missiles, ARMs and aircraft.
+        if (type === 'MR' && tr.cls === 'UAV' && u.rounds <= Math.ceil(u.maxRounds * MR_RESERVE)) continue;
+        const f = u.feasibility(w, tr);
+        if (f.ok && (!best || f.tof! < best.tof)) best = { u, tof: f.tof! };
+      }
+      if (best) {
+        best.u.fire(w, tr, salvoFor(tr));
         break;
       }
     }

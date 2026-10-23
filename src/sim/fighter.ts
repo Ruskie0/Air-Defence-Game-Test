@@ -122,7 +122,7 @@ export class Fighter extends Air {
         const off = angleBetween(this.vel, sub(p, this.pos));
         if (!this.aam && this.missiles > 0 && tr.confirmed && R < this.aamRange(p, v) && R > AAM_MSL.minRangeM && off < 45) {
           this.missiles--;
-          this.aam = new Interceptor(w, AAM_MSL, this.name, this.pos, p, clone(this.vel), tr.id);
+          this.aam = new Interceptor(w, AAM_MSL, null, this.name, this.pos, p, clone(this.vel), tr.id);
           w.missiles.push(this.aam);
           w.stats.fired.AAM++;
           w.stats.costM += AAM_MSL.costM;

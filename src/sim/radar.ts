@@ -367,3 +367,11 @@ export const AI_RADAR: RadarSpec = {
   scan: { kind: 'sector', halfWidthDeg: 60, frameS: 3, trackHz: 1 },
   mtiDb: 45, notchMps: 25, cnr10Db: 55, rangeAccM: 40, angleAccDeg: 0.2, pfa: 1e-6, iff: true, falseAlarmsPerScan: 0.1,
 };
+
+/** Early warning radar (L-band), rotating 6 rpm. Long reach, coarse angles, below most jammers' bands. */
+export const EW_RADAR: RadarSpec = {
+  freqGHz: 1.3, peakKW: 60, gainDb: 36, bwMHz: 1, nfDb: 3, lossDb: 9, nPulses: 24,
+  bwAzDeg: 2.2, bwElDeg: 4, sllDb: -35, slcDb: 20, maxRangeKm: 250, minElDeg: -1, maxElDeg: 30,
+  scan: { kind: 'rotating', rpm: 6 },
+  mtiDb: 45, notchMps: 20, cnr10Db: 55, rangeAccM: 120, angleAccDeg: 0.25, pfa: 1e-6, iff: true, falseAlarmsPerScan: 0.3,
+};

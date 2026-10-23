@@ -16,15 +16,24 @@ export interface Raid {
   t: number;
   launched: boolean;
   spawn: (w: World) => void;
+  /** Campaign package id, tagged on everything the raid spawns. */
+  pkg?: number;
 }
 
 /** Sandbox scenario: six scripted raids of rising difficulty, plus background civil traffic. */
 export class Scenario {
   readonly raids: Raid[];
   private nextCivil = 120;
+  private civil = false;
   done = false;
+  /** Logged when the last raid is over. */
+  doneMsg = 'All raids complete. The sandbox keeps running: use the spawn panel for more.';
 
-  constructor() {
+  constructor(raids?: Raid[]) {
+    if (raids) {
+      this.raids = raids;
+      return;
+    }
     this.raids = [
       {
         name: 'Raid 1: Drone swarm',
@@ -81,6 +90,7 @@ export class Scenario {
   }
 
   start(w: World): void {
+    this.civil = true;
     // Background traffic already en route.
     spawnAirliner(w, true, 0, 0.35);
     spawnAirliner(w, true, 2, 0.45);
@@ -103,19 +113,22 @@ export class Scenario {
     for (const r of this.raids) {
       if (!r.launched && w.t >= r.t) {
         r.launched = true;
+        w.spawnTag = r.pkg ?? -1;
         r.spawn(w);
+        w.spawnTag = -1;
         w.log(`${r.name}: ${r.desc}`, 'raid');
       }
     }
-    if (w.t >= this.nextCivil) {
+    if (this.civil && w.t >= this.nextCivil) {
       this.nextCivil = w.t + w.rng.range(170, 260);
       spawnAirliner(w, true);
     }
-    if (!this.done && this.raids.every((r) => r.launched) && w.t > this.raids[this.raids.length - 1].t + 60) {
-      const threats = w.entities.some((e) => e.alive && e.side === 'red');
+    const last = this.raids.length ? Math.max(...this.raids.map((r) => r.t)) : 0;
+    if (!this.done && this.raids.every((r) => r.launched) && w.t > last + 60) {
+      const threats = w.pendingCount > 0 || w.entities.some((e) => e.alive && e.side === 'red');
       if (!threats) {
         this.done = true;
-        w.log('All raids complete. The sandbox keeps running: use the spawn panel for more.', 'raid');
+        w.log(this.doneMsg, 'raid');
       }
     }
   }

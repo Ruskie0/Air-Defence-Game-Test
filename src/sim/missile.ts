@@ -1,6 +1,7 @@
 import { G, rho } from './constants';
 import { V3, add, addScaled, angleBetween, clamp, clone, dirAzEl, dist, dot, len, len2, lerp, norm, scale, sub, v3 } from './math';
 import type { Entity } from './entities';
+import type { FireUnit } from './sites';
 import type { Track } from './tracker';
 import type { World } from './world';
 
@@ -63,6 +64,8 @@ let nextMid = 1;
 export class Interceptor {
   readonly id = nextMid++;
   readonly spec: MissileSpec;
+  /** Launching fire unit (null for air-launched missiles); its radar guides TVM and command missiles. */
+  readonly fu: FireUnit | null;
   readonly unit: string;
   alive = true;
   pos: V3;
@@ -79,8 +82,9 @@ export class Interceptor {
   private missT = 0;
   private targetGone = false;
 
-  constructor(w: World, spec: MissileSpec, unit: string, from: V3, aimAt: V3, launchVel: V3 | null, trackId: number) {
+  constructor(w: World, spec: MissileSpec, fu: FireUnit | null, unit: string, from: V3, aimAt: V3, launchVel: V3 | null, trackId: number) {
     this.spec = spec;
+    this.fu = fu;
     this.unit = unit;
     this.pos = clone(from);
     this.t0 = w.t;
@@ -101,12 +105,9 @@ export class Interceptor {
   /** Can the guidance source currently see the homing target? */
   private homeValid(w: World, e: Entity): boolean {
     switch (this.spec.seeker) {
-      case 'tvm': {
-        const r = w.radarByCode('LR');
-        return !!r && r.isEmitting() && w.terrain.los(r.pos, e.pos);
-      }
+      case 'tvm':
       case 'cmd': {
-        const r = w.radarByCode('SH');
+        const r = this.fu?.radar;
         return !!r && r.isEmitting() && w.terrain.los(r.pos, e.pos);
       }
       case 'arh':
@@ -117,12 +118,12 @@ export class Interceptor {
   /** Midcourse uplink: TVM needs the LR radar tracking the target, ARH accepts any fused track. */
   private uplink(w: World, tr: Track): boolean {
     if (this.spec.seeker === 'tvm') {
-      const r = w.radarByCode('LR');
-      const lrT = tr.sources.get('LR') ?? -1e9;
+      const r = this.fu?.radar;
+      const lrT = r ? (tr.sources.get(r.code) ?? -1e9) : -1e9;
       return !!r && r.isEmitting() && (w.t - lrT < 4 || (tr.jam && (tr.sources.get('ESM') ?? -1e9) > w.t - 4));
     }
     if (this.spec.seeker === 'cmd') {
-      const r = w.radarByCode('SH');
+      const r = this.fu?.radar;
       return !!r && r.isEmitting();
     }
     return true;
@@ -172,7 +173,7 @@ export class Interceptor {
           this.targetGone = true;
         }
       } else {
-        const ref = this.spec.seeker === 'cmd' ? (w.radarByCode('SH')?.pos ?? this.pos) : this.pos;
+        const ref = this.spec.seeker === 'cmd' ? (this.fu?.radar?.pos ?? this.pos) : this.pos;
         // Angle noise grows with range from the guidance sensor; the floor is glint and fuze timing.
         const sigma = (this.spec.seeker === 'cmd' ? 0.0004 : this.spec.seeker === 'tvm' ? 0.0008 : 0.001) * dist(ref, this.home.pos) + 1.5;
         this.noise = v3(

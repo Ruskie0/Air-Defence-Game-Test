@@ -9,7 +9,7 @@ const RANGES = [20, 50, 100, 200];
 export class Ppi {
   readonly canvas: HTMLCanvasElement;
   private readonly g: CanvasRenderingContext2D;
-  private readonly world: World;
+  private world: World;
   private readonly relief: HTMLCanvasElement;
   rangeKm = 100;
   selected: number | null = null;
@@ -26,6 +26,11 @@ export class Ppi {
       e.preventDefault();
       this.cycleRange(e.deltaY > 0 ? 1 : -1);
     });
+  }
+
+  setWorld(w: World): void {
+    this.world = w;
+    this.selected = null;
   }
 
   cycleRange(dir: number): void {
@@ -173,14 +178,15 @@ export class Ppi {
       g.stroke();
       g.setLineDash([]);
     };
-    const lr = w.radarByCode('LR')!;
-    zone(lr.pos.x, lr.pos.y, 120, 'rgba(111,182,255,0.55)', lr.boresight - 60, lr.boresight + 60);
-    zone(lr.pos.x, lr.pos.y, 40, 'rgba(180,140,255,0.45)', lr.boresight - 60, lr.boresight + 60);
-    const mr = w.radarByCode('MR')!;
-    zone(mr.pos.x, mr.pos.y, 32, 'rgba(88,214,141,0.45)');
-    const sh = w.radarByCode('SH')!;
-    zone(sh.pos.x, sh.pos.y, 10, 'rgba(247,220,111,0.5)');
-    if (w.gnss.active) zone(w.gnss.site.pos.x, w.gnss.site.pos.y, w.gnss.rangeM / 1000, 'rgba(255,140,66,0.5)');
+    for (const u of w.units) {
+      const r = u.radar!;
+      if (u.type === 'LR') {
+        zone(r.pos.x, r.pos.y, 120, 'rgba(111,182,255,0.55)', r.boresight - 60, r.boresight + 60);
+        zone(r.pos.x, r.pos.y, 40, 'rgba(180,140,255,0.45)', r.boresight - 60, r.boresight + 60);
+      } else if (u.type === 'MR') zone(r.pos.x, r.pos.y, 32, 'rgba(88,214,141,0.45)');
+      else zone(r.pos.x, r.pos.y, 10, 'rgba(247,220,111,0.5)');
+    }
+    for (const j of w.gnss) if (j.active) zone(j.site.pos.x, j.site.pos.y, j.rangeM / 1000, 'rgba(255,140,66,0.5)');
 
     // Rotating radar sweeps.
     for (const r of w.radars) {

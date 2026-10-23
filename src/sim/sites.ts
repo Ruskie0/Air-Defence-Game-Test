@@ -40,13 +40,14 @@ export class Site {
 
 /** Emitter that mimics the LR radar's signature to draw anti-radiation missiles. */
 export class Decoy implements Emitter {
-  readonly name = 'Radar decoy';
+  readonly name: string;
   readonly signature = 'LR' as const;
   readonly site: Site;
   on = false;
 
   constructor(site: Site) {
     this.site = site;
+    this.name = site.name;
   }
 
   get pos(): V3 {
@@ -96,8 +97,12 @@ const no = (reason: string): Feasibility => ({ ok: false, reason });
 
 /** A SAM fire unit: its own radar (if any), launchers and fire channels. */
 export class FireUnit {
-  readonly code: 'LR' | 'MR' | 'SH';
+  readonly type: 'LR' | 'MR' | 'SH';
+  /** Unique code, also the code of the unit's radar (LR, LR2, MR, ...). */
+  readonly code: string;
   readonly name: string;
+  /** Campaign unit id. */
+  readonly uid: number;
   readonly spec: MissileSpec;
   readonly radar: Radar | null;
   readonly launchers: Launcher[];
@@ -105,10 +110,14 @@ export class FireUnit {
   readonly reloadS: number;
   /** MR can fire on any fused track; LR (TVM) and SHORAD (command guidance) need their own radar. */
   readonly remote: boolean;
+  /** Spare missiles held at the battery for reloading launchers. */
+  spares = Infinity;
   private queue: { t: number; trackId: number }[] = [];
 
   constructor(
-    code: 'LR' | 'MR' | 'SH',
+    type: 'LR' | 'MR' | 'SH',
+    code: string,
+    uid: number,
     name: string,
     spec: MissileSpec,
     radar: Radar | null,
@@ -117,7 +126,9 @@ export class FireUnit {
     reloadS: number,
     remote: boolean,
   ) {
+    this.type = type;
     this.code = code;
+    this.uid = uid;
     this.name = name;
     this.spec = spec;
     this.radar = radar;
@@ -137,7 +148,7 @@ export class FireUnit {
 
   activeTargets(w: World): Set<number> {
     const s = new Set<number>();
-    for (const m of w.missiles) if (m.alive && m.unit === this.code) s.add(m.trackId);
+    for (const m of w.missiles) if (m.alive && m.fu === this) s.add(m.trackId);
     for (const q of this.queue) s.add(q.trackId);
     return s;
   }
@@ -184,12 +195,12 @@ export class FireUnit {
     if (w.t - tr.t > (this.remote ? 5 : 3)) return no('track stale');
     if (tr.cls === 'TBM' && !s.tbmRangeM) return no('not TBM capable');
     if (!tr.skin && tr.sigma > 3000) return no(`jammer fix too coarse (${(tr.sigma / 1000).toFixed(0)} km)`);
-    if (this.code === 'LR') {
-      const lr = tr.sources.get('LR') ?? -1e9;
+    if (this.type === 'LR') {
+      const lr = tr.sources.get(this.code) ?? -1e9;
       const esm = tr.sources.get('ESM') ?? -1e9;
       if (w.t - lr > 4 && !(tr.jam && w.t - esm < 4)) return no('LR radar not tracking');
     }
-    if (this.code === 'SH' && this.radar && !w.terrain.los(this.radar.pos, tr.predict(w.t))) return no('no tracker line of sight');
+    if (this.type === 'SH' && this.radar && !w.terrain.los(this.radar.pos, tr.predict(w.t))) return no('no tracker line of sight');
     const active = this.activeTargets(w);
     if (!active.has(tr.id) && active.size >= this.channels) return no('all fire channels busy');
     let best = ready[0];
@@ -225,9 +236,11 @@ export class FireUnit {
   update(w: World): void {
     for (const l of this.launchers) {
       if (l.reloadAt > 0 && w.t >= l.reloadAt && l.site.alive) {
-        l.rounds = l.max;
+        const n = Math.min(l.max - l.rounds, this.spares);
+        l.rounds += n;
+        this.spares -= n;
         l.reloadAt = 0;
-        w.log(`${this.name} launcher reloaded`, 'info');
+        if (n > 0) w.log(`${this.name} launcher reloaded${Number.isFinite(this.spares) ? ` (${this.spares} spares left)` : ''}`, 'info');
       }
     }
     while (this.queue.length && this.queue[0].t <= w.t) {
@@ -241,11 +254,11 @@ export class FireUnit {
       const { pip } = this.pip(w, tr, l.site.pos);
       l.rounds--;
       // The reload crew starts on a launcher as soon as it has fired.
-      if (l.reloadAt === 0) l.reloadAt = w.t + this.reloadS;
+      if (l.reloadAt === 0 && this.spares > 0) l.reloadAt = w.t + this.reloadS;
       const from = clone(l.site.pos);
       from.z += 4;
-      w.missiles.push(new Interceptor(w, this.spec, this.code, from, pip, null, tr.id));
-      w.stats.fired[this.code]++;
+      w.missiles.push(new Interceptor(w, this.spec, this, this.name, from, pip, null, tr.id));
+      w.stats.fired[this.type]++;
       w.stats.costM += this.spec.costM;
     }
   }

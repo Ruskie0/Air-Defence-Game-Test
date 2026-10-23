@@ -3,10 +3,11 @@ import { Ciws } from './ciws';
 import { Arm, Cruise, Emitter, Entity } from './entities';
 import { Fighter } from './fighter';
 import { V3, add, clone, dist, norm, scale, sub, v3 } from './math';
-import { Interceptor, LR_MSL, MR_MSL, SH_MSL } from './missile';
-import { CIWS_RADAR, LR_RADAR, MR_RADAR, Radar, Report, SH_RADAR } from './radar';
+import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, UnitType, sandboxDeployment } from './catalog';
+import { Interceptor, LR_MSL, MR_MSL, MissileSpec, SH_MSL } from './missile';
+import { CIWS_RADAR, EW_RADAR, LR_RADAR, MR_RADAR, Radar, RadarSpec, Report, SH_RADAR } from './radar';
 import { Rng } from './rng';
-import { Scenario } from './scenario';
+import { Raid, Scenario } from './scenario';
 import { Decoy, FireUnit, GnssJammer, Launcher, Site, SiteKind } from './sites';
 import { Terrain } from './terrain';
 import { Wcs, autoEngage } from './tewa';
@@ -38,6 +39,30 @@ export interface Stats {
   civilian: number;
 }
 
+export interface WorldOptions {
+  seed?: number;
+  /** Share one terrain between worlds (campaign days, the deployment preview). */
+  terrain?: Terrain;
+  deployment?: Deployment;
+  /** Raid plan; the six-raid sandbox scenario when omitted. */
+  raids?: Raid[];
+  /** Background civil traffic on the airways. */
+  civil?: boolean;
+}
+
+/** What a deployed unit became in this world, so the campaign can read back its state after the day. */
+export interface Fielded {
+  unit: DeployedUnit;
+  sites: Site[];
+  fu?: FireUnit;
+  ciws?: Ciws;
+  fighters?: Fighter[];
+  radar?: Radar;
+}
+
+/** Terrain seed of the one map every mode is fought over. */
+export const MAP_SEED = 20261023;
+
 /** The whole simulation. Stepped at a fixed 60 Hz; all randomness comes from one seeded stream. */
 export class World {
   t = 0;
@@ -51,10 +76,11 @@ export class World {
   readonly units: FireUnit[] = [];
   readonly ciws: Ciws[] = [];
   readonly fighters: Fighter[] = [];
-  readonly gnss: GnssJammer;
-  readonly decoy: Decoy;
+  readonly gnss: GnssJammer[] = [];
+  readonly decoys: Decoy[] = [];
+  readonly fielded: Fielded[] = [];
   readonly tracker = new Tracker();
-  readonly scenario = new Scenario();
+  readonly scenario: Scenario;
   wcs: Wcs = 'TIGHT';
   readonly logEntries: LogEntry[] = [];
   /** Total log entries ever written (the list itself is capped). */
@@ -69,6 +95,12 @@ export class World {
     fratricide: 0,
     civilian: 0,
   };
+  /** Hits on defended sites per campaign raid package. */
+  readonly pkgHits = new Map<number, number>();
+  /** Seconds each radar spent radiating (by radar code). */
+  readonly radiating = new Map<string, number>();
+  /** Package tag given to everything spawned while it is set. */
+  spawnTag = -1;
   /** Track id remaps from fusion merges, so the UI can follow a selected track. */
   readonly remapped = new Map<number, number>();
   private readonly byId = new Map<number, Entity>();
@@ -78,15 +110,22 @@ export class World {
   private nextTewa = 0;
   private nextGnss = 0;
   private readonly names = new Map<string, number>();
+  private readonly typeCount = new Map<string, number>();
 
-  constructor(seed = 20261023) {
-    this.seed = seed;
-    this.rng = new Rng(seed);
-    this.terrain = new Terrain(seed);
-    this.layout();
-    this.gnss = new GnssJammer(this.addSite('GNSS jammer', 'gnss', 0, 2500, 15, 8));
-    this.decoy = new Decoy(this.addSite('Radar decoy', 'decoy', 4800, 8600, 8, 10));
-    this.scenario.start(this);
+  constructor(opts: WorldOptions | number = {}) {
+    const o: WorldOptions = typeof opts === 'number' ? { seed: opts } : opts;
+    this.seed = o.seed ?? MAP_SEED;
+    this.rng = new Rng(this.seed);
+    this.terrain = o.terrain ?? new Terrain(MAP_SEED);
+    const dep = o.deployment ?? sandboxDeployment();
+    for (const a of DEFENDED_ASSETS) {
+      const s = this.addSite(a.name, 'asset', a.x, a.y, 0, a.radius, true);
+      s.hp = dep.assets.find((x) => x.name === a.name)?.hp ?? 100;
+      s.alive = s.hp > 0;
+    }
+    for (const u of dep.units) this.field(u);
+    this.scenario = new Scenario(o.raids);
+    if (o.civil ?? true) this.scenario.start(this);
   }
 
   // ---------------------------------------------------------------- set-up
@@ -97,7 +136,7 @@ export class World {
     return s;
   }
 
-  private addRadar(code: string, name: string, spec: typeof LR_RADAR, site: Site, sig: Emitter['signature']): Radar {
+  private addRadar(code: string, name: string, spec: RadarSpec, site: Site, sig: Emitter['signature']): Radar {
     const r = new Radar(code, name, spec, site.pos, sig);
     r.az = this.rng.range(0, 360);
     site.onDestroyed = () => {
@@ -107,54 +146,101 @@ export class World {
     return r;
   }
 
-  private launchers(prefix: string, pts: [number, number][], rounds: number): Launcher[] {
-    return pts.map(([x, y], i) => {
-      const site = this.addSite(`${prefix} launcher ${i + 1}`, 'launcher', x, y, 2, 6);
-      const l: Launcher = { site, rounds, max: rounds, reloadAt: 0 };
-      site.onDestroyed = () => {
-        l.rounds = 0;
-      };
-      return l;
-    });
+  /** Sequence number of this unit among its type, and a unique code / display name. */
+  private ident(type: UnitType, code: string, name: string): { n: number; code: string; name: string } {
+    const n = (this.typeCount.get(type) ?? 0) + 1;
+    this.typeCount.set(type, n);
+    return { n, code: n === 1 ? code : `${code}${n}`, name: n === 1 ? name : `${name} ${n}` };
   }
 
-  private layout(): void {
-    this.addSite('Airbase', 'asset', 0, 0, 0, 320, true);
-    this.addSite('CRC', 'asset', -4200, -3600, 0, 40, true);
-    this.addSite('Power plant', 'asset', 6500, -9000, 0, 160, true);
-
-    const lrSite = this.addSite('LR radar', 'radar', 2500, 7000, 8, 12);
-    const lr = this.addRadar('LR', 'LR SAM radar', LR_RADAR, lrSite, 'LR');
-    lr.boresight = 0;
-    this.units.push(
-      new FireUnit('LR', 'LR SAM', LR_MSL, lr, this.launchers('LR', [[1700, 6300], [3400, 6200], [2000, 7900], [3200, 7800]], 4), 9, 600, false),
-    );
-
-    const mrSite = this.addSite('MR radar', 'radar', -9000, 9000, 12, 10);
-    const mr = this.addRadar('MR', 'MR SAM radar', MR_RADAR, mrSite, 'MR');
-    this.units.push(
-      new FireUnit('MR', 'MR SAM', MR_MSL, mr, this.launchers('MR', [[-7500, 7000], [-3000, 2600], [-11000, 10500]], 6), 8, 300, true),
-    );
-
-    const shSite = this.addSite('SHORAD', 'radar', 1500, -1600, 6, 8);
-    const sh = this.addRadar('SH', 'SHORAD radar', SH_RADAR, shSite, 'SH');
-    const shLauncher: Launcher = { site: shSite, rounds: 8, max: 8, reloadAt: 0 };
-    this.units.push(new FireUnit('SH', 'SHORAD', SH_MSL, sh, [shLauncher], 1, 120, false));
-
-    const c1 = this.addSite('CIWS 1', 'ciws', -700, 600, 4, 6);
-    const c2 = this.addSite('CIWS 2', 'ciws', 3000, 6500, 4, 6);
-    const r1 = this.addRadar('C1', 'CIWS 1 radar', CIWS_RADAR, c1, 'CIWS');
-    const r2 = this.addRadar('C2', 'CIWS 2 radar', CIWS_RADAR, c2, 'CIWS');
-    this.ciws.push(new Ciws('C1', 'CIWS 1', c1, r1), new Ciws('C2', 'CIWS 2', c2, r2));
-
-    const base = v3(0, 0, this.terrain.groundAt(0, 0));
-    const station = v3(0, 50000, 8000);
-    for (const [i, x] of [-12000, 12000].entries()) {
-      const f = new Fighter(`Viper ${i + 1}`, `F${i + 1}`, base, station, v3(x, 45000 + i * 3000, 8000));
-      f.hdg = i === 0 ? 90 : 270;
-      this.fighters.push(f);
-      this.spawn(f);
+  /** Instantiate one deployed unit: its sites, radar, launchers, gun or aircraft. */
+  field(u: DeployedUnit): Fielded {
+    const f: Fielded = { unit: u, sites: [] };
+    const site = (name: string, kind: SiteKind, x: number, y: number, mast: number, radius: number): Site => {
+      const s = this.addSite(name, kind, x, y, mast, radius);
+      f.sites.push(s);
+      return s;
+    };
+    const sam = (type: 'LR' | 'MR' | 'SH', spec: RadarSpec, missile: MissileSpec, unitName: string, radarName: string, mast: number): void => {
+      const id = this.ident(type, type, unitName);
+      const radarSite = site(id.n === 1 ? radarName : `${radarName} ${id.n}`, 'radar', u.x, u.y, mast, type === 'SH' ? 8 : 12);
+      const r = this.addRadar(id.code, `${id.name} radar`, spec, radarSite, type);
+      r.boresight = u.facing;
+      f.radar = r;
+      const launchers: Launcher[] = u.launchers.map((l, i) => {
+        const ls = type === 'SH' ? radarSite : site(`${id.name} launcher ${i + 1}`, 'launcher', l.x, l.y, 2, 6);
+        const launcher: Launcher = { site: ls, rounds: l.rounds, max: l.max, reloadAt: 0 };
+        if (type !== 'SH') {
+          ls.onDestroyed = () => {
+            launcher.rounds = 0;
+          };
+        }
+        return launcher;
+      });
+      const info = CATALOG[type];
+      const fu = new FireUnit(type, id.code, u.uid, id.name, missile, r, launchers, info.channels!, info.reloadS!, type === 'MR');
+      fu.spares = u.spares;
+      // A launch with rounds already missing starts the reload clock straight away.
+      for (const l of launchers) if (l.rounds < l.max && fu.spares > 0) l.reloadAt = info.reloadS!;
+      this.units.push(fu);
+      f.fu = fu;
+    };
+    switch (u.type) {
+      case 'LR':
+        sam('LR', LR_RADAR, LR_MSL, 'LR SAM', 'LR radar', 8);
+        break;
+      case 'MR':
+        sam('MR', MR_RADAR, MR_MSL, 'MR SAM', 'MR radar', 12);
+        break;
+      case 'SH':
+        sam('SH', SH_RADAR, SH_MSL, 'SHORAD', 'SHORAD', 6);
+        break;
+      case 'CIWS': {
+        const id = this.ident('CIWS', 'C', 'CIWS');
+        const code = `C${id.n}`;
+        const name = `CIWS ${id.n}`;
+        const s = site(name, 'ciws', u.x, u.y, 4, 6);
+        const r = this.addRadar(code, `${name} radar`, CIWS_RADAR, s, 'CIWS');
+        f.radar = r;
+        const c = new Ciws(code, name, s, r);
+        this.ciws.push(c);
+        f.ciws = c;
+        break;
+      }
+      case 'EWR': {
+        const id = this.ident('EWR', 'EW', 'EW radar');
+        const s = site(id.name, 'radar', u.x, u.y, 14, 14);
+        f.radar = this.addRadar(id.code, id.name, EW_RADAR, s, 'EW');
+        break;
+      }
+      case 'GNSS': {
+        const id = this.ident('GNSS', 'GJ', 'GNSS jammer');
+        this.gnss.push(new GnssJammer(site(id.name, 'gnss', u.x, u.y, 15, 8)));
+        break;
+      }
+      case 'DECOY': {
+        const id = this.ident('DECOY', 'DC', 'Radar decoy');
+        this.decoys.push(new Decoy(site(id.name, 'decoy', u.x, u.y, 8, 10)));
+        break;
+      }
+      case 'CAP': {
+        const base = v3(0, 0, this.terrain.groundAt(0, 0));
+        const station = v3(u.x, u.y, 8000);
+        f.fighters = [];
+        for (let i = 0; i < u.aircraft; i++) {
+          const n = this.fighters.length + 1;
+          const start = v3(u.x + (i === 0 ? -12000 : 12000), u.y - 5000 + i * 3000, 8000);
+          const fi = new Fighter(`Viper ${n}`, `F${n}`, base, station, start);
+          fi.hdg = i === 0 ? 90 : 270;
+          this.fighters.push(fi);
+          this.spawn(fi);
+          f.fighters.push(fi);
+        }
+        break;
+      }
     }
+    this.fielded.push(f);
+    return f;
   }
 
   // ---------------------------------------------------------------- queries
@@ -163,7 +249,8 @@ export class World {
     return this.radars.find((r) => r.code === code);
   }
 
-  unit(code: 'LR' | 'MR' | 'SH'): FireUnit | undefined {
+  /** Fire unit by its unique code (LR, LR2, MR, SH, ...). */
+  unit(code: string): FireUnit | undefined {
     return this.units.find((u) => u.code === code);
   }
 
@@ -172,7 +259,7 @@ export class World {
   }
 
   emitters(): Emitter[] {
-    return [...this.radars, this.decoy];
+    return [...this.radars, ...this.decoys];
   }
 
   jammers(): Entity[] {
@@ -181,6 +268,10 @@ export class World {
 
   entityById(id: number): Entity | undefined {
     return this.byId.get(id);
+  }
+
+  get pendingCount(): number {
+    return this.pending.length;
   }
 
   site(name: string): Site | undefined {
@@ -206,11 +297,13 @@ export class World {
   }
 
   spawn(e: Entity): void {
+    if (this.spawnTag >= 0 && e.pkg < 0) e.pkg = this.spawnTag;
     this.entities.push(e);
     this.byId.set(e.id, e);
   }
 
   spawnLater(e: Entity, delay: number): void {
+    if (this.spawnTag >= 0 && e.pkg < 0) e.pkg = this.spawnTag;
     this.pending.push({ t: this.t + delay, e });
   }
 
@@ -231,7 +324,10 @@ export class World {
         hit = true;
       }
     }
-    if (hit) this.stats.leakers++;
+    if (hit) {
+      this.stats.leakers++;
+      if (e.pkg >= 0) this.pkgHits.set(e.pkg, (this.pkgHits.get(e.pkg) ?? 0) + 1);
+    }
     else if (e.target) {
       this.log(`${e.name} impacted ${Math.round(dist(e.pos, e.target))} m from ${e.targetName}`, e.gnssJammed ? 'info' : 'alert');
     }
@@ -260,6 +356,7 @@ export class World {
     const route = fromNorth ? valleyRoute(from.pos.x < 0 ? 0 : 1, from.pos.y) : [];
     const cm = new Cruise(this.nextName('ALCM'), start, route, target, name);
     cm.hdg = (from as unknown as { hdg: number }).hdg ?? 180;
+    cm.pkg = from.pkg;
     this.spawn(cm);
     this.tracker.markHostileAct(this, from.pos);
   }
@@ -267,6 +364,7 @@ export class World {
   launchArm(from: Entity, em: Emitter): void {
     const dir = norm(add(sub(em.pos, from.pos), v3(0, 0, 4000)));
     const arm = new Arm(this.nextName('ARM'), from.pos, add(from.vel, scale(dir, 300)), em, this.t);
+    arm.pkg = from.pkg;
     this.spawn(arm);
     this.tracker.markHostileAct(this, from.pos);
   }
@@ -298,7 +396,7 @@ export class World {
 
   // ---------------------------------------------------------------- player commands
 
-  engage(trackId: number, code: 'LR' | 'MR' | 'SH'): string {
+  engage(trackId: number, code: string): string {
     const tr = this.tracker.get(trackId);
     const u = this.unit(code);
     if (!tr || !u) return 'no such track';
@@ -332,12 +430,12 @@ export class World {
   private stepGnss(dt: number): void {
     const check = this.t >= this.nextGnss;
     if (check) this.nextGnss = this.t + 1;
-    const j = this.gnss;
+    const live = this.gnss.filter((j) => j.active);
     for (const e of this.entities) {
       if (!e.alive || e.gnssDep <= 0) continue;
       if (check) {
         const was = e.gnssJammed;
-        e.gnssJammed = j.active && dist(e.pos, j.site.pos) < j.rangeM && this.terrain.los(j.site.pos, e.pos);
+        e.gnssJammed = live.some((j) => dist(e.pos, j.site.pos) < j.rangeM && this.terrain.los(j.site.pos, e.pos));
         if (e.gnssJammed && !was) {
           const a = this.rng.range(0, Math.PI * 2);
           const m = e.gnssDep * this.rng.range(0.5, 2);
@@ -373,7 +471,10 @@ export class World {
     this.stepGnss(dt);
 
     const reports: Report[] = [];
-    for (const r of this.allRadars()) r.step(this, dt, reports);
+    for (const r of this.allRadars()) {
+      r.step(this, dt, reports);
+      if (r.isEmitting()) this.radiating.set(r.code, (this.radiating.get(r.code) ?? 0) + dt);
+    }
     this.tracker.process(this, reports);
 
     for (const u of this.units) u.update(this);

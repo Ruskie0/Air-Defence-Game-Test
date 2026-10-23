@@ -191,7 +191,15 @@ export class View3D {
   selected: number | null = null;
   onSelect: (trackId: number) => void = () => {};
   private readonly container: HTMLElement;
-  private readonly world: World;
+  private world: World;
+  private terrainMesh: THREE.Mesh | null = null;
+  private readonly preview = new THREE.Group();
+  private readonly raycaster = new THREE.Raycaster();
+  private down: { x: number; y: number } | null = null;
+  /** Set while the planning screen wants map clicks: called with the ground point clicked. */
+  onGroundClick: ((p: V3) => void) | null = null;
+  /** Called with the ground point under the pointer while onGroundClick is set. */
+  onGroundHover: ((p: V3 | null) => void) | null = null;
   private readonly entityObjs = new Map<number, EntityObj>();
   private readonly missileObjs = new Map<number, { body: THREE.Object3D; trail: TrailObj; flame: THREE.Sprite }>();
   private readonly effectObjs = new Map<number, THREE.Sprite>();
@@ -252,8 +260,93 @@ export class View3D {
     this.selRing.visible = false;
     this.scene.add(this.selRing);
 
+    this.scene.add(this.preview);
+    const el = this.renderer.domElement;
+    el.addEventListener('pointerdown', (e) => (this.down = { x: e.clientX, y: e.clientY }));
+    el.addEventListener('pointerup', (e) => {
+      if (!this.down || !this.onGroundClick || e.button !== 0) return;
+      const moved = Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y);
+      this.down = null;
+      if (moved > 5) return;
+      const p = this.pickGround(e.clientX, e.clientY);
+      if (p) this.onGroundClick(p);
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (this.onGroundHover) this.onGroundHover(this.pickGround(e.clientX, e.clientY));
+    });
+
     window.addEventListener('resize', () => this.resize());
     this.resize();
+  }
+
+  /** Ground point under a screen position, in sim coordinates. */
+  pickGround(clientX: number, clientY: number): V3 | null {
+    if (!this.terrainMesh) return null;
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hit = this.raycaster.intersectObject(this.terrainMesh, false)[0];
+    if (!hit) return null;
+    return { x: hit.point.x, y: -hit.point.z, z: hit.point.y };
+  }
+
+  /** Placement preview: a ring of the unit's reach and a marker, or nothing. */
+  setPreview(p: V3 | null, rangeKm = 0, ok = true, sector?: { facing: number; half: number }): void {
+    for (const c of [...this.preview.children]) {
+      this.preview.remove(c);
+      if (c instanceof THREE.Line) c.geometry.dispose();
+    }
+    if (!p) return;
+    const color = ok ? 0x9cffc4 : 0xff6060;
+    const w = this.world;
+    const arc = (r: number, from: number, to: number, closed: boolean): void => {
+      const pts: THREE.Vector3[] = [];
+      if (closed) pts.push(new THREE.Vector3(p.x, w.terrain.groundAt(p.x, p.y) + 60, -p.y));
+      const step = Math.max(0.5, (to - from) / 240);
+      for (let a = from; a <= to + 0.01; a += step) {
+        const q = polar(a, r);
+        const x = p.x + q.x;
+        const y = p.y + q.y;
+        pts.push(new THREE.Vector3(x, Math.max(0, w.terrain.groundAt(x, y)) + 60, -y));
+      }
+      if (closed) pts.push(pts[0].clone());
+      this.preview.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9 })));
+    };
+    if (rangeKm > 0) {
+      if (sector) arc(rangeKm * 1000, sector.facing - sector.half, sector.facing + sector.half, true);
+      else arc(rangeKm * 1000, 0, 360, false);
+    }
+    arc(Math.max(250, rangeKm * 25), 0, 360, false);
+  }
+
+  /** Show another world (a new day, the deployment preview) over the same terrain. */
+  setWorld(w: World): void {
+    this.world = w;
+    for (const s of this.siteObjs) this.scene.remove(s.root);
+    this.siteObjs.length = 0;
+    this.antennas.length = 0;
+    this.turrets.length = 0;
+    for (const c of [...this.coverage.children]) {
+      this.coverage.remove(c);
+      if (c instanceof THREE.Line) c.geometry.dispose();
+    }
+    for (const o of this.entityObjs.values()) {
+      this.scene.remove(o.root);
+      if (o.trail) this.scene.remove(o.trail.line);
+    }
+    this.entityObjs.clear();
+    for (const o of this.missileObjs.values()) this.scene.remove(o.body, o.trail.line);
+    this.missileObjs.clear();
+    for (const o of this.effectObjs.values()) this.scene.remove(o);
+    this.effectObjs.clear();
+    for (const l of this.trackLabels.values()) {
+      this.scene.remove(l.obj);
+      l.el.remove();
+    }
+    this.trackLabels.clear();
+    this.selected = null;
+    this.buildSites();
+    this.buildCoverage();
   }
 
   resize(): void {
@@ -317,6 +410,7 @@ export class View3D {
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     const terrain = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
     this.scene.add(terrain);
+    this.terrainMesh = terrain;
 
     // Low-resolution skirt so the world does not end at the map edge.
     const sk = new THREE.PlaneGeometry(size * 4, size * 4, 120, 120);
@@ -395,8 +489,10 @@ export class View3D {
           const radar = w.radars.find((r) => r.pos === s.pos || (r.pos.x === s.pos.x && r.pos.y === s.pos.y));
           const ant = new THREE.Group();
           ant.position.y = s.pos.z - ground;
-          const plate = new THREE.Mesh(new THREE.BoxGeometry(radar?.code === 'LR' ? 6 : 7, radar?.code === 'LR' ? 6 : 3, 0.5), m(0x4b5230));
-          plate.rotation.x = radar?.code === 'LR' ? -0.4 : -0.2;
+          const kind = radar?.signature;
+          const [pw, ph] = kind === 'LR' ? [6, 6] : kind === 'EW' ? [14, 5] : [7, 3];
+          const plate = new THREE.Mesh(new THREE.BoxGeometry(pw, ph, 0.5), m(0x4b5230));
+          plate.rotation.x = kind === 'LR' ? -0.4 : -0.2;
           ant.add(plate);
           const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, s.pos.z - ground, 6), m(0x555555));
           mast.position.y = (s.pos.z - ground) / 2;
@@ -464,7 +560,7 @@ export class View3D {
         const p = polar(a, r);
         const x = cx.x + p.x;
         const y = cx.y + p.y;
-        pts.push(new THREE.Vector3(x, w.terrain.groundAt(x, y) + 40, -y));
+        pts.push(new THREE.Vector3(x, Math.max(0, w.terrain.groundAt(x, y)) + 40, -y));
       }
       const line = new THREE.Line(
         new THREE.BufferGeometry().setFromPoints(pts),
@@ -472,22 +568,27 @@ export class View3D {
       );
       this.coverage.add(line);
     };
-    const lr = w.radarByCode('LR')!;
-    ring(lr.pos, 120000, 0x6fb6ff, lr.boresight - 60, lr.boresight + 60);
-    ring(lr.pos, 40000, 0xb48cff, lr.boresight - 60, lr.boresight + 60);
-    for (const a of [lr.boresight - 60, lr.boresight + 60]) {
-      const pts: THREE.Vector3[] = [];
-      for (let r = 0; r <= 120000; r += 1000) {
-        const p = polar(a, r);
-        const x = lr.pos.x + p.x;
-        const y = lr.pos.y + p.y;
-        pts.push(new THREE.Vector3(x, w.terrain.groundAt(x, y) + 40, -y));
-      }
-      this.coverage.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x6fb6ff, transparent: true, opacity: 0.4 })));
+    for (const u of w.units) {
+      const r = u.radar!;
+      if (u.type === 'LR') {
+        ring(r.pos, 120000, 0x6fb6ff, r.boresight - 60, r.boresight + 60);
+        ring(r.pos, 40000, 0xb48cff, r.boresight - 60, r.boresight + 60);
+        for (const a of [r.boresight - 60, r.boresight + 60]) {
+          const pts: THREE.Vector3[] = [];
+          for (let d = 0; d <= 120000; d += 1000) {
+            const p = polar(a, d);
+            const x = r.pos.x + p.x;
+            const y = r.pos.y + p.y;
+            pts.push(new THREE.Vector3(x, w.terrain.groundAt(x, y) + 40, -y));
+          }
+          this.coverage.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x6fb6ff, transparent: true, opacity: 0.4 })));
+        }
+      } else if (u.type === 'MR') {
+        for (const l of u.launchers) ring(l.site.pos, 32000, 0x58d68d);
+      } else ring(r.pos, 10000, 0xf7dc6f);
     }
-    for (const l of w.unit('MR')!.launchers) ring(l.site.pos, 32000, 0x58d68d);
-    ring(w.radarByCode('SH')!.pos, 10000, 0xf7dc6f);
-    ring(w.gnss.site.pos, w.gnss.rangeM, 0xff8c42);
+    for (const j of w.gnss) ring(j.site.pos, j.rangeM, 0xff8c42);
+    for (const f of w.fielded) if (f.unit.type === 'CAP') ring({ x: f.unit.x, y: f.unit.y, z: 0 }, 15000, 0x4da6ff);
     this.scene.add(this.coverage);
   }
 

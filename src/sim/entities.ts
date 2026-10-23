@@ -40,7 +40,7 @@ export interface Emitter {
   name: string;
   pos: V3;
   /** What the emission looks like to an ESM receiver. A decoy copies the LR radar's signature. */
-  signature: 'LR' | 'MR' | 'SH' | 'CIWS';
+  signature: 'LR' | 'MR' | 'SH' | 'CIWS' | 'EW';
   alive: boolean;
   isEmitting(): boolean;
 }
@@ -73,6 +73,8 @@ export abstract class Entity {
   gnssJammed = false;
   /** Sim time of the last detection by any friendly sensor (used to hide undetected truth in the 3D view). */
   lastDetected = -1e9;
+  /** Campaign raid package this threat belongs to (-1 outside the campaign). */
+  pkg = -1;
 
   constructor(name: string, pos: V3) {
     this.name = name;
@@ -412,7 +414,7 @@ export class Sead extends Air {
   }
 
   private esm(w: World): void {
-    const rank = { LR: 0, MR: 1, SH: 2, CIWS: 3 };
+    const rank = { LR: 0, MR: 1, EW: 1, SH: 2, CIWS: 3 };
     let best: Emitter | null = null;
     let score = Infinity;
     for (const e of w.emitters()) {

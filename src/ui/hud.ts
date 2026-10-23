@@ -22,7 +22,9 @@ const $ = (id: string): HTMLElement => document.getElementById(id)!;
 const esc = (s: string): string => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 export class Hud {
-  private readonly w: World;
+  private w: World;
+  /** Campaign mode hides the sandbox spawn panel and offers to end the day once the raids are over. */
+  campaign: { day: number; days: number; onEndDay: () => void } | null = null;
   private readonly view: View3D;
   private readonly ppi: Ppi;
   private readonly ctl: GameControl;
@@ -42,6 +44,15 @@ export class Hud {
     this.buildStatic();
     document.addEventListener('pointerdown', (e) => this.onAction(e));
     document.addEventListener('keydown', (e) => this.onKey(e));
+  }
+
+  /** Point the HUD at a new world (a new campaign day, or the sandbox). */
+  setWorld(w: World): void {
+    this.w = w;
+    this.cache.clear();
+    this.lastLogLen = -1;
+    this.select(null);
+    $('spawn').hidden = !!this.campaign;
   }
 
   private set(id: string, html: string): void {
@@ -133,13 +144,20 @@ export class Hud {
         }
         break;
       }
-      case 'gnss':
-        w.gnss.on = !w.gnss.on;
-        w.log(`GNSS jammer ${w.gnss.on ? 'ON' : 'OFF'}`, 'info');
+      case 'gnss': {
+        const j = w.gnss[Number(d.i)];
+        j.on = !j.on;
+        w.log(`${j.site.name} ${j.on ? 'ON' : 'OFF'}`, 'info');
         break;
-      case 'decoy':
-        w.decoy.on = !w.decoy.on;
-        w.log(`Radar decoy ${w.decoy.on ? 'radiating' : 'off'}`, 'info');
+      }
+      case 'decoy': {
+        const dc = w.decoys[Number(d.i)];
+        dc.on = !dc.on;
+        w.log(`${dc.name} ${dc.on ? 'radiating' : 'off'}`, 'info');
+        break;
+      }
+      case 'endday':
+        this.campaign?.onEndDay();
         break;
       case 'cap-station':
         w.fighters[Number(d.i)].toStation(w);
@@ -152,7 +170,7 @@ export class Hud {
         break;
       case 'engage': {
         const tr = this.resolve();
-        if (tr) this.lastOrder = `${d.code}: ${w.engage(tr.id, d.code as 'LR' | 'MR' | 'SH')}`;
+        if (tr) this.lastOrder = `${w.unit(d.code!)?.name ?? d.code}: ${w.engage(tr.id, d.code!)}`;
         break;
       }
       case 'cap': {
@@ -214,15 +232,24 @@ export class Hud {
   private updateRaid(): void {
     const w = this.w;
     const r = w.scenario.next;
+    const total = w.scenario.raids.length;
+    const day = this.campaign ? `<span class="lbl">DAY</span><b>${this.campaign.day}</b><span class="dim">/${this.campaign.days}</span> ` : '';
     if (!r) {
-      this.set('raid', `<span class="lbl">RAIDS</span> all six launched${w.scenario.done ? ', sandbox clear' : ''}`);
+      const clear = w.scenario.done;
+      this.set(
+        'raid',
+        day +
+          `<span class="lbl">RAIDS</span> all ${total} launched${clear ? ', airspace clear' : ''}` +
+          (this.campaign ? `<button data-act="endday" class="${clear ? 'go' : ''}" title="${clear ? 'Go to the debrief' : 'Threats are still inbound: ending now counts them as leakers'}">End day</button>` : ''),
+      );
       return;
     }
-    const n = w.scenario.raids.indexOf(r);
+    const n = w.scenario.raids.filter((x) => x.launched).length;
     this.set(
       'raid',
-      `<span class="lbl">NEXT</span><span title="${esc(r.desc)}">${esc(r.name)}</span> <span class="mono">in ${fmtTime(r.t - w.t)}</span>` +
-        `<button data-act="raid">Launch now</button><span class="dim">${n}/6 launched</span>`,
+      day +
+        `<span class="lbl">NEXT</span><span title="${esc(r.desc)}">${esc(r.name)}</span> <span class="mono">in ${fmtTime(r.t - w.t)}</span>` +
+        `<button data-act="raid">Launch now</button><span class="dim">${n}/${total} launched</span>`,
     );
   }
 
@@ -255,7 +282,7 @@ export class Hud {
       const reload = u.launchers.filter((l) => l.reloadAt > 0 && l.site.alive);
       rows.push(`<div class="sys">
         <div class="sys-h"><b>${u.name}</b> ${this.radarState(r.code)}</div>
-        <div class="sys-b">Missiles <b>${u.rounds}</b>/${u.maxRounds} · Channels ${active}/${u.channels}${reload.length ? ` · reload ${fmtTime(Math.min(...reload.map((l) => l.reloadAt)) - w.t)}` : ''}
+        <div class="sys-b">Missiles <b>${u.rounds}</b>/${u.maxRounds}${Number.isFinite(u.spares) ? ` +${u.spares}` : ''} · Channels ${active}/${u.channels}${reload.length ? ` · reload ${fmtTime(Math.min(...reload.map((l) => l.reloadAt)) - w.t)}` : ''}
         <button data-act="emcon" data-code="${r.code}" ${r.alive ? '' : 'disabled'}>${r.emitting ? 'EMCON' : 'Radiate'}</button></div></div>`);
     }
     for (const c of w.ciws) {
@@ -273,12 +300,25 @@ export class Hud {
       rows.push(`<div class="sys"><div class="sys-h"><b>${c.name}</b> ${st}</div>
         <div class="sys-b">Rounds <b>${c.ammo}</b>/${c.maxAmmo} <button data-act="ciws" data-code="${c.code}" ${c.site.alive ? '' : 'disabled'}>${c.auto ? 'Hold' : 'Auto'}</button></div></div>`);
     }
-    rows.push('<h3>Electronic warfare</h3>');
-    rows.push(`<div class="sys"><div class="sys-h"><b>GNSS jammer</b> ${w.gnss.site.alive ? (w.gnss.on ? '<span class="st jam">ON</span>' : '<span class="st">OFF</span>') : '<span class="st dead">DESTROYED</span>'}
-      <button data-act="gnss">${w.gnss.on ? 'Off' : 'On'}</button></div><div class="sys-b dim">30 km, drags GNSS-guided drones off target</div></div>`);
-    rows.push(`<div class="sys"><div class="sys-h"><b>Radar decoy</b> ${w.decoy.alive ? (w.decoy.on ? '<span class="st jam">RADIATE</span>' : '<span class="st">OFF</span>') : '<span class="st dead">DESTROYED</span>'}
-      <button data-act="decoy">${w.decoy.on ? 'Off' : 'On'}</button></div><div class="sys-b dim">Mimics the LR radar for ARM seekers</div></div>`);
-    rows.push('<h3>Combat air patrol</h3>');
+    const ewr = w.fielded.filter((f) => f.unit.type === 'EWR' && f.radar);
+    if (ewr.length) {
+      rows.push('<h3>Sensors</h3>');
+      for (const f of ewr) {
+        const r = f.radar!;
+        rows.push(`<div class="sys"><div class="sys-h"><b>${r.name}</b> ${this.radarState(r.code)}</div>
+          <div class="sys-b dim">L-band, 250 km <button data-act="emcon" data-code="${r.code}" ${r.alive ? '' : 'disabled'}>${r.emitting ? 'EMCON' : 'Radiate'}</button></div></div>`);
+      }
+    }
+    if (w.gnss.length || w.decoys.length) rows.push('<h3>Electronic warfare</h3>');
+    w.gnss.forEach((j, i) => {
+      rows.push(`<div class="sys"><div class="sys-h"><b>${j.site.name}</b> ${j.site.alive ? (j.on ? '<span class="st jam">ON</span>' : '<span class="st">OFF</span>') : '<span class="st dead">DESTROYED</span>'}
+        <button data-act="gnss" data-i="${i}" ${j.site.alive ? '' : 'disabled'}>${j.on ? 'Off' : 'On'}</button></div><div class="sys-b dim">30 km, drags GNSS-guided drones off target</div></div>`);
+    });
+    w.decoys.forEach((dc, i) => {
+      rows.push(`<div class="sys"><div class="sys-h"><b>${dc.name}</b> ${dc.alive ? (dc.on ? '<span class="st jam">RADIATE</span>' : '<span class="st">OFF</span>') : '<span class="st dead">DESTROYED</span>'}
+        <button data-act="decoy" data-i="${i}" ${dc.alive ? '' : 'disabled'}>${dc.on ? 'Off' : 'On'}</button></div><div class="sys-b dim">Mimics the LR radar for ARM seekers</div></div>`);
+    });
+    if (w.fighters.length) rows.push('<h3>Combat air patrol</h3>');
     w.fighters.forEach((f, i) => {
       const tr = f.targetTrackId !== null ? w.tracker.get(f.targetTrackId) : undefined;
       const st = !f.alive ? 'LOST' : f.state === 'ground' ? `REARM ${fmtTime(f.groundUntil - w.t)}` : f.state === 'intercept' ? `INTERCEPT ${tr?.label ?? ''}` : f.state.toUpperCase();

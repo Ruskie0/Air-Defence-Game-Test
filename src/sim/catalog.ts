@@ -1,0 +1,158 @@
+import { AAM_MSL, LR_MSL, MR_MSL, MissileSpec, SH_MSL } from './missile';
+
+export type UnitType = 'LR' | 'MR' | 'SH' | 'CIWS' | 'EWR' | 'GNSS' | 'DECOY' | 'CAP';
+
+/** One launcher of a SAM battery, at an absolute map position. */
+export interface DeployedLauncher {
+  x: number;
+  y: number;
+  rounds: number;
+  max: number;
+}
+
+/** A unit as the campaign owns it between days: where it stands and what it has left. */
+export interface DeployedUnit {
+  /** Stable id across days. */
+  uid: number;
+  type: UnitType;
+  /** Main site (radar, gun, emitter) or, for CAP, the centre of the patrol station. */
+  x: number;
+  y: number;
+  /** Sector boresight for phased arrays (deg true). */
+  facing: number;
+  launchers: DeployedLauncher[];
+  /** Spare missiles held at the battery for reloads (SAMs); Infinity in the sandbox. */
+  spares: number;
+  /** CAP: aircraft remaining in the pair. */
+  aircraft: number;
+}
+
+export interface AssetState {
+  name: string;
+  hp: number;
+}
+
+export interface Deployment {
+  units: DeployedUnit[];
+  assets: AssetState[];
+}
+
+export interface UnitInfo {
+  type: UnitType;
+  name: string;
+  /** Purchase price, $M, including the first load of missiles. */
+  costM: number;
+  /** First campaign day it can be bought. */
+  unlockDay: number;
+  /** Shown in the shop. */
+  role: string;
+  missile?: MissileSpec;
+  /** SAMs: launchers that come with the battery, rounds per launcher, launcher limit. */
+  launchers?: number;
+  perLauncher?: number;
+  maxLaunchers?: number;
+  /** Price of one extra launcher, $M, loaded. */
+  launcherCostM?: number;
+  channels?: number;
+  reloadS?: number;
+  /** Radius drawn on the map when placing (km). */
+  rangeKm: number;
+  /** Has a sector that can be turned. */
+  sector?: boolean;
+}
+
+export const CATALOG: Record<UnitType, UnitInfo> = {
+  LR: {
+    type: 'LR', name: 'LR SAM battery', costM: 320, unlockDay: 3, missile: LR_MSL,
+    role: 'C-band phased array, 120° sector, 120 km missiles. The only defence against ballistic missiles (inside 40 km).',
+    launchers: 2, perLauncher: 4, maxLaunchers: 4, launcherCostM: 30, channels: 9, reloadS: 600, rangeKm: 120, sector: true,
+  },
+  MR: {
+    type: 'MR', name: 'MR SAM battery', costM: 130, unlockDay: 1, missile: MR_MSL,
+    role: 'X-band 3D radar, 32 km active-radar missiles that can fire on any track in the picture.',
+    launchers: 2, perLauncher: 6, maxLaunchers: 4, launcherCostM: 15, channels: 8, reloadS: 300, rangeKm: 32,
+  },
+  SH: {
+    type: 'SH', name: 'SHORAD unit', costM: 40, unlockDay: 1, missile: SH_MSL,
+    role: 'S-band search radar and 8 command-guided missiles, 10 km. Cheap, one target at a time.',
+    launchers: 1, perLauncher: 8, maxLaunchers: 1, channels: 1, reloadS: 120, rangeKm: 10,
+  },
+  CIWS: {
+    type: 'CIWS', name: 'CIWS gun', costM: 25, unlockDay: 1,
+    role: 'Radar-directed 4500 rpm gun, about 2 km. Last-ditch point defence; free to rearm.',
+    rangeKm: 2.5,
+  },
+  EWR: {
+    type: 'EWR', name: 'Early warning radar', costM: 55, unlockDay: 1,
+    role: 'L-band surveillance radar, 250 km, all round. Sees far and through most jamming, but is imprecise and draws SEAD.',
+    rangeKm: 250,
+  },
+  GNSS: {
+    type: 'GNSS', name: 'GNSS jammer', costM: 15, unlockDay: 1,
+    role: 'Denies satellite navigation within 30 km: GNSS-guided drones wander off their aim points.',
+    rangeKm: 30,
+  },
+  DECOY: {
+    type: 'DECOY', name: 'Radar decoy', costM: 10, unlockDay: 2,
+    role: 'Radiates like an LR radar. Anti-radiation missiles that lose their target re-acquire it.',
+    rangeKm: 1,
+  },
+  CAP: {
+    type: 'CAP', name: 'Fighter pair (CAP)', costM: 170, unlockDay: 2, missile: AAM_MSL,
+    role: 'Two fighters with airborne radar and 4 AAMs each. Place the patrol station; they intercept aircraft and jammers forward of the SAMs.',
+    rangeKm: 15,
+  },
+};
+
+/** Missile prices for rearming, $M per round. */
+export const ROUND_COST: Partial<Record<UnitType, number>> = { LR: LR_MSL.costM, MR: MR_MSL.costM, SH: SH_MSL.costM };
+
+export const DEFENDED_ASSETS: { name: string; x: number; y: number; radius: number; valueM: number }[] = [
+  { name: 'Airbase', x: 0, y: 0, radius: 320, valueM: 400 },
+  { name: 'CRC', x: -4200, y: -3600, radius: 40, valueM: 150 },
+  { name: 'Power plant', x: 6500, y: -9000, radius: 160, valueM: 250 },
+];
+
+/** Default launcher layout around a battery's radar (metres, relative). */
+export function launcherOffsets(type: UnitType, n: number, facing: number): [number, number][] {
+  const out: [number, number][] = [];
+  const ring = type === 'LR' ? 900 : type === 'MR' ? 2500 : 0;
+  for (let i = 0; i < n; i++) {
+    if (!ring) {
+      out.push([0, 0]);
+      continue;
+    }
+    const a = ((facing + 180 + (i - (n - 1) / 2) * (type === 'LR' ? 55 : 70)) * Math.PI) / 180;
+    out.push([Math.sin(a) * ring, Math.cos(a) * ring]);
+  }
+  return out;
+}
+
+/** A new, fully loaded unit at (x, y). */
+export function newUnit(uid: number, type: UnitType, x: number, y: number, facing = 0): DeployedUnit {
+  const info = CATALOG[type];
+  const n = info.launchers ?? 0;
+  const launchers = launcherOffsets(type, n, facing).map(([dx, dy]) => ({ x: x + dx, y: y + dy, rounds: info.perLauncher!, max: info.perLauncher! }));
+  return { uid, type, x, y, facing, launchers, spares: 0, aircraft: type === 'CAP' ? 2 : 0 };
+}
+
+/** The fixed order of battle of the sandbox scenario. */
+export function sandboxDeployment(): Deployment {
+  const l = (x: number, y: number, max: number): DeployedLauncher => ({ x, y, rounds: max, max });
+  const u = (uid: number, type: UnitType, x: number, y: number, launchers: DeployedLauncher[] = [], extra: Partial<DeployedUnit> = {}): DeployedUnit => ({
+    uid, type, x, y, facing: 0, launchers, spares: Infinity, aircraft: type === 'CAP' ? 2 : 0, ...extra,
+  });
+  return {
+    units: [
+      u(1, 'LR', 2500, 7000, [l(1700, 6300, 4), l(3400, 6200, 4), l(2000, 7900, 4), l(3200, 7800, 4)]),
+      u(2, 'MR', -9000, 9000, [l(-7500, 7000, 6), l(-3000, 2600, 6), l(-11000, 10500, 6)]),
+      u(3, 'SH', 1500, -1600, [l(1500, -1600, 8)]),
+      u(4, 'CIWS', -700, 600),
+      u(5, 'CIWS', 3000, 6500),
+      u(6, 'GNSS', 0, 2500),
+      u(7, 'DECOY', 4800, 8600),
+      u(8, 'CAP', 0, 50000),
+    ],
+    assets: DEFENDED_ASSETS.map((a) => ({ name: a.name, hp: 100 })),
+  };
+}

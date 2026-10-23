@@ -22,8 +22,9 @@ Every push to `main` builds and deploys to GitHub Pages through `.github/workflo
 ## Build and test
 
 ```sh
-npm run build                 # typecheck and bundle to dist/
-node scripts/playtest.mjs     # headless run through the raids, screenshots in playtest/
+npm run build      # typecheck and bundle to dist/
+npm run sim        # headless balance report: every raid, every threat's fate (no browser)
+npm run playtest   # headless browser run through the raids, screenshots in playtest/
 ```
 
 See [docs/DESIGN.md](docs/DESIGN.md) for the simulation model and the roadmap.

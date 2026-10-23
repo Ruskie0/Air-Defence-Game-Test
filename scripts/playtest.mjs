@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { chromium } from 'playwright';
 
-const simSeconds = Number(process.argv[2] ?? 1500);
+const simSeconds = Number(process.argv[2] ?? 3300);
 const port = 4318;
 const server = spawn('npx', ['vite', 'preview', '--port', String(port), '--strictPort'], { stdio: 'pipe' });
 await new Promise((r) => setTimeout(r, 2500));

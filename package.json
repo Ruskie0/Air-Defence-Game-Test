@@ -7,13 +7,17 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "playtest": "node scripts/playtest.mjs",
+    "sim": "esbuild scripts/sim-report.ts --bundle --platform=node --format=esm --outfile=playtest/sim.mjs --log-level=warning && node playtest/sim.mjs"
   },
   "dependencies": {
     "three": "0.186.1"
   },
   "devDependencies": {
     "@types/three": "0.186.0",
+    "esbuild": "0.28.2",
+    "playwright": "1.63.0",
     "typescript": "5.9.3",
     "vite": "7.3.7"
   }

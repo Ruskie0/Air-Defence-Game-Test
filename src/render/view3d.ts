@@ -199,6 +199,8 @@ export class View3D {
   private readonly container: HTMLElement;
   private world: World;
   private terrainMesh: THREE.Mesh | null = null;
+  /** Terrain, skirt and sea, rebuilt when a campaign is on another map. */
+  private ground = new THREE.Group();
   private readonly preview = new THREE.Group();
   private readonly raycaster = new THREE.Raycaster();
   private down: { x: number; y: number } | null = null;
@@ -335,7 +337,18 @@ export class View3D {
 
   /** Show another world (a new day, the deployment preview) over the same terrain. */
   setWorld(w: World): void {
+    const newMap = w.terrain !== this.world.terrain;
     this.world = w;
+    if (newMap) {
+      this.scene.remove(this.ground);
+      this.ground.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        m.geometry.dispose();
+        (m.material as THREE.Material).dispose();
+      });
+      this.buildTerrain();
+    }
     for (const s of this.siteObjs) {
       this.scene.remove(s.root);
       // CSS2D labels only clean up their DOM element when removed directly, not with a parent.
@@ -392,6 +405,8 @@ export class View3D {
 
   private buildTerrain(): void {
     const t = this.world.terrain;
+    this.ground = new THREE.Group();
+    this.scene.add(this.ground);
     const size = t.half * 2;
     const seg = t.n - 1;
     const geo = new THREE.PlaneGeometry(size, size, seg, seg);
@@ -428,7 +443,7 @@ export class View3D {
     }
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     const terrain = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
-    this.scene.add(terrain);
+    this.ground.add(terrain);
     this.terrainMesh = terrain;
 
     // Low-resolution skirt so the world does not end at the map edge.
@@ -444,15 +459,15 @@ export class View3D {
     }
     sk.computeVertexNormals();
     const skirt = new THREE.Mesh(sk, new THREE.MeshLambertMaterial({ color: 0x606846 }));
-    this.scene.add(skirt);
+    this.ground.add(skirt);
 
     const sea = new THREE.Mesh(
-      new THREE.PlaneGeometry(size * 4, size * 1.6),
+      // Sea level everywhere: the land hides it, so the coast can face any way on a random map.
+      new THREE.PlaneGeometry(size * 4, size * 4),
       new THREE.MeshPhongMaterial({ color: 0x24506e, transparent: true, opacity: 0.9, shininess: 80, specular: 0x557799 }),
     );
     sea.rotateX(-Math.PI / 2);
-    sea.position.set(0, 0, 48000 + size * 0.8);
-    this.scene.add(sea);
+    this.ground.add(sea);
   }
 
   private siteLabel(text: string, site?: Site): CSS2DObject {

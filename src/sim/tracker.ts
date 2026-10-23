@@ -1,5 +1,5 @@
 import { DEG, G, toDb } from './constants';
-import { V3, addScaled, clamp, clone, dist, hdist, len, lerp, sub, v3 } from './math';
+import { V3, addScaled, bearingDeg, clamp, clone, dist, hdist, len, lerp, sub, v3, wrap180 } from './math';
 import type { Report, Strobe } from './radar';
 import type { World } from './world';
 
@@ -25,6 +25,8 @@ export class Track {
   iffM5 = 0;
   iffM3 = 0;
   iffNone = 0;
+  /** Recent share of IFF interrogations answered with civil Mode 3/C (0..1, exponentially weighted). */
+  squawk = 0;
   cls: TrackClass = 'UNK';
   ident: Ident = 'PEND';
   manual: Ident | null = null;
@@ -158,6 +160,7 @@ export class Tracker {
     if (r.iff === 'M5') tr.iffM5++;
     else if (r.iff === 'M3C') tr.iffM3++;
     else if (r.iff === 'NONE') tr.iffNone++;
+    if (r.iff !== null) tr.squawk = lerp(tr.squawk, r.iff === 'M3C' ? 1 : 0, 0.25);
     tr.rcsDb = tr.hits === 2 ? toDb(r.rcs) : lerp(tr.rcsDb, toDb(r.rcs), 0.12);
     if (!tr.confirmed && tr.hits >= 3) tr.confirmed = true;
   }
@@ -219,7 +222,7 @@ export class Tracker {
       let best: Track | null = null;
       let bd = clamp(jt.sigma * 2, 5000, 12000);
       for (const st of live) {
-        if (!st.skin || st.dropped || st.jam || st.cls === 'CIV' || st.ident === 'FRD' || st.ident === 'NEU' || st.iffM5 > 0) continue;
+        if (!st.skin || st.dropped || st.jam || st.cls === 'CIV' || st.ident === 'FRD' || st.ident === 'NEU' || st.iffM5 > 0 || st.iffM3 > 0) continue;
         const d = hdist(st.predict(w.t), jt.predict(w.t));
         if (d < bd) {
           bd = d;
@@ -280,6 +283,11 @@ export class Tracker {
     let id: Ident;
     if (tr.manual) id = tr.manual;
     else if (tr.iffM5 >= 2 && tr.iffM5 >= 0.3 * (tr.iffM5 + tr.iffNone)) id = 'FRD';
+    // Squawking civil Mode 3/C now: after a track swap, a hostile act seen earlier no longer applies.
+    else if (!tr.jam && tr.squawk > 0.6 && tr.hits > 8 && (cls === 'CIV' || cls === 'FW' || cls === 'UNK')) {
+      id = 'NEU';
+      tr.hostileAct = false;
+    }
     else if (tr.jam || tr.hostileAct || cls === 'TBM' || cls === 'MSL' || cls === 'CM' || cls === 'UAV') id = 'HOS';
     else if (cls === 'CIV') id = 'NEU';
     else if (tr.iffNone >= 3) id = 'SUS';
@@ -288,21 +296,24 @@ export class Tracker {
     tr.ident = id;
   }
 
-  /** Mark the track nearest to a launching platform as having committed a hostile act. */
+  /** Mark the track at a launching platform as having committed a hostile act. */
   markHostileAct(w: World, p: V3): void {
-    let best: Track | null = null;
-    let bd = 6000;
+    const near: Track[] = [];
     for (const tr of this.tracks) {
       if (!tr.confirmed || tr.dropped || w.t - tr.t > 8) continue;
-      const d = dist(tr.predict(w.t), p);
-      if (d < bd) {
-        bd = d;
-        best = tr;
-      }
+      if (dist(tr.predict(w.t), p) < Math.max(2500, 3 * tr.sigma)) near.push(tr);
     }
-    if (best && !best.hostileAct) {
-      best.hostileAct = true;
-      w.log(`${best.label} observed launching a weapon`, 'alert');
+    if (!near.length) return;
+    // A formation flying together shares the blame; two unrelated tracks crossing cannot be told apart.
+    const v0 = near[0].velAt(w.t);
+    if (near.some((tr) => dist(tr.velAt(w.t), v0) > 80)) {
+      w.log('Weapon launch observed between crossing tracks, launcher ambiguous', 'alert');
+      return;
+    }
+    for (const tr of near) {
+      if (tr.hostileAct) continue;
+      tr.hostileAct = true;
+      w.log(`${tr.label} observed launching a weapon`, 'alert');
     }
   }
 
@@ -317,12 +328,15 @@ export class Tracker {
         const b = strobes[j];
         if (a.sensor === b.sensor || hdist(a.origin, b.origin) < 2000) continue;
         const fix = intersect(a, b);
-        if (fix) fixes.push(fix);
+        // Poor crossing geometry gives fixes that are tens of km out in range: only use good ones.
+        if (!fix || fix.s > 12000) continue;
+        // Inside burn-through range a real jammer would also give a skin return, so a close-in
+        // strobe crossing with no skin track is a ghost from two different jammers.
+        if (Math.min(hdist(a.origin, fix.p), hdist(b.origin, fix.p)) < BURN_THROUGH_M) continue;
+        if (!isGhost(fix, a, b, strobes)) fixes.push(fix);
       }
     }
     for (const f of fixes) {
-      // Poor crossing geometry gives fixes that are tens of km out in range: only use good ones.
-      if (f.s > 12000) continue;
       const skinJam = this.tracks.find((t) => t.jam && t.skin && !t.dropped && hdist(t.predict(w.t), f.p) < Math.max(20000, f.s * 3));
       if (skinJam) {
         skinJam.sources.set('ESM', w.t);
@@ -364,6 +378,28 @@ export class Tracker {
       }
     }
   }
+}
+
+/** Closest range at which a noise jammer is still heard but not seen by the fire-control radars. */
+const BURN_THROUGH_M = 40000;
+
+/**
+ * With several jammers, strobes from two sensors also cross where there is no jammer (ghosts).
+ * A third sensor that hears jamming in that direction but has no strobe through the fix rules it out.
+ */
+function isGhost(f: { p: V3; s: number }, a: Strobe, b: Strobe, strobes: Strobe[]): boolean {
+  let contradicted = false;
+  for (const c of strobes) {
+    if (c.sensor === a.sensor || c.sensor === b.sensor) continue;
+    if (hdist(c.origin, a.origin) < 2000 || hdist(c.origin, b.origin) < 2000) continue;
+    const R = hdist(c.origin, f.p);
+    const brg = bearingDeg(c.origin, f.p);
+    const off = Math.abs(wrap180(c.az - brg));
+    const tol = 3 * c.sigmaDeg + Math.atan2(f.s, R) / DEG + 0.5;
+    if (off < tol) return false;
+    if (off < 25) contradicted = true;
+  }
+  return contradicted;
 }
 
 function intersect(a: Strobe, b: Strobe): { p: V3; s: number } | null {

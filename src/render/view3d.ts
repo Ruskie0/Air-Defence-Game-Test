@@ -12,7 +12,7 @@ import { V3, clamp, polar } from '../sim/math';
 import type { Radar } from '../sim/radar';
 import type { Ciws } from '../sim/ciws';
 import type { Site } from '../sim/sites';
-import type { World } from '../sim/world';
+import { MAP_SEED, type World } from '../sim/world';
 import { IDENT_COLOR } from '../ui/colors';
 import { CameraRig } from './camera';
 import { Effects } from './effects';
@@ -317,7 +317,11 @@ export class View3D {
   /** Show another world (a new day, the deployment preview) over the same terrain. */
   setWorld(w: World): void {
     this.world = w;
-    for (const s of this.siteObjs) this.scene.remove(s.root);
+    for (const s of this.siteObjs) {
+      this.scene.remove(s.root);
+      // CSS2D labels only clean up their DOM element when removed directly, not with a parent.
+      s.label.element.remove();
+    }
     this.siteObjs.length = 0;
     this.antennas.length = 0;
     this.turrets.length = 0;
@@ -332,7 +336,8 @@ export class View3D {
     this.entityObjs.clear();
     for (const o of this.missileObjs.values()) this.scene.remove(o.body, o.trail.line);
     this.missileObjs.clear();
-    // Smoke, debris and sound state reset on their own when they see a different world.
+    // Sound state resets on its own when it sees a different world.
+    this.fx.reset();
     for (const l of this.trackLabels.values()) {
       this.scene.remove(l.obj);
       l.el.remove();
@@ -356,10 +361,11 @@ export class View3D {
     this.fx.setViewport(h * this.renderer.getPixelRatio(), this.camera.fov);
   }
 
-  setView(v: 'defended' | 'overview' | 'north', instant = false): void {
+  setView(v: 'defended' | 'overview' | 'north' | 'deploy', instant = false): void {
     const views = {
       defended: { pos: [6000, 14000, 30000], tgt: [0, 0, -6000] },
       overview: { pos: [0, 190000, 120000], tgt: [0, 0, -15000] },
+      deploy: { pos: [0, 62000, 38000], tgt: [0, 0, -2000] },
       north: { pos: [-15000, 9000, -15000], tgt: [0, 1500, -60000] },
     } as const;
     const s = views[v];
@@ -374,7 +380,7 @@ export class View3D {
   }
 
   private buildTerrain(): void {
-    this.scenery = buildScenery(this.scene, this.world.terrain, this.world.seed);
+    this.scenery = buildScenery(this.scene, this.world.terrain, MAP_SEED);
     this.terrainMesh = this.scenery.terrainMesh;
   }
 

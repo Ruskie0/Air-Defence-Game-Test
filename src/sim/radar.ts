@@ -73,6 +73,11 @@ export class Radar implements Emitter {
   pos: V3;
   alive = true;
   emitting = true;
+  /** Automatic ARM response: shut down while a hostile missile track is closing on this radar. */
+  armWatch = false;
+  /** Silent because of the ARM response (rather than by operator order). */
+  armSilent = false;
+  armClearAt = 0;
   /** Current beam azimuth (deg). */
   az = 0;
   /** Sector boresight for phased arrays / airborne radars (deg). */
@@ -336,10 +341,10 @@ export const LR_RADAR: RadarSpec = {
   mtiDb: 50, notchMps: 15, cnr10Db: 58, rangeAccM: 20, angleAccDeg: 0.05, pfa: 1e-6, iff: true, falseAlarmsPerScan: 0.15,
 };
 
-/** MR SAM 3D surveillance radar (X-band), rotating 30 rpm. No sidelobe canceller. */
+/** MR SAM 3D surveillance radar (X-band), rotating 30 rpm. A modest sidelobe canceller. */
 export const MR_RADAR: RadarSpec = {
   freqGHz: 9.5, peakKW: 25, gainDb: 35, bwMHz: 1, nfDb: 4, lossDb: 8, nPulses: 32,
-  bwAzDeg: 2, bwElDeg: 2.5, sllDb: -27, slcDb: 0, maxRangeKm: 75, minElDeg: -2, maxElDeg: 60,
+  bwAzDeg: 2, bwElDeg: 2.5, sllDb: -27, slcDb: 12, maxRangeKm: 75, minElDeg: -2, maxElDeg: 60,
   scan: { kind: 'rotating', rpm: 30 },
   mtiDb: 52, notchMps: 12, cnr10Db: 58, rangeAccM: 30, angleAccDeg: 0.1, pfa: 1e-6, iff: true, falseAlarmsPerScan: 0.25,
 };
@@ -347,7 +352,7 @@ export const MR_RADAR: RadarSpec = {
 /** SHORAD search-on-the-move radar (S-band), fan beam, rotating 60 rpm. */
 export const SH_RADAR: RadarSpec = {
   freqGHz: 3.2, peakKW: 12, gainDb: 28, bwMHz: 2, nfDb: 4, lossDb: 7, nPulses: 32,
-  bwAzDeg: 3, bwElDeg: 25, sllDb: -25, slcDb: 0, maxRangeKm: 25, minElDeg: -3, maxElDeg: 60,
+  bwAzDeg: 3, bwElDeg: 25, sllDb: -25, slcDb: 10, maxRangeKm: 25, minElDeg: -3, maxElDeg: 60,
   scan: { kind: 'rotating', rpm: 60 },
   mtiDb: 50, notchMps: 10, cnr10Db: 55, rangeAccM: 25, angleAccDeg: 0.3, pfa: 1e-6, iff: true, falseAlarmsPerScan: 0.15,
 };
@@ -355,7 +360,7 @@ export const SH_RADAR: RadarSpec = {
 /** CIWS search radar (Ku-band), rotating 90 rpm. */
 export const CIWS_RADAR: RadarSpec = {
   freqGHz: 15, peakKW: 3, gainDb: 30, bwMHz: 5, nfDb: 5, lossDb: 7, nPulses: 16,
-  bwAzDeg: 2.5, bwElDeg: 10, sllDb: -25, slcDb: 0, maxRangeKm: 9, minElDeg: -3, maxElDeg: 80,
+  bwAzDeg: 2.5, bwElDeg: 10, sllDb: -25, slcDb: 10, maxRangeKm: 9, minElDeg: -3, maxElDeg: 80,
   scan: { kind: 'rotating', rpm: 90 },
   mtiDb: 55, notchMps: 6, cnr10Db: 50, rangeAccM: 5, angleAccDeg: 0.2, pfa: 1e-6, iff: false, falseAlarmsPerScan: 0.02,
 };

@@ -2,6 +2,7 @@ import { V3, add, addScaled, angleBetween, clamp, clone, dist, dot, hdist, norm,
 import { Air } from './entities';
 import { AAM_MSL, Interceptor } from './missile';
 import { AI_RADAR, Radar } from './radar';
+import { wcsAllows } from './tewa';
 import type { World } from './world';
 
 export type CapState = 'station' | 'intercept' | 'rtb' | 'ground';
@@ -120,7 +121,13 @@ export class Fighter extends Air {
         this.cmdSpd = 420;
         const R = dist(this.pos, p);
         const off = angleBetween(this.vel, sub(p, this.pos));
-        if (!this.aam && this.missiles > 0 && tr.confirmed && R < this.aamRange(p, v) && R > AAM_MSL.minRangeM && off < 45) {
+        // Rules of engagement: hold the shot unless the weapons control status allows this identity.
+        const cleared = wcsAllows(w.wcs, tr.ident);
+        if (!cleared && (tr.ident === 'NEU' || tr.ident === 'FRD')) {
+          this.toStation(w);
+          break;
+        }
+        if (cleared && !this.aam && this.missiles > 0 && tr.confirmed && R < this.aamRange(p, v) && R > AAM_MSL.minRangeM && off < 45) {
           this.missiles--;
           this.aam = new Interceptor(w, AAM_MSL, null, this.name, this.pos, p, clone(this.vel), tr.id);
           w.missiles.push(this.aam);

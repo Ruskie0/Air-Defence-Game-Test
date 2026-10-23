@@ -15,6 +15,8 @@ export class Site {
   readonly radius: number;
   readonly defended: boolean;
   hp = 100;
+  /** Damage multiplier: area targets like an airbase need several hits. */
+  vuln = 1;
   alive = true;
   onDestroyed: (() => void) | null = null;
 
@@ -28,7 +30,7 @@ export class Site {
 
   damage(w: World, amount: number, by: string): void {
     if (!this.alive) return;
-    this.hp = Math.max(0, this.hp - amount);
+    this.hp = Math.max(0, this.hp - amount * this.vuln);
     w.log(`${this.name} hit by ${by} (${Math.round(this.hp)}% remaining)`, 'damage');
     if (this.hp <= 0) {
       this.alive = false;
@@ -195,6 +197,7 @@ export class FireUnit {
     if (w.t - tr.t > (this.remote ? 5 : 3)) return no('track stale');
     if (tr.cls === 'TBM' && !s.tbmRangeM) return no('not TBM capable');
     if (!tr.skin && tr.sigma > 3000) return no(`jammer fix too coarse (${(tr.sigma / 1000).toFixed(0)} km)`);
+    if (!tr.skin && tr.hits < 8) return no('jammer fix not yet confirmed');
     if (this.type === 'LR') {
       const lr = tr.sources.get(this.code) ?? -1e9;
       const esm = tr.sources.get('ESM') ?? -1e9;

@@ -1,4 +1,4 @@
-# Air Defence Sandbox: design
+# Air Defence: design
 
 A browser-based, 3D, simulation-first air defence game. The player is the air defence commander of a
 small defended area (an airbase, a command and reporting centre and a power plant) and fights through
@@ -80,45 +80,87 @@ system, not copies of any real system.
 
 "Launch now" brings the next raid forward. The spawn panel adds any threat from any of eight bearings.
 
-## Roadmap: the mission layer
+## Campaign (`src/campaign`, `src/ui/campaign-ui.ts`)
 
-The prototype is a single sandbox. The next layers, in order:
+The main menu offers a ten-day campaign next to the sandbox. Each day has a planning phase and a battle.
 
-1. **Mission briefing and scoring.** A mission is a JSON file: defended assets with values, the friendly
-   order of battle, the enemy raid plan, rules of engagement (initial WCS, ID criteria such as an
-   ADIZ and a hostile-act definition), and win/loss conditions (asset survival, civil losses,
-   interceptor budget). Debrief with an engagement timeline and the cost exchange ratio.
-2. **Deployment phase.** Before the clock starts, place radars and launchers on the terrain with
-   line-of-sight and coverage previews (radar horizon heat map, weapon engagement zones), choose the LR
-   sector boresight, set CAP stations and the decoy position.
-3. **Campaign.** A sequence of missions where losses, expended missiles and reloads carry over, and
-   the enemy adapts (more SEAD if you radiate, more low-level routes if the passes are covered).
-4. **Command and control depth.** Engagement authority per weapon (centralised or autonomous fire
+- **Order of battle as data.** `src/sim/catalog.ts` lists every buyable unit type (price, unlock day,
+  launchers, channels, reload time) and the `Deployment` the campaign owns between days: each unit's
+  position, sector facing, launcher rounds, spare missiles and surviving aircraft. `World` takes a
+  deployment and fields it; the sandbox is just `sandboxDeployment()` with unlimited spares.
+- **Economy.** The budget each morning comes from what still works (`50 + 65 x airbase + 45 x power
+  plant + 25 x CRC` at full health, $185M a day). It buys units, missiles for reloads, spare rounds
+  that reload launchers during the day, extra launchers, replacement fighters and repairs (partial
+  repairs spend what is left). Selling returns a fifth of the price.
+- **Unlocks.** MR, SHORAD, CIWS, early warning radar and GNSS jammer from day 1; decoy and CAP from
+  day 2; the LR SAM (the only ballistic missile defence) from day 3. Ballistic missiles first appear on
+  day 5 and are always reported the first time.
+- **Deployment.** Units stand within 35 km of the airbase on dry, level ground and not on top of an
+  asset or another unit; CAP stations within 90 km. The planning screen shows the unit's reach while
+  placing and turns LR sectors in 30 degree steps.
+- **Raid generator** (`raidgen.ts`). The enemy spends a threat budget of `8 + 7 x day` points on
+  packages (drone swarms, cruise missiles, SEAD pairs, stand-off jammers, bombers with ALCMs,
+  ballistic missiles), picks approach sectors from learned weights and launches them in waves.
+  An airliner with its transponder off crosses on some days from day 3. Intel reports each package with
+  a probability that falls from 90% to 60% over the campaign; unreported packages arrive unannounced.
+- **Enemy learning.** After each day, package kinds and approach sectors that hit something gain weight,
+  ones that did not lose it, and if the big radars radiated more than 80% of the day the enemy plans
+  more SEAD.
+- **Settlement.** Munitions still in the air when the day ends hit their targets. Destroyed radars
+  lose the battery, destroyed launchers are removed, missiles left and spares carry over. The campaign
+  is lost when the airbase is destroyed or after two airliner shootdowns, and won after day 10.
+  Defended assets take reduced damage (the airbase 0.4x, the power plant 0.7x), since one hit does not
+  close an airbase.
+- **ARM response.** LR, MR and early warning radars start with "ARM auto" on: the radar goes silent
+  while a hostile missile track is closing on it and stays silent until well after its predicted
+  arrival. ARMs that lose their emitter fly on memory and look for another emitter (a decoy, or a
+  nearby CIWS or SHORAD radar). Under heavy jamming the ARMs may never be tracked, which is the case
+  for killing the jammer first.
+- **Saving.** The campaign state is plain JSON saved to `localStorage` after every change; storage
+  errors are ignored so the game also runs where storage is blocked.
+
+## Roadmap
+
+1. **Mission briefing and scoring.** Rules of engagement per day (initial WCS, an ADIZ, a hostile-act
+   definition), debrief with an engagement timeline and the cost exchange ratio.
+2. **Deployment depth.** Radar horizon heat map while placing, move and emplace times, relocating units
+   between waves.
+3. **Command and control depth.** Engagement authority per weapon (centralised or autonomous fire
    units), a datalink with latency and capacity, sector boundaries and handover between systems, kill
    assessment by the operator.
-5. **More EW.** Self-protection jammers on strike aircraft, deception (range-gate pull-off, false
+4. **More EW.** Self-protection jammers on strike aircraft, deception (range-gate pull-off, false
    targets), chaff, frequency agility and burn-through tactics, home-on-jam rules.
-6. **More systems.** AEW aircraft, passive sensors (ESM network, IRST), counter-drone directed energy,
-   relocatable launchers with move/emplace times, decoys for SAM launchers.
-7. **Fidelity.** Aspect-dependent RCS tables, multipath at low elevation, debris from intercepts,
+5. **More systems.** AEW aircraft, passive sensors (ESM network, IRST), counter-drone directed energy,
+   decoys for SAM launchers.
+6. **Fidelity.** Aspect-dependent RCS tables, multipath at low elevation, debris from intercepts,
    weather and propagation (ducting), missile seeker models with their own detection maths.
-8. **Engineering.** Move the sim into a Web Worker, record and replay runs from the seed plus the
+7. **Engineering.** Move the sim into a Web Worker, record and replay runs from the seed plus the
    command log, deterministic regression tests on the sim.
 
 ## Testing
 
-- `npm run sim -- [simSeconds] [seed] [--log]` runs the scenario headless in Node (about 6 s for all six
+- `npm run sim -- [simSeconds] [seed] [--log]` runs the sandbox headless in Node (about 6 s for all six
   raids) and prints the fate of every threat by raid, damage to sites, missiles fired and rounds left.
   This is the tool for balancing: the sim is deterministic for a seed, so a change shows up as a diff.
-- `scripts/playtest.mjs` builds nothing itself: run `npm run build` first. It serves `dist/` with
-  `vite preview`, opens it in headless Chromium (`CHROMIUM_PATH` picks the browser), closes the help
-  screen, steps the sim straight through the raids, prints the state every simulated minute, saves
-  screenshots to `playtest/` and fails on any page error.
+- `npm run campaign -- [seed] [--verbose] [--log-day=N]` plays a whole campaign headless with a simple
+  automatic commander (fixed shopping list, default positions, no manual engagements) and prints each
+  day's raid, results, losses and budget.
+- `scripts/playtest.mjs` and `scripts/playtest-campaign.mjs` build nothing themselves: run
+  `npm run build` first. They serve `dist/` with `vite preview` and drive headless Chromium
+  (`CHROMIUM_PATH` picks the browser). The first opens the sandbox from the menu and steps through the
+  raids; the second buys and places a unit through the planning screen, fights day 1, ends it, checks
+  the debrief and the next planning screen, and that a reload offers to continue. Both save screenshots
+  to `playtest/` and fail on any page error.
 
-### Balance baseline (automatic defence only, WCS TIGHT, no player input)
+### Balance baseline
 
-Seeds 20261023, 7, 42 and 99: raids 1 to 5 are almost entirely defeated (an occasional ALCM or ARM gets
-through), with no fratricide and no civil losses. Raid 6 saturates the MR SAM with drones and ARMs, and
-the two sea-skimming cruise missiles from the south, seen late by the SHORAD radar only, destroy the
-power plant. That is the intended gap for the player to close: EMCON or the decoy against the ARMs,
-the GNSS jammer against the drones, and manual engagements.
+Sandbox, seed 20261023, automatic defence only (WCS TIGHT, no player input): 49 kills, 4 leakers, no
+fratricide or civil losses. ARMs that lose the silent LR radar re-acquire the nearby CIWS radar, one
+ballistic missile in raid 5 gets through to the CRC, and the sea-skimming cruise missiles of raid 6
+damage the power plant.
+
+Campaign, automatic commander, seeds 1 to 6: three wins and three losses (airbase destroyed on days 8,
+10 and 10), no civil or friendly losses. Its losses come from SEAD under jamming
+cover (ARMs never tracked, radars lost) and from ballistic salvoes outside the LR sector or after the LR
+radar is gone. A player who kills the jammers with the CAP, places the decoy, faces the LR sector at
+the ballistic threat and keeps spares wins more often.

@@ -109,6 +109,7 @@ export class World {
   private nextEffect = 1;
   private nextTewa = 0;
   private nextGnss = 0;
+  private nextArmWatch = 0;
   private readonly names = new Map<string, number>();
   private readonly typeCount = new Map<string, number>();
 
@@ -121,6 +122,7 @@ export class World {
     for (const a of DEFENDED_ASSETS) {
       const s = this.addSite(a.name, 'asset', a.x, a.y, 0, a.radius, true);
       s.hp = dep.assets.find((x) => x.name === a.name)?.hp ?? 100;
+      s.vuln = a.vuln;
       s.alive = s.hp > 0;
     }
     for (const u of dep.units) this.field(u);
@@ -239,6 +241,7 @@ export class World {
         break;
       }
     }
+    if (f.radar && u.armWatch) f.radar.armWatch = true;
     this.fielded.push(f);
     return f;
   }
@@ -422,10 +425,59 @@ export class World {
     const r = this.radarByCode(code);
     if (!r) return;
     r.emitting = !r.emitting;
+    r.armSilent = false;
     this.log(`${r.name} ${r.emitting ? 'radiating' : 'EMCON (silent)'}`, 'info');
   }
 
+  toggleArmWatch(code: string): void {
+    const r = this.radarByCode(code);
+    if (!r) return;
+    r.armWatch = !r.armWatch;
+    if (!r.armWatch && r.armSilent) {
+      r.armSilent = false;
+      r.emitting = true;
+    }
+    this.log(`${r.name} automatic ARM response ${r.armWatch ? 'ON' : 'OFF'}`, 'info');
+  }
+
   // ---------------------------------------------------------------- stepping
+
+  /** Radars on automatic ARM response go silent while a hostile missile track is closing on them. */
+  private stepArmWatch(): void {
+    if (this.t < this.nextArmWatch) return;
+    this.nextArmWatch = this.t + 0.5;
+    for (const r of this.radars) {
+      if (!r.armWatch || !r.alive || r.platform) continue;
+      // Time until the closest inbound missile arrives, or Infinity if none is closing on this radar.
+      let tgo = Infinity;
+      for (const tr of this.tracker.tracks) {
+        if (tr.dropped || !tr.confirmed || tr.cls !== 'MSL' || tr.ident !== 'HOS' || this.t - tr.t > 6) continue;
+        const p = tr.predict(this.t);
+        const v = tr.velAt(this.t);
+        const dx = r.pos.x - p.x;
+        const dy = r.pos.y - p.y;
+        const R = Math.hypot(dx, dy);
+        const vh = Math.hypot(v.x, v.y);
+        if (vh < 100) continue;
+        const closing = (v.x * dx + v.y * dy) / Math.max(1, R);
+        const miss = Math.abs(v.x * dy - v.y * dx) / vh;
+        if (closing > 0.8 * vh && R / closing < 90 && miss < 4000) tgo = Math.min(tgo, R / closing);
+      }
+      if (tgo < Infinity) {
+        // Stay silent until well after the missile would have arrived: once the radars go quiet it may drop out of the picture.
+        r.armClearAt = Math.max(r.armClearAt, this.t + tgo + 8);
+        if (r.emitting) {
+          r.emitting = false;
+          r.armSilent = true;
+          this.log(`${r.name} ARM warning: radar shut down`, 'alert');
+        }
+      } else if (r.armSilent && this.t >= r.armClearAt) {
+        r.emitting = true;
+        r.armSilent = false;
+        this.log(`${r.name} ARM threat passed, radiating`, 'info');
+      }
+    }
+  }
 
   private stepGnss(dt: number): void {
     const check = this.t >= this.nextGnss;
@@ -469,6 +521,7 @@ export class World {
 
     for (const e of this.entities) if (e.alive) e.update(this, dt);
     this.stepGnss(dt);
+    this.stepArmWatch();
 
     const reports: Report[] = [];
     for (const r of this.allRadars()) {

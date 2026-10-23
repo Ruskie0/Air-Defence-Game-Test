@@ -25,6 +25,8 @@ export interface DeployedUnit {
   spares: number;
   /** CAP: aircraft remaining in the pair. */
   aircraft: number;
+  /** Radar starts the day on automatic ARM response. */
+  armWatch?: boolean;
 }
 
 export interface AssetState {
@@ -63,7 +65,7 @@ export interface UnitInfo {
 
 export const CATALOG: Record<UnitType, UnitInfo> = {
   LR: {
-    type: 'LR', name: 'LR SAM battery', costM: 320, unlockDay: 3, missile: LR_MSL,
+    type: 'LR', name: 'LR SAM battery', costM: 280, unlockDay: 3, missile: LR_MSL,
     role: 'C-band phased array, 120° sector, 120 km missiles. The only defence against ballistic missiles (inside 40 km).',
     launchers: 2, perLauncher: 4, maxLaunchers: 4, launcherCostM: 30, channels: 9, reloadS: 600, rangeKm: 120, sector: true,
   },
@@ -107,10 +109,11 @@ export const CATALOG: Record<UnitType, UnitInfo> = {
 /** Missile prices for rearming, $M per round. */
 export const ROUND_COST: Partial<Record<UnitType, number>> = { LR: LR_MSL.costM, MR: MR_MSL.costM, SH: SH_MSL.costM };
 
-export const DEFENDED_ASSETS: { name: string; x: number; y: number; radius: number; valueM: number }[] = [
-  { name: 'Airbase', x: 0, y: 0, radius: 320, valueM: 400 },
-  { name: 'CRC', x: -4200, y: -3600, radius: 40, valueM: 150 },
-  { name: 'Power plant', x: 6500, y: -9000, radius: 160, valueM: 250 },
+/** The sites the defence exists for. `vuln` scales warhead damage: a large airbase shrugs off more hits than a substation. */
+export const DEFENDED_ASSETS: { name: string; x: number; y: number; radius: number; valueM: number; vuln: number }[] = [
+  { name: 'Airbase', x: 0, y: 0, radius: 320, valueM: 400, vuln: 0.4 },
+  { name: 'CRC', x: -4200, y: -3600, radius: 40, valueM: 150, vuln: 1 },
+  { name: 'Power plant', x: 6500, y: -9000, radius: 160, valueM: 250, vuln: 0.7 },
 ];
 
 /** Default launcher layout around a battery's radar (metres, relative). */
@@ -133,14 +136,15 @@ export function newUnit(uid: number, type: UnitType, x: number, y: number, facin
   const info = CATALOG[type];
   const n = info.launchers ?? 0;
   const launchers = launcherOffsets(type, n, facing).map(([dx, dy]) => ({ x: x + dx, y: y + dy, rounds: info.perLauncher!, max: info.perLauncher! }));
-  return { uid, type, x, y, facing, launchers, spares: 0, aircraft: type === 'CAP' ? 2 : 0 };
+  const armWatch = type === 'LR' || type === 'MR' || type === 'EWR';
+  return { uid, type, x, y, facing, launchers, spares: 0, aircraft: type === 'CAP' ? 2 : 0, armWatch };
 }
 
 /** The fixed order of battle of the sandbox scenario. */
 export function sandboxDeployment(): Deployment {
   const l = (x: number, y: number, max: number): DeployedLauncher => ({ x, y, rounds: max, max });
   const u = (uid: number, type: UnitType, x: number, y: number, launchers: DeployedLauncher[] = [], extra: Partial<DeployedUnit> = {}): DeployedUnit => ({
-    uid, type, x, y, facing: 0, launchers, spares: Infinity, aircraft: type === 'CAP' ? 2 : 0, ...extra,
+    uid, type, x, y, facing: 0, launchers, spares: Infinity, aircraft: type === 'CAP' ? 2 : 0, armWatch: type === 'LR' || type === 'MR', ...extra,
   });
   return {
     units: [

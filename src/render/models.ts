@@ -300,9 +300,8 @@ export const CHARRED_MAT = new THREE.MeshStandardMaterial({ vertexColors: true, 
  * missile for munitions and a fighter for aircraft, so new kinds from the sim still draw something sensible.
  */
 export function airModel(kind: string, munition = false): THREE.Mesh {
-  const make = AIR[kind] ?? (munition ? cruise : fighter);
-  const key = AIR[kind] ? kind : munition ? 'cruise' : 'fighter';
-  return new THREE.Mesh(cached(key, make), MODEL_MAT);
+  const key = AIR[kind] ? kind : /drone|decoy|uav|loiter/i.test(kind) ? 'drone' : munition ? 'cruise' : 'fighter';
+  return new THREE.Mesh(cached(key, AIR[key]), MODEL_MAT);
 }
 
 export function interceptorModel(code: string): THREE.Mesh {

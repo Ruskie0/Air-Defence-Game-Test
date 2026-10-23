@@ -89,7 +89,8 @@ export function updateHaze(scene: THREE.Scene, cameraY: number): void {
 
 // ---------------------------------------------------------------- land cover
 
-const TEX = 2048;
+/** Land-cover texture size: about 80-100 m per texel on the 160 km and 300 km maps. */
+const texSize = (t: Terrain): number => (t.half > 100000 ? 3072 : 2048);
 
 type RGB = [number, number, number];
 const hex = (h: string): RGB => {
@@ -279,7 +280,7 @@ export function terrainSeed(t: Terrain, fallback: number): number {
 /** Paints the land-cover texture; also returns a forest mask (row 0 south, as a DataTexture expects). */
 function paintLandCover(lc: LandCover): { canvas: HTMLCanvasElement; mask: Uint8Array } {
   const t = lc.t;
-  const N = TEX;
+  const N = texSize(t);
   const half = t.half;
   const px = (2 * half) / N;
   const H = new Float32Array(N * N);
@@ -514,7 +515,7 @@ export function buildScenery(parent: THREE.Scene, t: Terrain, seed: number): Sce
   parent.add(scene);
   const lc = new LandCover(t, seed);
   const { canvas, mask } = paintLandCover(lc);
-  const forestTex = new THREE.DataTexture(mask, TEX, TEX, THREE.RedFormat);
+  const forestTex = new THREE.DataTexture(mask, canvas.width, canvas.height, THREE.RedFormat);
   forestTex.magFilter = THREE.LinearFilter;
   forestTex.minFilter = THREE.LinearMipmapLinearFilter;
   forestTex.generateMipmaps = true;

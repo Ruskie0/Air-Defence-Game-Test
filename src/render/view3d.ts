@@ -347,9 +347,11 @@ export class View3D {
   }
 
   setView(v: 'defended' | 'overview' | 'north' | 'deploy', instant = false): void {
+    // The overview frames the whole map, which is 160 or 300 km across.
+    const big = this.world.terrain.half / 80000;
     const views = {
       defended: { pos: [6000, 14000, 30000], tgt: [0, 0, -6000] },
-      overview: { pos: [0, 190000, 120000], tgt: [0, 0, -15000] },
+      overview: { pos: [0, 190000 * big, 120000 * big], tgt: [0, 0, -15000 * big] },
       deploy: { pos: [0, 62000, 38000], tgt: [0, 0, -2000] },
       north: { pos: [-15000, 9000, -15000], tgt: [0, 1500, -60000] },
     } as const;
@@ -367,6 +369,8 @@ export class View3D {
   private buildTerrain(): void {
     this.scenery = buildScenery(this.scene, this.world.terrain, terrainSeed(this.world.terrain, MAP_SEED));
     this.sceneryTerrain = this.world.terrain;
+    this.rig.limit = this.world.terrain.half * 0.95;
+    this.controls.maxDistance = 420000 * Math.max(1, this.world.terrain.half / 80000);
     this.terrainMesh = this.scenery.terrainMesh;
   }
 
@@ -689,6 +693,9 @@ export class View3D {
       t.pitch.rotation.x = -t.ciws.aimEl * DEG;
     }
     for (const s of this.siteObjs) {
+      // Mobile units move their site: keep the model on it.
+      const p = s.site.pos;
+      if (p.x !== s.root.position.x || -p.y !== s.root.position.z) s.root.position.set(p.x, this.world.terrain.groundAt(p.x, p.y), -p.y);
       if (!s.site.alive && !s.dead) {
         s.dead = true;
         for (const m of s.mats) m.color.multiplyScalar(0.25);

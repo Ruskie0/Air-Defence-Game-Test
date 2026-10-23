@@ -25,6 +25,8 @@ export class CameraRig {
   onHome: () => void = () => {};
   /** While following a track the pivot is in the air, so do not pull it to the ground. */
   following = false;
+  /** How far from the centre the pivot may be panned (m): set to the map's half-width. */
+  limit = 130000;
   private readonly keys = new Set<string>();
   private readonly vel = new THREE.Vector3();
   private fly: { p0: THREE.Vector3; t0: THREE.Vector3; p1: THREE.Vector3; t1: THREE.Vector3; k: number; dur: number } | null = null;
@@ -114,7 +116,7 @@ export class CameraRig {
     if (this.vel.lengthSq() > 1) {
       cam.position.addScaledVector(this.vel, dt);
       tgt.addScaledVector(this.vel, dt);
-      const lim = 130000;
+      const lim = this.limit;
       const cx = THREE.MathUtils.clamp(tgt.x, -lim, lim) - tgt.x;
       const cz = THREE.MathUtils.clamp(tgt.z, -lim, lim) - tgt.z;
       tgt.x += cx;

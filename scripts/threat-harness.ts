@@ -1,11 +1,14 @@
 // Kill and leaker counts per threat type against the sandbox defence, from many short fresh battles.
 // Each case spawns one package from each of eight bearings (repeated `reps` times with new seeds) into a
 // world with no scripted raids, runs it until no red munition is left, and reads every threat's fate.
-// Usage: npm run harness -- [--only=arm,cruise] [--reps=N] [--seed=S] [--map=classic|mountain|...]
+// Usage: npm run harness -- [--only=arm,cruise] [--reps=N] [--seed=S] [--map=classic|mountain|...] [--extra=GUN,LASER] [--drop=MR,SH]
+// --extra adds units of those types (in a ring 1.5 km round the airbase) to the sandbox defence.
 import { World } from '../src/sim/world';
 import type { Entity, Kind } from '../src/sim/entities';
 import { spawnThreat, ThreatType } from '../src/sim/threats';
 import { Terrain, MapType } from '../src/sim/terrain';
+import { UnitType, newUnit } from '../src/sim/catalog';
+import { nearestFree, sandboxDeployment } from '../src/sim/deploy';
 
 const arg = (k: string): string | undefined => process.argv.find((a) => a.startsWith(`--${k}=`))?.split('=')[1];
 const only = arg('only')?.split(',');
@@ -31,6 +34,15 @@ const CASES: Case[] = [
 
 const terrain = mapArg && mapArg !== 'classic' ? new Terrain(seed0, mapArg) : new Terrain(20261023);
 const BEARINGS = [0, 45, 90, 135, 180, 225, 270, 315];
+const extra = (arg('extra')?.split(',') ?? []) as UnitType[];
+const deployment = sandboxDeployment(terrain);
+const drop = arg('drop')?.split(',') ?? [];
+deployment.units = deployment.units.filter((u) => !drop.includes(u.type));
+extra.forEach((type, i) => {
+  const a = (i / extra.length) * Math.PI * 2;
+  const p = nearestFree(terrain, type, Math.sin(a) * 1500, Math.cos(a) * 1500, deployment.units, -1, 500);
+  deployment.units.push(newUnit(100 + i, type, p.x, p.y, terrain.layout.rot));
+});
 
 interface Tally {
   n: number;
@@ -48,7 +60,7 @@ for (const c of CASES) {
   const tally: Tally = { n: 0, killed: 0, hit: 0, missed: 0, other: 0, by: {} };
   for (let r = 0; r < reps; r++) {
     for (const b of BEARINGS) {
-      const w = new World({ seed: seed0 + r * 101 + b, terrain, raids: [], civil: false });
+      const w = new World({ seed: seed0 + r * 101 + b, terrain, deployment: structuredClone(deployment), raids: [], civil: false });
       if (c.wcs) w.wcs = c.wcs;
       for (const j of w.gnss) j.on = true;
       spawnThreat(w, c.threat, (b + terrain.layout.rot) % 360);

@@ -1,5 +1,5 @@
 import { DT } from './constants';
-import { Ciws } from './ciws';
+import { Ciws, GUNS } from './ciws';
 import { Arm, Cruise, Emitter, Entity, Fate } from './entities';
 import { Fighter } from './fighter';
 import { V3, add, bearingDeg, clone, dist, norm, scale, sub, v3 } from './math';
@@ -206,14 +206,18 @@ export class World {
       case 'SH':
         sam('SH', SH_RADAR, SH_MSL, 'SHORAD', 'SHORAD', 6);
         break;
-      case 'CIWS': {
-        const id = this.ident('CIWS', 'C', 'CIWS');
-        const code = `C${id.n}`;
-        const name = `CIWS ${id.n}`;
+      case 'CIWS':
+      case 'GUN':
+      case 'LASER': {
+        const spec = GUNS[u.type === 'CIWS' ? 'ciws' : u.type === 'GUN' ? 'gun35' : 'laser'];
+        const prefix = u.type === 'CIWS' ? 'C' : u.type === 'GUN' ? 'G' : 'HL';
+        const id = this.ident(u.type, prefix, spec.label);
+        const code = `${prefix}${id.n}`;
+        const name = `${spec.label} ${id.n}`;
         const s = site(name, 'ciws', u.x, u.y, 4, 6);
         const r = this.addRadar(code, `${name} radar`, CIWS_RADAR, s, 'CIWS');
         f.radar = r;
-        const c = new Ciws(code, name, s, r);
+        const c = new Ciws(code, name, s, r, spec);
         c.auto = !u.holdFire;
         this.ciws.push(c);
         f.ciws = c;
@@ -223,6 +227,12 @@ export class World {
         const id = this.ident('EWR', 'EW', 'EW radar');
         const s = site(id.name, 'radar', u.x, u.y, 14, 14);
         f.radar = this.addRadar(id.code, id.name, EW_RADAR, s, 'EW');
+        break;
+      }
+      case 'GAP': {
+        const id = this.ident('GAP', 'GF', 'Gap-filler');
+        const s = site(id.name, 'radar', u.x, u.y, 30, 8);
+        f.radar = this.addRadar(id.code, id.name, SH_RADAR, s, 'SH');
         break;
       }
       case 'GNSS': {

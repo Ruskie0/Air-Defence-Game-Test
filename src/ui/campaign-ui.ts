@@ -7,7 +7,7 @@ import type { World } from '../sim/world';
 import type { Ppi } from './ppi';
 
 const SAVE_KEY = 'air-defence-campaign-v1';
-const SHOP_ORDER: UnitType[] = ['MR', 'SH', 'CIWS', 'EWR', 'GNSS', 'DECOY', 'CAP', 'LR'];
+const SHOP_ORDER: UnitType[] = ['MR', 'SH', 'CIWS', 'GUN', 'LASER', 'EWR', 'GAP', 'GNSS', 'DECOY', 'CAP', 'LR'];
 
 const $ = (id: string): HTMLElement => document.getElementById(id)!;
 const esc = (s: string): string => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);

@@ -7,6 +7,7 @@ import type { Wcs } from '../sim/tewa';
 import type { World } from '../sim/world';
 import type { Radar } from '../sim/radar';
 import type { Site } from '../sim/sites';
+import type { Ciws } from '../sim/ciws';
 import { CLASS_NAME, IDENT_COLOR, IDENT_NAME, fmtTime } from './colors';
 import type { Ppi } from './ppi';
 
@@ -353,6 +354,21 @@ export class Hud {
       `<button data-act="armwatch" data-code="${r.code}" class="${r.armWatch ? 'on' : ''}" ${dis} title="Automatic ARM response: shut the radar down while an anti-radiation missile is closing on it">ARM auto</button>`;
   }
 
+  private gunState(c: Ciws): string {
+    if (!c.site.alive) return '<span class="st dead">DESTROYED</span>';
+    if (c.coolUntil > 0) return '<span class="st emcon">COOLING</span>';
+    if (c.ammo === 0) return '<span class="st emcon">RELOAD</span>';
+    if (c.firing) return '<span class="st jam">FIRING</span>';
+    if (c.lasing) return '<span class="st jam">LASING</span>';
+    if (c.target) return '<span class="st ok">TRACK</span>';
+    return c.auto ? '<span class="st ok">AUTO</span>' : '<span class="st emcon">HOLD</span>';
+  }
+
+  private gunAmmo(c: Ciws): string {
+    if (Number.isFinite(c.maxAmmo)) return `Rounds <b>${c.ammo}</b>/${c.maxAmmo}`;
+    return `Heat <b>${Math.round((100 * c.heat) / (c.spec.heatS ?? 1))}%</b>`;
+  }
+
   private holdButton(code: string, hold: boolean): string {
     return `<button data-act="hold" data-code="${code}" class="${hold ? 'on warn' : ''}" title="Hold fire (H): no automatic engagements. Your direct orders still fire.">${hold ? 'Holding' : 'Hold fire'}</button>`;
   }
@@ -369,28 +385,18 @@ export class Hud {
         <div class="sys-b">Missiles <b>${u.rounds}</b>/${u.maxRounds}${Number.isFinite(u.spares) ? ` +${u.spares}` : ''} · Channels ${active}/${u.channels}${reload.length ? ` · reload ${fmtTime(Math.min(...reload.map((l) => l.reloadAt)) - w.t)}` : ''}
         ${this.holdButton(u.code, u.hold)}${this.radarButtons(r)}</div></div>`);
     }
+    if (w.ciws.length) rows.push('<h3>Point defence</h3>');
     for (const c of w.ciws) {
-      const st = !c.site.alive
-        ? '<span class="st dead">DESTROYED</span>'
-        : c.ammo === 0
-          ? '<span class="st emcon">RELOAD</span>'
-          : c.firing
-            ? '<span class="st jam">FIRING</span>'
-            : c.target
-              ? '<span class="st ok">TRACK</span>'
-              : c.auto
-                ? '<span class="st ok">AUTO</span>'
-                : '<span class="st emcon">HOLD</span>';
-      rows.push(`<div class="sys sel-able ${this.unitSel === c.code ? 'focus' : ''}" data-act="unit" data-code="${c.code}"><div class="sys-h"><b>${c.name}</b> ${st}</div>
-        <div class="sys-b">Rounds <b>${c.ammo}</b>/${c.maxAmmo} <button data-act="ciws" data-code="${c.code}" class="${c.auto ? '' : 'on warn'}" ${c.site.alive ? '' : 'disabled'}>${c.auto ? 'Hold fire' : 'Holding'}</button></div></div>`);
+      rows.push(`<div class="sys sel-able ${this.unitSel === c.code ? 'focus' : ''}" data-act="unit" data-code="${c.code}"><div class="sys-h"><b>${c.name}</b> ${this.gunState(c)}</div>
+        <div class="sys-b">${this.gunAmmo(c)} <button data-act="ciws" data-code="${c.code}" class="${c.auto ? '' : 'on warn'}" ${c.site.alive ? '' : 'disabled'}>${c.auto ? 'Hold fire' : 'Holding'}</button></div></div>`);
     }
-    const ewr = w.fielded.filter((f) => f.unit.type === 'EWR' && f.radar);
+    const ewr = w.fielded.filter((f) => (f.unit.type === 'EWR' || f.unit.type === 'GAP') && f.radar);
     if (ewr.length) {
       rows.push('<h3>Sensors</h3>');
       for (const f of ewr) {
         const r = f.radar!;
         rows.push(`<div class="sys sel-able ${this.unitSel === r.code ? 'focus' : ''}" data-act="unit" data-code="${r.code}"><div class="sys-h"><b>${r.name}</b> ${this.radarState(r.code)}</div>
-          <div class="sys-b dim">L-band, 250 km ${this.radarButtons(r)}</div></div>`);
+          <div class="sys-b dim">${f.unit.type === 'EWR' ? 'L-band, 250 km' : 'Low-level, 25 km'} ${this.radarButtons(r)}</div></div>`);
       }
     }
     if (w.gnss.length || w.decoys.length) rows.push('<h3>Electronic warfare</h3>');
@@ -523,8 +529,8 @@ export class Hud {
     if (c) {
       return `<h3>${c.name} ${close}</h3>
         <div class="kv">
-          <span>Rounds</span><b>${c.ammo}/${c.maxAmmo}</b>
-          <span>State</span><b>${!c.site.alive ? 'destroyed' : c.firing ? `firing at ${c.target?.name ?? ''}` : c.target ? `tracking ${c.target.name}` : c.auto ? 'automatic' : 'hold'}</b>
+          <span>${Number.isFinite(c.maxAmmo) ? 'Rounds' : 'Heat'}</span><b>${this.gunAmmo(c).replace(/^\w+ /, '')}</b>
+          <span>State</span><b>${!c.site.alive ? 'destroyed' : c.firing || c.lasing ? `firing at ${c.target?.name ?? ''}` : c.target ? `tracking ${c.target.name}` : c.auto ? 'automatic' : 'hold'}</b>
         </div>
         <div class="row"><button data-act="ciws" data-code="${c.code}" ${c.site.alive ? '' : 'disabled'}>${c.auto ? 'Hold fire' : 'Automatic'}</button></div>
         <div class="dim">${c.spec.kind === 'laser' ? 'The laser burns down drones (and, slowly, cruise missiles) inside 3.5 km. It never runs out of ammunition but overheats after long bursts.' : `The gun engages anything inbound inside about ${(c.spec.rangeM / 1000).toFixed(1)} km on its own; it cannot be pointed at a track.`}</div>`;

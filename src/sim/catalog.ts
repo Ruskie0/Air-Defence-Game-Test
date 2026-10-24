@@ -1,6 +1,6 @@
 import { AAM_MSL, LR_MSL, MR_MSL, MissileSpec, SH_MSL } from './missile';
 
-export type UnitType = 'LR' | 'MR' | 'SH' | 'CIWS' | 'EWR' | 'GNSS' | 'DECOY' | 'CAP';
+export type UnitType = 'LR' | 'MR' | 'SH' | 'CIWS' | 'GUN' | 'LASER' | 'EWR' | 'GAP' | 'GNSS' | 'DECOY' | 'CAP';
 
 /** One launcher of a SAM battery, at an absolute map position. */
 export interface DeployedLauncher {
@@ -86,10 +86,25 @@ export const CATALOG: Record<UnitType, UnitInfo> = {
     role: 'Radar-directed 4500 rpm gun, about 2 km. Last-ditch point defence; free to rearm.',
     rangeKm: 2.5,
   },
+  GUN: {
+    type: 'GUN', name: 'Skyburst 35 mm gun', costM: 35, unlockDay: 2,
+    role: 'Airburst gun, 4.5 km. Shreds drones and cruise missiles further out than the CIWS; weak against ARMs. Cheap to rearm.',
+    rangeKm: 4.5,
+  },
+  LASER: {
+    type: 'LASER', name: 'Counter-drone laser', costM: 45, unlockDay: 4,
+    role: 'High-energy laser, 3.5 km. Burns down drones one at a time and never runs out of shots, but overheats on long bursts and barely scratches missiles.',
+    rangeKm: 3.5,
+  },
   EWR: {
     type: 'EWR', name: 'Early warning radar', costM: 55, unlockDay: 1,
     role: 'L-band surveillance radar, 250 km, all round. Sees far and through most jamming, but is imprecise and draws SEAD.',
     rangeKm: 250,
+  },
+  GAP: {
+    type: 'GAP', name: 'Gap-filler radar', costM: 30, unlockDay: 2,
+    role: 'Low-level search radar on a 30 m mast, 25 km. Put it where hills hide the valleys: it spots low cruise missiles and drones early so the MR SAM can fire on them.',
+    rangeKm: 25,
   },
   GNSS: {
     type: 'GNSS', name: 'GNSS jammer', costM: 15, unlockDay: 1,

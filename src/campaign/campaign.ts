@@ -25,7 +25,7 @@ import { DeployZone, inZones } from '../sim/deploy';
 
 export const CAMPAIGN_DAYS = 10;
 /** Scale on the enemy's threat points for a whole day, shared between its operations (balance). */
-export const DAY_THREAT = 1;
+export const DAY_THREAT = 2;
 /** What the enemy remembers of a position it photographed or located is good for this long (minutes). */
 const SIGHTING_MIN = 18 * 60;
 export { CAP_RADIUS, DEPLOY_RADIUS };

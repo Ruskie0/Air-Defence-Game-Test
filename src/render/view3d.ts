@@ -9,6 +9,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { SoundEngine } from '../audio/sound';
 import { DEG } from '../sim/constants';
 import type { Entity } from '../sim/entities';
+import type { Column } from '../sim/column';
 import { V3, clamp, polar } from '../sim/math';
 import type { Radar } from '../sim/radar';
 import type { Ciws } from '../sim/ciws';
@@ -588,19 +589,23 @@ export class View3D {
             // A front-line town; every building sits on the ground under it.
             part('', root, 0, townGeometry(hashName(s.name), (x, z) => w.terrain.groundAt(s.pos.x + x, s.pos.y - z) - ground));
           } else if (s.role === 'assault') {
-            // The assault force in laager: two rows of tanks and fighting vehicles, and a command post.
+            // The assault force in laager: two rows of tanks and fighting vehicles, and a command post. While
+            // its column is on the road the column entity is drawn instead (see syncStatic).
+            const laager = new THREE.Group();
+            laager.name = 'laager';
+            root.add(laager);
             const yaw = -(w.terrain.layout.rot ?? 0) * DEG;
             for (let i = 0; i < 8; i++) {
               const lx = (i % 4) * 24 - 36;
               const lz = Math.floor(i / 4) * 22 - 11;
               const x = lx * Math.cos(yaw) + lz * Math.sin(yaw);
               const z = -lx * Math.sin(yaw) + lz * Math.cos(yaw);
-              const v = part(i < 4 ? 'tank' : 'ifv', root, w.terrain.groundAt(s.pos.x + x, s.pos.y - z) - ground);
+              const v = part(i < 4 ? 'tank' : 'ifv', laager, w.terrain.groundAt(s.pos.x + x, s.pos.y - z) - ground);
               v.position.x = x;
               v.position.z = z;
               v.rotation.y = yaw + (((i * 37) % 11) - 5) * 0.02;
             }
-            box(1, 14, 1, 0xdddddd, 0, 0, -30);
+            laager.add(box(1, 14, 1, 0xdddddd, 0, 0, -30));
           } else {
             box(30, 8, 22, 0x6a6e58);
             box(2, 25, 2, 0x999999, 12, 0, 8);
@@ -751,6 +756,13 @@ export class View3D {
     return o;
   }
 
+  /** The assault column faces along the road, even halted or forming up; in position it is the laager instead. */
+  private driveColumn(c: Column, o: EntityObj): void {
+    const to = c.speed > 1 ? { x: c.pos.x + c.vel.x, y: c.pos.y + c.vel.y } : c.dest;
+    if (Math.hypot(to.x - c.pos.x, to.y - c.pos.y) > 1) o.body.lookAt(this.tmp.set(to.x, o.root.position.y, -to.y));
+    if (c.state === 'arrived') o.root.visible = false;
+  }
+
   /** Helicopters face their heading even in a hover, dip the nose with speed, and spin their rotors. */
   private flyHelo(e: Entity, o: EntityObj, dt: number): void {
     const hdg = ((e as { hdg?: number }).hdg ?? 0) * DEG;
@@ -779,6 +791,7 @@ export class View3D {
       const len = MODEL_LEN[e.recon ? 'recon' : e.kind] ?? (e.munition ? 6 : 16);
       o.body.scale.setScalar(clamp((d * (e.munition ? 0.014 : 0.021)) / len, 1, 800));
       if (e.kind === 'helo') this.flyHelo(e, o, ev.simDt);
+      else if (e.kind === 'column') this.driveColumn(e as Column, o);
       else if (e.speed > 1) {
         this.tmp.set(e.pos.x + e.vel.x, e.pos.z + e.vel.z, -(e.pos.y + e.vel.y));
         o.body.lookAt(this.tmp);
@@ -910,6 +923,11 @@ export class View3D {
         s.label.element.classList.add('dead');
       }
       s.label.visible = this.showLabels && s.site.kind !== 'launcher';
+      if (s.site.role === 'assault') {
+        const laager = s.root.getObjectByName('laager');
+        const col = this.world.column;
+        if (laager) laager.visible = !col || !col.alive || col.state === 'arrived';
+      }
     }
     this.coverage.visible = this.showCoverage;
     // Reinforcements arrived (Last Stand): build their models.
@@ -936,7 +954,7 @@ export class View3D {
 
   /** What the player can see of an entity: own side, recent detections, or everything with "show undetected". */
   isVisible(e: Entity): boolean {
-    return (e.airborne || e.kind === 'convoy') && (this.showTruth || e.side === 'blue' || this.world.t - e.lastDetected < 12);
+    return (e.airborne || e.kind === 'convoy' || e.kind === 'column') && (this.showTruth || e.side === 'blue' || this.world.t - e.lastDetected < 12);
   }
 
   /** Clear trees and houses around every site whenever the set of sites changes, so nothing is buried in a forest. */

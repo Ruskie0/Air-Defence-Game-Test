@@ -17,13 +17,20 @@ import { IDENT_COLOR } from '../ui/colors';
 import { CameraRig } from './camera';
 import { Effects } from './effects';
 import { type FrameEvents, WorldEvents } from './events';
-import { MODEL_LEN, airModel, groundGeometry, interceptorModel } from './models';
+import { MODEL_LEN, airModel, groundGeometry, interceptorModel, townGeometry } from './models';
 import { Scenery, type SkyRig, buildScenery, buildSky, terrainSeed, updateHaze } from './terrain3d';
 import { WeatherView } from './weather';
 import { Wrecks } from './wrecks';
 
 /** Sim frame (x east, y north, z up) to three.js frame (x east, y up, z south). */
 export const toThree = (p: V3, out = new THREE.Vector3()): THREE.Vector3 => out.set(p.x, p.z, -p.y);
+
+/** A stable number from a name, to vary procedural layouts per site. */
+const hashName = (s: string): number => {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return h >>> 0;
+};
 
 function canvasTexture(size: number, draw: (g: CanvasRenderingContext2D, s: number) => void): THREE.CanvasTexture {
   const c = document.createElement('canvas');
@@ -457,12 +464,12 @@ export class View3D {
       };
       // Vertex-coloured unit models get a material of their own per site, so a destroyed one can be darkened.
       let unitMat: THREE.MeshStandardMaterial | null = null;
-      const part = (name: string, parent: THREE.Object3D = root, y = 0): THREE.Mesh => {
+      const part = (name: string, parent: THREE.Object3D = root, y = 0, geo?: THREE.BufferGeometry): THREE.Mesh => {
         if (!unitMat) {
           unitMat = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.15, roughness: 0.8 });
           mats.push(unitMat);
         }
-        const mesh = new THREE.Mesh(groundGeometry(name), unitMat);
+        const mesh = new THREE.Mesh(geo ?? groundGeometry(name), unitMat);
         mesh.position.y = y;
         parent.add(mesh);
         return mesh;
@@ -484,16 +491,21 @@ export class View3D {
             box(90, 30, 60, 0x9a958c, 0, 0, 110);
             box(6, 120, 6, 0xa05050, 80, 0, 120);
           } else if (s.role === 'town') {
-            // A small town: houses round a square and a church tower (placeholder until a proper model).
-            for (let i = 0; i < 18; i++) {
-              const ang = i * 2.4;
-              const r = 90 + (i % 6) * 45;
-              box(16 + (i % 3) * 6, 9 + (i % 4) * 3, 14 + (i % 2) * 6, i % 5 === 0 ? 0x9c6a50 : 0xb8b0a0, Math.sin(ang) * r, 0, Math.cos(ang) * r);
-            }
-            box(10, 34, 10, 0xa8a090, 0, 0, 0);
+            // A front-line town; every building sits on the ground under it.
+            part('', root, 0, townGeometry(hashName(s.name), (x, z) => w.terrain.groundAt(s.pos.x + x, s.pos.y - z) - ground));
           } else if (s.role === 'assault') {
-            // The assault force dug in: two rows of armoured vehicles.
-            for (let i = 0; i < 8; i++) box(8, 3.2, 4, olive, (i % 4) * 22 - 33, 0, Math.floor(i / 4) * 18 - 9);
+            // The assault force in laager: two rows of tanks and fighting vehicles, and a command post.
+            const yaw = -(w.terrain.layout.rot ?? 0) * DEG;
+            for (let i = 0; i < 8; i++) {
+              const lx = (i % 4) * 24 - 36;
+              const lz = Math.floor(i / 4) * 22 - 11;
+              const x = lx * Math.cos(yaw) + lz * Math.sin(yaw);
+              const z = -lx * Math.sin(yaw) + lz * Math.cos(yaw);
+              const v = part(i < 4 ? 'tank' : 'ifv', root, w.terrain.groundAt(s.pos.x + x, s.pos.y - z) - ground);
+              v.position.x = x;
+              v.position.z = z;
+              v.rotation.y = yaw + (((i * 37) % 11) - 5) * 0.02;
+            }
             box(1, 14, 1, 0xdddddd, 0, 0, -30);
           } else {
             box(30, 8, 22, 0x6a6e58);

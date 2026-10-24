@@ -140,6 +140,7 @@ export class Effects {
     this.aircraft(w, dt, visible);
     this.burning(w, dt);
     this.jammers(w, dt);
+    this.locatedSpots(w, dt);
     this.lowFlyers(w, dt, visible);
     this.updateDebris(w, dt);
     this.guns(w, dt);
@@ -469,6 +470,24 @@ export class Effects {
         this.fire.spawn({ x, y, z, life: 1.6, size0: 6, size1: 260, alpha: 0.22, c0: [0.9, 0.3, 1.6], c1: [0.2, 0.05, 0.4], windK: 0 });
         this.siteAcc.set(j, 0);
       } else this.siteAcc.set(j, acc);
+    }
+  }
+
+  /** Spots the enemy has located: a red beacon and a ring pulsing out from it until the strike lands. */
+  private locatedSpots(w: World, dt: number): void {
+    if (dt <= 0) return;
+    for (const l of w.exposure?.located ?? []) {
+      if (l.over || w.t > l.eta + 5) continue;
+      const g = w.terrain.groundAt(l.x, l.y);
+      const left = l.eta - w.t;
+      // Faster as the strike gets closer.
+      const every = left > 30 ? 1.6 : left > 10 ? 1 : 0.5;
+      this.fire.spawn({ x: l.x, y: g + 15, z: -l.y, life: Math.max(0.06, dt * 1.5), size0: 18, size1: 18, c0: [7, 0.5, 0.25], minPx: 6, windK: 0 });
+      const acc = (this.siteAcc.get(l) ?? 0) + dt;
+      if (acc >= every) {
+        this.fire.spawn({ x: l.x, y: g + 10, z: -l.y, life: 1.4, size0: 20, size1: 1400, alpha: 0.16, c0: [2.4, 0.25, 0.12], c1: [0.6, 0.05, 0.02], windK: 0 });
+        this.siteAcc.set(l, 0);
+      } else this.siteAcc.set(l, acc);
     }
   }
 

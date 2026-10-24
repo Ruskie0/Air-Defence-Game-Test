@@ -238,6 +238,22 @@ const RAIN_R = 110;
 const RAIN_H = 80;
 const rnd = Math.random;
 const sym = (a: number): number => (rnd() * 2 - 1) * a;
+const DEG = Math.PI / 180;
+
+/** Time of day outside the campaign (sandbox, Last Stand, training): early afternoon, or ?hour= in the URL. */
+const DEFAULT_HOUR = ((): number => {
+  const h = Number(new URLSearchParams(typeof location === 'undefined' ? '' : location.search).get('hour'));
+  return Number.isFinite(h) && h > 0 ? h : 14.5;
+})();
+
+/**
+ * Sun azimuth and elevation (degrees) at an hour of local time, for a mid-latitude summer: up about 05:15,
+ * highest (55 degrees, due south) at 12:45, down about 20:15. Game-level, not an ephemeris.
+ */
+export function sunAt(h: number): { az: number; el: number } {
+  const el = 39.8 * Math.cos(((h - 12.75) / 24) * 2 * Math.PI) + 15.2;
+  return { az: 180 + (h - 12.75) * 16, el };
+}
 
 export class WeatherView {
   /** Haze multiplier for updateHaze. */
@@ -256,8 +272,17 @@ export class WeatherView {
   private nextStrike = 6;
   private flash = 0;
   private hemi = 0.7;
-  /** The look the sky was last painted with. */
+  /** The look and sun elevation (whole half-degrees) the sky was last painted with. */
   private painted: Look | null = null;
+  private paintedStep = NaN;
+  /** Local time of day in hours (0-24), from the campaign clock. */
+  private hour = DEFAULT_HOUR;
+  private readonly cA = new THREE.Color();
+  private readonly cB = new THREE.Color();
+  /** Night 0..1, for the view's exposure and the night-time touches. */
+  night = 0;
+  /** Light from the sun (or moon) relative to the weather's daytime light, for the lightning flash. */
+  private sunK = 1;
 
   constructor(
     scene: THREE.Scene,
@@ -290,22 +315,11 @@ export class WeatherView {
   /** Set up a world's weather: sky, light, fog, clouds and how wet the ground is. */
   apply(w: World, terrainMesh: THREE.Mesh | null, fx: Effects): void {
     const L = LOOKS[w.weatherId] ?? CLEAR;
-    const sky = this.sky;
     // Fog settles relative to the defended area's ground, so valleys fill and high ground pokes out.
     const assets = w.sites.filter((s) => s.kind === 'asset');
     this.base = assets.length ? assets.reduce((a, s) => a + w.terrain.groundAt(s.pos.x, s.pos.y), 0) / assets.length : w.terrain.groundAt(0, 0);
-    if (L !== this.painted) {
-      this.painted = L;
-      sky.colors.zenith.set(L.zenith);
-      sky.colors.horizon.set(L.horizon);
-      sky.colors.below.set(L.below);
-      sky.colors.sunCol.set(L.sunCol);
-      sky.fog.color.set(L.horizon);
-      sky.refresh();
-    }
     this.look = L;
-    sky.sun.intensity = L.sun;
-    sky.hemi.intensity = this.hemi = L.hemi;
+    this.paint(true);
     this.haze = L.haze;
     GROUND_FOG.x = L.fog[0];
     GROUND_FOG.y = L.fog[1];
@@ -317,7 +331,6 @@ export class WeatherView {
       m.map = cloudTexture(L.cloud.cover);
       m.map.repeat.setScalar((half * 4) / CLOUD_TILE);
       m.needsUpdate = true;
-      this.cloudBelow.set(L.cloud.color);
       this.cloud.scale.set(half * 4, 1, half * 4);
       this.cloud.position.set(0, this.base + L.cloud.alt, 0);
     }
@@ -332,6 +345,54 @@ export class WeatherView {
     fx.wind.z = -2.5 * L.wind;
     this.nextStrike = 4 + rnd() * 6;
     this.rainSeeded = false;
+  }
+
+  /** Move the sun to a time of day (hours); the sky is repainted when it has moved half a degree. */
+  setHour(h: number): void {
+    this.hour = ((h % 24) + 24) % 24;
+    this.paint(false);
+  }
+
+  /** Sky colours, sun and moon, lights and haze for the weather at the current time of day. */
+  private paint(force: boolean): void {
+    const L = this.look;
+    const sky = this.sky;
+    const { az, el } = sunAt(this.hour);
+    const step = Math.round(el * 2) + Math.round(az / 2) * 1000;
+    if (!force && L === this.painted && step === this.paintedStep) return;
+    this.painted = L;
+    this.paintedStep = step;
+    // Day 1 above 12 degrees; golden light near the horizon; night once the sun is 6 degrees down.
+    const day = smoothstep(-6, 10, el);
+    const gold = smoothstep(-5, 1, el) * (1 - smoothstep(2, 14, el));
+    const night = 1 - smoothstep(-9, -2, el);
+    this.night = night;
+    const cloudy = L.cloud ? L.cloud.cover : 0;
+    const mix = (out: THREE.Color, dayCol: string, duskCol: string, nightCol: string): THREE.Color =>
+      out.set(dayCol).lerp(this.cB.set(duskCol), gold * (1 - 0.6 * cloudy)).lerp(this.cB.set(nightCol), 1 - day);
+    mix(sky.colors.zenith, L.zenith, '#3a5486', '#060a16');
+    mix(sky.colors.horizon, L.horizon, '#dca07e', '#18223a');
+    mix(sky.colors.below, L.below, '#7a6c60', '#0b0e14');
+    mix(sky.colors.sunCol, L.sunCol, '#ff9a55', '#1a2230');
+    sky.fog.color.copy(sky.colors.horizon);
+    sky.uniforms.night.value = night * (1 - cloudy);
+    // By night the moon lights the scene from the other side of the sky, faintly and blue.
+    const lightEl = el > -4 ? Math.max(el, 2) : 28;
+    const lightAz = el > -4 ? az : az + 180;
+    const ae = lightAz * DEG;
+    const ee = lightEl * DEG;
+    sky.sunDir.set(Math.sin(ae) * Math.cos(ee), Math.sin(ee), -Math.cos(ae) * Math.cos(ee)).normalize();
+    this.cA.set(L.sunCol === '#2c2a26' ? '#fff1d6' : L.sunCol);
+    sky.sun.color.copy(this.cA).lerp(this.cB.set('#ffa060'), gold).lerp(this.cB.set('#8fa6d8'), night);
+    this.sunK = Math.max(0.05, day) * (1 - 0.3 * gold);
+    sky.sun.intensity = L.sun * this.sunK + 0.7 * night * (1 - cloudy * 0.6);
+    this.hemi = L.hemi * (0.45 + 0.55 * day);
+    sky.hemi.intensity = this.hemi;
+    sky.hemi.color.set(0xc6d8ea).lerp(this.cB.set('#ffc7a0'), gold * 0.6).lerp(this.cB.set('#5a6a96'), night);
+    sky.hemi.groundColor.set(0x5d5443).lerp(this.cB.set('#262a34'), night);
+    this.cloudBelow.set(L.cloud?.color ?? '#9aa1a8').lerp(this.cB.set('#c08870'), gold * 0.5).lerp(this.cB.set('#1a1e26'), 1 - day);
+    this.cloudAbove.set('#c9ced2').lerp(this.cB.set('#20242c'), 1 - day);
+    sky.refresh();
   }
 
   /**

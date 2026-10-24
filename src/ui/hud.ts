@@ -359,6 +359,9 @@ export class Hud {
         f.escortColumn(w, !f.escort);
         break;
       }
+      case 'cap-hunt':
+        w.fighters[Number(d.i)].hunt(w, d.name!);
+        break;
       case 'cap-sweep':
         w.fighters[Number(d.i)].sweep(w, d.name!);
         break;
@@ -534,14 +537,23 @@ export class Hud {
   /** Sweep buttons for a fighter: one per enemy-held town that still has a SAM or radar standing. */
   private sweepRow(f: Fighter, i: number): string {
     const w = this.w;
+    if (!f.alive) return '';
+    if (f.state === 'hunt') return `<div class="sys-b dim">Hunting the enemy ${f.huntKind === 'awacs' ? 'AWACS' : 'tanker'}</div>`;
+    const hunts = (['awacs', 'tanker'] as const)
+      .filter((k) => w.redSupport.target(k))
+      .map((k) => {
+        const why = f.huntError(w, k);
+        const tip = k === 'awacs' ? 'While the AWACS is up, enemy aircraft are warned of our shots.' : 'While the tanker is up, enemy jammers and SEAD fighters stay on station longer.';
+        return `<button data-act="cap-hunt" data-i="${i}" data-name="${k}" ${why ? 'disabled' : ''} title="${esc(why ?? `${tip} Go deep and shoot it down: it orbits over the enemy's SAM sites, so the fighter will be in their reach.`)}">Hunt ${k === 'awacs' ? 'AWACS' : 'tanker'}</button>`;
+      });
     const sites = w.enemyAd.targets();
-    if (!sites.length || !f.alive) return '';
+    if (!sites.length) return hunts.length ? `<div class="sys-b">${hunts.join('')}</div>` : '';
     if (f.state === 'sweep') return `<div class="sys-b dim">Sweeping the ${esc(w.enemyAd.sites.find((a) => a.base.id === f.sweepId)?.base.name ?? '')}</div>`;
     const btns = sites.map((a) => {
       const why = f.sweepError(w, a.base.id);
       return `<button data-act="cap-sweep" data-i="${i}" data-name="${esc(a.base.id)}" ${why ? 'disabled' : ''} title="${esc(why ?? `Run in low, pop up ${ENEMY_AD.sweepReleaseM / 1000} km out and fire stand-off weapons at the ${a.base.name}, then come home to rearm. Its SAM gets a look at the fighter while it is popped up.`)}">Sweep ${esc(a.base.town ?? a.base.name)}</button>`;
     });
-    return `<div class="sys-b">${btns.join('')}</div>`;
+    return `<div class="sys-b">${[...hunts, ...btns].join('')}</div>`;
   }
 
 

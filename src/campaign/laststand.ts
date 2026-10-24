@@ -138,6 +138,7 @@ export class LastStand {
     w.scenario.doneMsg = `Wave ${this.wave} held.`;
     w.qraUsed = false;
     w.exposure.rearm(this.wave);
+    w.redSupport.launch(w, this.wave);
     w.exposure.strikesLeft = 2 + Math.floor(this.wave / 2);
     w.exposure.cooldownS = cbCooldown(this.wave);
     w.log(`Wave ${this.wave}: ${plan.length} packages inbound${plan.length < wanted.length ? ` (${wanted.length - plan.length} called off: their launch sites ran dry)` : ''}`, 'raid');

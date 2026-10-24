@@ -6,7 +6,7 @@ import { AI_RADAR, Radar } from './radar';
 import { wcsAllows } from './tewa';
 import type { World } from './world';
 
-export type CapState = 'station' | 'intercept' | 'sweep' | 'rtb' | 'ground';
+export type CapState = 'station' | 'intercept' | 'sweep' | 'hunt' | 'rtb' | 'ground';
 
 /** Friendly fighter on combat air patrol, datalinked to the fused picture, armed with active radar AAMs. */
 export class Fighter extends Air {
@@ -34,6 +34,8 @@ export class Fighter extends Air {
   /** The enemy-held town being swept, and until when the fighter is popped up after releasing. */
   sweepId: string | null = null;
   private popUntil = 0;
+  /** The enemy support aircraft being hunted ('awacs' or 'tanker'). */
+  huntKind: string | null = null;
   private leg = 0;
 
   constructor(name: string, code: string, base: V3, station: V3, start: V3) {
@@ -97,6 +99,26 @@ export class Fighter extends Air {
     this.sweepId = id;
     this.targetTrackId = null;
     w.log(`${this.name} sweeping the ${w.enemyAd.sites.find((a) => a.base.id === id)?.base.name}: running in low`, 'engage');
+  }
+
+  /** Go deep after the enemy AWACS or tanker: fly out to its racetrack and fire on it from long range. */
+  hunt(w: World, kind: string): void {
+    const why = this.huntError(w, kind);
+    if (why) {
+      w.log(`${this.name}: ${why}`, 'info');
+      return;
+    }
+    this.state = 'hunt';
+    this.huntKind = kind;
+    this.targetTrackId = null;
+    w.log(`${this.name} going deep after the enemy ${kind === 'awacs' ? 'AWACS' : 'tanker'}`, 'engage');
+  }
+
+  huntError(w: World, kind: string): string | null {
+    if (!this.alive || !this.airborne) return 'not airborne';
+    if (this.missiles === 0) return 'no missiles left';
+    if (!w.redSupport.target(kind)) return 'not flying';
+    return null;
   }
 
   sweepError(w: World, id: string): string | null {
@@ -169,6 +191,7 @@ export class Fighter extends Air {
     if (this.aam && !this.aam.alive) this.aam = null;
     if (this.escort) this.stepEscort(w);
     if (this.state !== 'sweep') this.tfAgl = null;
+    if (this.state !== 'hunt') this.huntKind = null;
 
     switch (this.state) {
       case 'station': {
@@ -242,6 +265,31 @@ export class Fighter extends Air {
           this.standoff--;
           this.popUntil = w.t + 15;
           w.log(`${this.name} pops up and releases on the ${tgts[0].base.name}`, 'engage');
+        }
+        break;
+      }
+      case 'hunt': {
+        const tgt = w.redSupport.target(this.huntKind ?? '');
+        if (!tgt || (this.missiles === 0 && !this.aam)) {
+          this.huntKind = null;
+          if (this.missiles === 0) this.rtb(w);
+          else this.toStation(w);
+          break;
+        }
+        this.steer(tgt.pos.x, tgt.pos.y, dt);
+        this.cmdAlt = clamp(tgt.pos.z, 1500, 12500);
+        this.cmdSpd = 320;
+        const R = dist(this.pos, tgt.pos);
+        const off = angleBetween(this.vel, sub(tgt.pos, this.pos));
+        // A big target that sees it coming and runs: the fighter has to close well inside its usual range to make the shot stick.
+        if (!this.aam && this.missiles > 0 && R < clamp(this.aamRange(tgt.pos, tgt.vel) * 0.6, 15000, 35000) && off < 45) {
+          this.missiles--;
+          this.aam = new Interceptor(w, AAM_MSL, null, this.name, this.pos, tgt.pos, clone(this.vel), -1);
+          this.aam.home = tgt;
+          w.missiles.push(this.aam);
+          w.stats.fired.AAM++;
+          w.stats.costM += AAM_MSL.costM;
+          w.log(`${this.name} Fox 3 on the enemy ${this.huntKind === 'awacs' ? 'AWACS' : 'tanker'} at ${(R / 1000).toFixed(0)} km`, 'engage');
         }
         break;
       }

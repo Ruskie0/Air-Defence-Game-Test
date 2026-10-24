@@ -32,7 +32,9 @@ uniform vec3 horizon;
 uniform vec3 below;
 uniform vec3 sunDir;
 uniform vec3 sunCol;
+uniform float night;
 varying vec3 vDir;
+float hash(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
 void main() {
   vec3 d = normalize(vDir);
   float h = d.y;
@@ -41,6 +43,12 @@ void main() {
   float s = max(dot(d, sunDir), 0.0);
   c += sunCol * (pow(s, 6.0) * 0.18 + pow(s, 80.0) * 0.5) * smoothstep(-0.1, 0.05, h);
   c += sunCol * smoothstep(0.99955, 0.9998, s) * 6.0;
+  // Stars come out after dusk.
+  if (night > 0.0) {
+    vec3 cell = floor(d * 700.0);
+    float st = step(0.9993, hash(cell));
+    c += vec3(0.75, 0.8, 1.0) * st * (0.4 + 0.6 * hash(cell + 7.0)) * night * smoothstep(0.02, 0.25, h);
+  }
   gl_FragColor = vec4(c, 1.0);
 }`;
 
@@ -54,6 +62,10 @@ export interface SkyRig {
   readonly hemi: THREE.HemisphereLight;
   readonly sun: THREE.DirectionalLight;
   readonly fog: THREE.FogExp2;
+  /** Direction to the sun (or the moon at night), three.js frame; change it, then call refresh(). */
+  readonly sunDir: THREE.Vector3;
+  /** 0 by day, 1 at full night (stars). */
+  readonly uniforms: { night: { value: number } };
   /** Re-render the background and the reflections after changing the colours. */
   refresh(): void;
 }
@@ -76,17 +88,21 @@ export function buildSky(renderer: THREE.WebGLRenderer, scene: THREE.Scene): Sky
       below: { value: colors.below },
       sunDir: { value: SUN_DIR.clone() },
       sunCol: { value: colors.sunCol },
+      night: { value: 0 },
     },
   });
   const skyScene = new THREE.Scene();
   skyScene.add(new THREE.Mesh(new THREE.SphereGeometry(1000, 64, 32), mat));
 
+  const sun = new THREE.DirectionalLight(0xfff0d8, 2.6);
   const cube = new THREE.WebGLCubeRenderTarget(512, { type: THREE.HalfFloatType });
   const cubeCam = new THREE.CubeCamera(1, 5000, cube);
   scene.background = cube.texture;
   scene.environmentIntensity = 0.5;
   let env: THREE.WebGLRenderTarget | null = null;
+  const sunDir = mat.uniforms.sunDir.value as THREE.Vector3;
   const refresh = (): void => {
+    sun.position.copy(sunDir).multiplyScalar(100000);
     cubeCam.update(renderer, skyScene);
     const pmrem = new THREE.PMREMGenerator(renderer);
     env?.dispose();
@@ -100,10 +116,8 @@ export function buildSky(renderer: THREE.WebGLRenderer, scene: THREE.Scene): Sky
   scene.fog = fog;
   const hemi = new THREE.HemisphereLight(0xc6d8ea, 0x5d5443, 0.7);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xfff0d8, 2.6);
-  sun.position.copy(SUN_DIR).multiplyScalar(100000);
   scene.add(sun);
-  return { colors, hemi, sun, fog, refresh };
+  return { colors, hemi, sun, fog, sunDir, uniforms: { night: mat.uniforms.night as { value: number } }, refresh };
 }
 
 /** Aerial perspective is a low-level effect: thin the haze as the camera climbs so the overview stays clear. */

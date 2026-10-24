@@ -126,12 +126,12 @@ export const threatBudget = (day: number, scale = 1): number => (8 + day * 11.5)
  * Build a day's raid plan from the enemy's budget and what it has learned. Package sectors are listed
  * relative to the enemy side of the map (sector 0 = the mountains, bearing `rot`).
  */
-export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: number, rot = 0, threatScale = 1): PlannedPkg[] {
+export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: number, rot = 0, threatScale = 1, noDrones = false): PlannedPkg[] {
   const k = sectorOf(rot);
   const rng = new Rng(seed * 7919 + day * 104729);
   let budget = threatBudget(day, threatScale);
   const out: PlannedPkg[] = [];
-  const kinds = (Object.keys(PKG) as PkgKind[]).filter((k) => day >= PKG[k].minDay && k !== 'dark');
+  const kinds = (Object.keys(PKG) as PkgKind[]).filter((k) => day >= PKG[k].minDay && k !== 'dark' && !(noDrones && (k === 'drones' || k === 'decoys' || k === 'recon')));
   let guard = 0;
   while (budget > 2 && guard++ < 40) {
     const affordable = kinds.filter((k) => PKG[k].cost(PKG[k].size(day, rng)) <= budget + 2);

@@ -6,6 +6,7 @@ import { DayObjective, objectiveName, objectiveStatus, pickObjectives } from './
 import { ReconDrone } from '../sim/entities';
 import { EVENTS, EventId, rollEvent } from './events';
 import type { DeepStrikeId } from './deepstrike';
+import { WEATHER, WeatherId, rollWeather } from './weather';
 import { hdist, v3 } from '../sim/math';
 import { CLASSIC_LAYOUT, MapLayout, MapType, Terrain, legacyLayout, randomLayout, typeForSeed } from '../sim/terrain';
 import { MAP_SEED } from '../sim/world';
@@ -80,6 +81,8 @@ export interface CampaignState {
   eventResult?: string;
   /** Taken off the next income (an event). */
   incomePenalty?: number;
+  /** Today's weather. */
+  weather?: WeatherId;
   /** Today's deep strike, once flown. */
   deepStrike?: { id: DeepStrikeId; ok: boolean; text: string } | null;
 }
@@ -376,7 +379,8 @@ export class Campaign {
     const sup = this.s.enemy.suppressed;
     if (sup) for (const k of Object.keys(sup) as PkgKind[]) if (--sup[k]! <= 0) delete sup[k];
     this.s.deepStrike = null;
-    this.s.plan = planDay(this.s.day, this.s.seed, this.s.enemy, this.s.nextPkg, this.layout.rot, this.diff.threat);
+    this.s.weather = rollWeather(this.s.seed, this.s.day);
+    this.s.plan = planDay(this.s.day, this.s.seed, this.s.enemy, this.s.nextPkg, this.layout.rot, this.diff.threat, WEATHER[this.s.weather].noDrones);
     this.s.nextPkg += this.s.plan.length;
     this.s.objectives = pickObjectives(this.s.plan, this.s.day, this.s.seed);
     this.s.event = rollEvent(this);
@@ -419,14 +423,16 @@ export class Campaign {
 
   /** Intel summary lines for the briefing. */
   intel(): string[] {
-    const lines = this.s.plan
+    const wx = WEATHER[this.s.weather ?? 'clear'];
+    const lines = [`Weather: ${wx.desc}`];
+    lines.push(...this.s.plan
       .filter((p) => p.reported)
       .map((p) => {
         const def = PKG[p.kind];
         const when = p.t < 120 ? 'early' : p.t < 500 ? 'mid-raid' : 'late';
         const aimed = p.aims ? `, aimed at ${p.aims.length > 1 ? `${p.aims.length} of our positions` : 'one of our positions'} their recon photographed` : '';
         return `${def.name} from the ${SECTOR_NAMES[sectorOf(p.bearing)]} (${when}): ${def.describe(p.size)}${aimed}`;
-      });
+      }));
     const missed = this.s.plan.filter((p) => !p.reported).length;
     if (missed) lines.push(`Intel coverage is incomplete: expect ${missed === 1 ? 'one package' : 'more packages'} we have not seen.`);
     const sup = Object.entries(this.s.enemy.suppressed ?? {}).filter(([, n]) => n! > 0);
@@ -447,6 +453,7 @@ export class Campaign {
       civil: withRaids,
       upgrades: this.s.upgrades,
       budgetM: this.s.money,
+      weather: this.s.weather,
     });
   }
 

@@ -226,6 +226,29 @@ export class Ppi {
       g.fillStyle = s.alive ? (s.defended ? '#7fc1ff' : '#4d7fae') : '#555';
       const r = s.defended ? 3 : 2;
       g.fillRect(x - r, y - r, r * 2, r * 2);
+      if (s.role) {
+        // Towns we hold and the assault force: a ring and a name, since they sit far up the front.
+        g.strokeStyle = s.role === 'assault' ? '#ffd84d' : '#d8d8c0';
+        g.beginPath();
+        g.arc(x, y, 6, 0, Math.PI * 2);
+        g.stroke();
+        g.fillStyle = g.strokeStyle;
+        g.font = '9px sans-serif';
+        g.fillText(s.role === 'assault' ? 'ASSAULT' : s.name, x + 8, y + 3);
+      }
+    }
+
+    // Batteries the enemy has located: a red cross on the spot until the strike lands.
+    g.strokeStyle = '#ff4040';
+    for (const l of w.exposure.located) {
+      if (w.t > l.eta + 5) continue;
+      const [x, y] = this.toScreen(l.x, l.y);
+      g.beginPath();
+      g.moveTo(x - 6, y - 6);
+      g.lineTo(x + 6, y + 6);
+      g.moveTo(x + 6, y - 6);
+      g.lineTo(x - 6, y + 6);
+      g.stroke();
     }
 
     // Interceptors in flight.

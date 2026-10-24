@@ -42,7 +42,7 @@ let stand: LastStand | null = null;
 let standUi: StandUi | null = null;
 const view = new View3D(document.getElementById('view')!, world);
 const ppi = new Ppi(document.getElementById('ppi') as HTMLCanvasElement, world);
-const ctl: GameControl = { speed: Number(params.get('speed')) || 1, paused: false };
+const ctl: GameControl = { speed: Number(params.get('speed')) || 1, paused: false, skipQuiet: params.get('skipquiet') !== '0' };
 const hud = new Hud(world, view, ppi, ctl);
 
 function show(w: World): void {
@@ -112,6 +112,8 @@ function startTraining(): void {
   hud.setWorld(w);
   ctl.paused = false;
   ctl.speed = 1;
+  // The coach paces the lesson itself.
+  ctl.skipQuiet = false;
   running = true;
   document.body.dataset.mode = 'training';
   view.setView('defended');
@@ -189,6 +191,14 @@ else if (mode === 'campaign') {
   },
 };
 
+/** Nothing hostile, unknown or pending in the picture and no interceptor in the air: a stretch to skip. */
+function quiet(w: World): boolean {
+  if (w.missiles.length) return false;
+  return !w.tracker.tracks.some((t) => t.confirmed && !t.dropped && t.ident !== 'FRD' && t.ident !== 'NEU');
+}
+
+const QUIET_SPEED = 16;
+let calmSince = Infinity;
 const MAX_STEPS_PER_FRAME = 64;
 let acc = 0;
 let last = performance.now();
@@ -197,7 +207,12 @@ function frame(now: number): void {
   const real = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (running && !ctl.paused) {
-    acc += real * ctl.speed;
+    // A few quiet seconds in a row before speeding up, so a flickering contact does not toggle it.
+    calmSince = quiet(world) ? Math.min(calmSince, world.t) : Infinity;
+    const ff = !!ctl.skipQuiet && !tutorial && world.t - calmSince > 3;
+    if (ctl.fastForward && !ff) world.log('Contact: back to normal speed', 'alert');
+    ctl.fastForward = ff;
+    acc += real * (ff ? Math.max(ctl.speed, QUIET_SPEED) : ctl.speed);
     let n = 0;
     while (acc >= DT && n < MAX_STEPS_PER_FRAME) {
       world.step(DT);

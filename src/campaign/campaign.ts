@@ -14,6 +14,9 @@ import { World } from '../sim/world';
 import { doctrineOf, pickDoctrine } from './doctrine';
 import { award, battleMedals } from './medals';
 import { EnemyModel, PKG, PkgKind, PlannedPkg, SECTOR_NAMES, newEnemy, planDay, sectorOf, toRaids } from './raidgen';
+import { ASSAULT_HOLD, FrontState, OFFENSIVE_COST_M, TAKEN_HP, TOWN_THREAT_CUT, assaultSpot, deployZones, frontTown, newFront, nextObjective, townIncome, townsHeld } from './front';
+import { Rng } from '../sim/rng';
+import { DeployZone, inZones } from '../sim/deploy';
 
 export const CAMPAIGN_DAYS = 10;
 export { CAP_RADIUS, DEPLOY_RADIUS };
@@ -46,6 +49,10 @@ export interface DayReport {
   damage: { name: string; lost: number; hp: number }[];
   /** Equipment destroyed. */
   losses: string[];
+  /** What happened on the front line. */
+  front?: string[];
+  /** Spent by the automatic restock this morning ($M). */
+  restockM?: number;
   /** What the enemy took away from the day. */
   lessons: string[];
   /** Crews that went up a rank. */
@@ -89,6 +96,10 @@ export interface CampaignState {
   weather?: WeatherId;
   /** Today's deep strike, once flown. */
   deepStrike?: { id: DeepStrikeId; ok: boolean; text: string } | null;
+  /** The front line: towns held and today's offensive. Absent only in saves from before it (added on load). */
+  front?: FrontState;
+  /** Refill launchers and top up spares every morning. */
+  autoRestock?: boolean;
 }
 
 /** Where new units go before the player moves them, in order of preference. */
@@ -132,7 +143,9 @@ export class Campaign {
       mapType,
       difficulty,
       upgrades: [],
+      autoRestock: true,
     });
+    c.s.front = newFront(c.terrain, seed);
     // Starting order of battle: one MR battery, a SHORAD unit and a CIWS on the airbase.
     c.add('MR');
     c.add('SH');
@@ -152,7 +165,9 @@ export class Campaign {
       s.enemy.kindW.strike ??= 1;
       s.enemy.kindW.helo ??= 1;
       s.objectives ??= pickObjectives(s.plan, s.day, s.seed);
-      return new Campaign(s);
+      const c = new Campaign(s);
+      s.front ??= newFront(c.terrain, s.mapSeed ?? s.seed);
+      return c;
     } catch {
       return null;
     }
@@ -188,6 +203,11 @@ export class Campaign {
     return this.units.find((u) => u.uid === uid);
   }
 
+  /** Where ground units may stand today. */
+  get zones(): DeployZone[] {
+    return deployZones(this.s.front);
+  }
+
   unlocked(type: UnitType): boolean {
     return this.s.day >= CATALOG[type].unlockDay;
   }
@@ -198,7 +218,8 @@ export class Campaign {
   income(): number {
     const hp = (n: string): number => (this.s.deployment.assets.find((a) => a.name === n)?.hp ?? 0) / 100;
     const supply = this.has('supply') ? 15 : 0;
-    return Math.max(0, Math.round((50 + 65 * hp('Airbase') + 45 * hp('Power plant') + 25 * hp('CRC')) * this.diff.income) + supply - (this.s.incomePenalty ?? 0));
+    const towns = Math.round(townIncome(this.s.front) * this.diff.income);
+    return Math.max(0, Math.round((50 + 65 * hp('Airbase') + 45 * hp('Power plant') + 25 * hp('CRC')) * this.diff.income) + towns + supply - (this.s.incomePenalty ?? 0));
   }
 
   /** Price of restoring one hp point of an asset. */
@@ -266,7 +287,7 @@ export class Campaign {
       !this.placeError(t, type, x, y) && !this.units.some((u) => u.type !== 'CAP' && type !== 'CAP' && Math.hypot(u.x - x, u.y - y) < 1500);
     const spot = spots.find((p) => free(p.x, p.y));
     // Otherwise spiral out from the first spot until the ground allows it.
-    const p = spot ?? nearestFree(t, type, spots[0].x, spots[0].y, this.units, -1, 1500);
+    const p = spot ?? nearestFree(t, type, spots[0].x, spots[0].y, this.units, -1, 1500, this.zones);
     const u = newUnit(this.s.nextUid++, type, Math.round(p.x), Math.round(p.y), CATALOG[type].sector ? t.layout.rot : 0);
     this.units.push(u);
     return u;
@@ -329,6 +350,96 @@ export class Campaign {
     return true;
   }
 
+  /** What Restock all costs now: every launcher full, and at least 4 spare missiles per battery. */
+  restockCost(): number {
+    let cost = 0;
+    for (const u of this.units) {
+      if (!u.launchers.length) continue;
+      cost += this.reloadCost(u);
+      if (u.spares < 4) cost += this.sparesCost(u);
+    }
+    return Math.round(cost * 10) / 10;
+  }
+
+  /** Refill every launcher and top spares up to 4, as far as the budget goes. Returns what it spent ($M). */
+  restock(): number {
+    const before = this.s.money;
+    for (const u of this.units) this.reload(u);
+    for (const u of this.units) if (u.launchers.length && u.spares < 4) this.buySpares(u);
+    return Math.round((before - this.s.money) * 10) / 10;
+  }
+
+  // ------------------------------------------------------------- the front line
+
+  /** Why an offensive cannot be launched today, or null. */
+  offensiveError(): string | null {
+    const f = this.s.front;
+    if (!f || f.towns.length < 2) return 'There is no road to push up on this map';
+    if (f.offensive !== null) return 'Already launched today';
+    if (nextObjective(f) < 0) return 'Every town on the road is ours';
+    if (this.s.day < 2) return 'Available from day 2';
+    if (OFFENSIVE_COST_M > this.s.money) return 'Not enough budget';
+    return null;
+  }
+
+  /** Send the ground forces up the road to take the next town; the enemy will counter-attack the assault force. */
+  launchOffensive(): boolean {
+    if (this.offensiveError()) return false;
+    const f = this.s.front!;
+    this.s.money -= OFFENSIVE_COST_M;
+    f.offensive = nextObjective(f);
+    const day = this.s.day;
+    const rng = new Rng(this.s.seed * 97 + day * 13);
+    const at = assaultSpot(this.terrain, f, f.offensive);
+    const kinds: [PkgKind, number][] = [['drones', Math.min(12, 4 + Math.floor(day / 2))]];
+    if (day >= 2) kinds.push(['cruise', Math.min(5, 2 + Math.floor(day / 4))]);
+    if (day >= 3) kinds.push(['helo', day >= 6 ? 3 : 2]);
+    if (day >= 4) kinds.push(['strike', day >= 8 ? 3 : 2]);
+    kinds.forEach(([kind, size], i) => {
+      this.s.plan.push({
+        id: this.s.nextPkg++,
+        kind,
+        bearing: (this.layout.rot + rng.range(-30, 30) + 360) % 360,
+        size,
+        t: Math.round(90 + i * 140 + rng.range(0, 60)),
+        reported: true,
+        target: 'Assault force',
+        origin: kind === 'drones' || kind === 'helo' ? at : undefined,
+        counter: true,
+      });
+    });
+    this.s.plan.sort((a, b) => a.t - b.t);
+    return true;
+  }
+
+  /** Call today's offensive off before the battle, for the money back. */
+  cancelOffensive(): boolean {
+    const f = this.s.front;
+    if (!f || f.offensive === null) return false;
+    f.offensive = null;
+    this.s.money += OFFENSIVE_COST_M;
+    this.s.plan = this.s.plan.filter((p) => !p.counter);
+    return true;
+  }
+
+  /** Price of restoring one hp point of a town. */
+  private townRate = 0.3;
+
+  townRepairCost(i: number): number {
+    const tn = this.s.front?.towns[i];
+    return tn && tn.ours ? Math.ceil((100 - tn.hp) * this.townRate) : 0;
+  }
+
+  repairTown(i: number): boolean {
+    const tn = this.s.front?.towns[i];
+    if (!tn || !tn.ours || tn.hp >= 100) return false;
+    const pts = Math.min(100 - tn.hp, Math.floor(this.s.money / this.townRate));
+    if (pts <= 0) return false;
+    this.s.money -= Math.min(this.s.money, Math.ceil(pts * this.townRate));
+    tn.hp += pts;
+    return true;
+  }
+
   /** Scrap a unit for a fifth of its price. */
   sell(u: DeployedUnit): void {
     if (u.loan) return;
@@ -340,7 +451,7 @@ export class Campaign {
 
   /** Why a unit cannot stand at (x, y), or null if it can. */
   placeError(t: Terrain, type: UnitType, x: number, y: number, uid = -1): string | null {
-    return placeError(t, type, x, y, this.units, uid);
+    return placeError(t, type, x, y, this.units, uid, this.zones);
   }
 
   /** Move a unit (and its launchers with it). */
@@ -385,8 +496,18 @@ export class Campaign {
     if (sup) for (const k of Object.keys(sup) as PkgKind[]) if (--sup[k]! <= 0) delete sup[k];
     this.s.deepStrike = null;
     this.s.weather = rollWeather(this.s.seed, this.s.day);
-    this.s.plan = planDay(this.s.day, this.s.seed, this.s.enemy, this.s.nextPkg, this.layout.rot, this.diff.threat, WEATHER[this.s.weather].noDrones);
+    // Every town we hold beyond the first leaves the enemy less room to launch from.
+    const cut = 1 - TOWN_THREAT_CUT * Math.max(0, townsHeld(this.s.front) - 1);
+    this.s.plan = planDay(this.s.day, this.s.seed, this.s.enemy, this.s.nextPkg, this.layout.rot, this.diff.threat * cut, WEATHER[this.s.weather].noDrones);
     this.s.nextPkg += this.s.plan.length;
+    const f = this.s.front;
+    if (f) {
+      f.offensive = null;
+      // Some of the raids go for our most forward town.
+      const front = frontTown(f);
+      const rng = new Rng(this.s.seed * 53 + this.s.day * 7);
+      if (front && this.s.day >= 2) for (const p of this.s.plan) if ((p.kind === 'drones' || p.kind === 'cruise' || p.kind === 'strike') && !p.aims && rng.chance(0.3)) p.target = front.name;
+    }
     this.s.objectives = pickObjectives(this.s.plan, this.s.day, this.s.seed);
     this.s.event = rollEvent(this);
     this.s.eventResult = undefined;
@@ -432,14 +553,23 @@ export class Campaign {
     const lines = [`Weather: ${wx.desc}`];
     const doc = doctrineOf(this.s.enemy.doctrine);
     if (doc) lines.push(this.s.day >= 2 ? `Enemy commander: ${doc.name}. ${doc.desc}` : 'Enemy commander: not yet known. Watch what they send today; by tomorrow we will know who we are up against.');
+    const f = this.s.front;
+    if (f?.towns.length) {
+      const held = f.towns.filter((t) => t.ours);
+      const next = nextObjective(f);
+      lines.push(`Front line: we hold ${held.map((t) => t.name).join(', ') || 'nothing beyond the airbase'}.${next >= 0 ? ` Next up the road: ${f.towns[next].name}${f.towns[next].airfield ? ', the enemy forward airfield' : ''}, ${(Math.hypot(f.towns[next].x, f.towns[next].y) / 1000).toFixed(0)} km out.` : ''}`);
+      if (f.offensive !== null) lines.push(`Offensive on ${f.towns[f.offensive].name} today: keep the assault force above ${ASSAULT_HOLD}% until the day ends and the town is ours. Expect a counter-attack on it.`);
+    }
     lines.push(...this.s.plan
-      .filter((p) => p.reported)
+      .filter((p) => p.reported && !p.counter)
       .map((p) => {
         const def = PKG[p.kind];
         const when = p.t < 120 ? 'early' : p.t < 500 ? 'mid-raid' : 'late';
         const aimed = p.aims ? `, aimed at ${p.aims.length > 1 ? `${p.aims.length} of our positions` : 'one of our positions'} their recon photographed` : '';
         return `${def.name} from the ${SECTOR_NAMES[sectorOf(p.bearing)]} (${when}): ${def.describe(p.size)}${aimed}`;
       }));
+    const counter = this.s.plan.filter((p) => p.counter);
+    if (counter.length) lines.push(`Counter-attack on the assault force: ${counter.map((p) => `${PKG[p.kind].name.toLowerCase()} (${p.size})`).join(', ')}`);
     const missed = this.s.plan.filter((p) => !p.reported).length;
     if (missed) lines.push(`Intel coverage is incomplete: expect ${missed === 1 ? 'one package' : 'more packages'} we have not seen.`);
     const sup = Object.entries(this.s.enemy.suppressed ?? {}).filter(([, n]) => n! > 0);
@@ -452,7 +582,12 @@ export class Campaign {
     const dep: Deployment = JSON.parse(JSON.stringify(this.s.deployment, (_k, v) => (v === Infinity ? 'Infinity' : v)), (_k, v) =>
       v === 'Infinity' ? Infinity : v,
     );
+    const f = this.s.front;
+    const off = f && f.offensive !== null ? f.towns[f.offensive] : null;
     return new World({
+      towns: f?.towns.filter((t) => t.ours).map((t) => ({ name: t.name, x: t.x, y: t.y, hp: t.hp })),
+      assault: off ? { ...assaultSpot(this.terrain, f!, f!.offensive!), target: off.name } : undefined,
+      zones: this.zones,
       seed: this.s.seed * 31 + this.s.day,
       terrain: this.terrain,
       deployment: dep,
@@ -461,6 +596,7 @@ export class Campaign {
       upgrades: this.s.upgrades,
       budgetM: this.s.money,
       weather: this.s.weather,
+      counterBattery: withRaids ? this.s.day : 0,
     });
   }
 
@@ -529,6 +665,46 @@ export class Campaign {
     }
     s.deployment.units = kept;
 
+    // The front line: towns knocked flat fall, a surviving assault force takes its town.
+    const frontLines: string[] = [];
+    const f = s.front;
+    if (f) {
+      for (const tn of f.towns) {
+        const site = tn.ours ? w.site(tn.name) : undefined;
+        if (site) tn.hp = Math.round(site.hp);
+      }
+      const fallen = f.towns.findIndex((tn) => tn.ours && tn.hp <= 0);
+      if (fallen >= 0) {
+        for (const tn of f.towns.slice(fallen)) {
+          if (!tn.ours) continue;
+          tn.ours = false;
+          tn.hp = 100;
+          frontLines.push(`${tn.name} has fallen to the enemy. We lose its income and the ground round it.`);
+        }
+      }
+      if (f.offensive !== null) {
+        const tn = f.towns[f.offensive];
+        const hp = Math.round(w.site('Assault force')?.hp ?? 0);
+        if (hp >= ASSAULT_HOLD && (fallen < 0 || fallen > f.offensive)) {
+          tn.ours = true;
+          tn.hp = TAKEN_HP;
+          frontLines.push(`The assault force held (${hp}%) and took ${tn.name}: +$${tn.incomeM}M a day, and units can now deploy round it.`);
+        } else {
+          frontLines.push(`The offensive on ${tn.name} failed: the assault force was ${hp > 0 ? `down to ${hp}%` : 'destroyed'}.`);
+        }
+      }
+      // Units left outside the ground we hold pull back overnight.
+      const zones = this.zones;
+      for (const u of s.deployment.units) {
+        if (u.type === 'CAP' || inZones(zones, u.x, u.y)) continue;
+        const z = zones.reduce((a, b) => (Math.hypot(u.x - b.x, u.y - b.y) - b.r < Math.hypot(u.x - a.x, u.y - a.y) - a.r ? b : a));
+        const d = Math.hypot(u.x - z.x, u.y - z.y);
+        const p = nearestFree(this.terrain, u.type, z.x + ((u.x - z.x) * z.r * 0.8) / d, z.y + ((u.y - z.y) * z.r * 0.8) / d, s.deployment.units, u.uid, 300, zones);
+        this.place(this.terrain, u, p.x, p.y);
+        frontLines.push(`${CATALOG[u.type].name} pulled back inside our lines.`);
+      }
+    }
+
     // Enemy learning: packages that hit something are repeated, from the same direction.
     const lessons: string[] = [];
     const clamp = (x: number): number => Math.min(4, Math.max(0.3, x));
@@ -582,6 +758,7 @@ export class Campaign {
       income,
       damage: s.deployment.assets.map((a) => ({ name: a.name, lost: (before.get(a.name) ?? 100) - a.hp, hp: a.hp })),
       losses,
+      front: frontLines,
       lessons,
       promotions,
       objectives,
@@ -591,6 +768,7 @@ export class Campaign {
 
     const airbase = s.deployment.assets.find((a) => a.name === 'Airbase')!;
     if (airbase.hp <= 0) s.over = { won: false, reason: 'The airbase was destroyed. The defence has failed.' };
+    else if (s.front?.towns.some((t) => t.airfield && t.ours)) s.over = { won: true, reason: `We took the enemy's forward airfield on day ${s.day}. The front has collapsed: the campaign is won.` };
     else if (s.civilLosses >= CIVIL_LIMIT) s.over = { won: false, reason: `${s.civilLosses} civil airliners shot down. You have been relieved of command.` };
     else if (s.day >= CAMPAIGN_DAYS) s.over = { won: true, reason: `You held the airbase for ${CAMPAIGN_DAYS} days.` };
     const medals = battleMedals(w);
@@ -605,6 +783,7 @@ export class Campaign {
       s.day++;
       s.money += income;
       this.replan();
+      if (s.autoRestock) report.restockM = this.restock();
     }
     return report;
   }
@@ -616,7 +795,8 @@ export class Campaign {
     const kills = s.history.reduce((t, d) => t + d.kills, 0);
     const civ = s.history.reduce((t, d) => t + d.civilian, 0);
     const frat = s.history.reduce((t, d) => t + d.fratricide, 0);
-    return Math.max(0, Math.round(kills * 10 + assets * 5 + s.money - civ * 500 - frat * 200 + (s.over?.won ? 1000 : 0)));
+    const towns = townsHeld(s.front) * 300 + (s.front?.towns.some((t) => t.airfield && t.ours) ? 1500 : 0);
+    return Math.max(0, Math.round(kills * 10 + assets * 5 + towns + s.money - civ * 500 - frat * 200 + (s.over?.won ? 1000 : 0)));
   }
 }
 

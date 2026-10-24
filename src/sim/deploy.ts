@@ -6,11 +6,27 @@ export const DEPLOY_RADIUS = 60000;
 /** Furthest a CAP station may be (m). */
 export const CAP_RADIUS = 120000;
 
+/** A circle ground units may deploy in: around the airbase, or around a town we hold (campaign front line). */
+export interface DeployZone {
+  x: number;
+  y: number;
+  r: number;
+}
+
+/** The sandbox's deploy area: one circle round the airbase. */
+export const DEFAULT_ZONES: readonly DeployZone[] = [{ x: 0, y: 0, r: DEPLOY_RADIUS }];
+
+export const inZones = (zones: readonly DeployZone[], x: number, y: number): boolean => zones.some((z) => Math.hypot(x - z.x, y - z.y) <= z.r);
+
 /** Why a unit of `type` cannot stand at (x, y) among `others`, or null if it can. */
-export function placeError(t: Terrain, type: UnitType, x: number, y: number, others: readonly DeployedUnit[], uid = -1): string | null {
+export function placeError(t: Terrain, type: UnitType, x: number, y: number, others: readonly DeployedUnit[], uid = -1, zones: readonly DeployZone[] = DEFAULT_ZONES): string | null {
   const r = Math.hypot(x, y);
   if (type === 'CAP') return r > CAP_RADIUS ? `CAP stations must be within ${CAP_RADIUS / 1000} km` : null;
-  if (r > DEPLOY_RADIUS) return `Too far out: units must stand within ${DEPLOY_RADIUS / 1000} km of the airbase`;
+  if (!inZones(zones, x, y)) {
+    return zones.length > 1
+      ? `Too far out: units must stand within ${zones[0].r / 1000} km of the airbase or ${zones[1].r / 1000} km of a town we hold`
+      : `Too far out: units must stand within ${zones[0].r / 1000} km of the airbase`;
+  }
   if (t.groundAt(x, y) < 3 || t.heightAt(x, y) < 3) return 'That is water';
   if (!t.buildable(x, y)) return 'Too steep to emplace';
   for (const a of DEFENDED_ASSETS) {
@@ -22,9 +38,9 @@ export function placeError(t: Terrain, type: UnitType, x: number, y: number, oth
 }
 
 /** The nearest point to (x, y), spiralling out, where the unit can stand (or (x, y) itself if none is found). */
-export function nearestFree(t: Terrain, type: UnitType, x: number, y: number, others: readonly DeployedUnit[], uid = -1, spacing = 300): { x: number; y: number } {
+export function nearestFree(t: Terrain, type: UnitType, x: number, y: number, others: readonly DeployedUnit[], uid = -1, spacing = 300, zones: readonly DeployZone[] = DEFAULT_ZONES): { x: number; y: number } {
   const ok = (px: number, py: number): boolean =>
-    !placeError(t, type, px, py, others, uid) && !others.some((u) => u.uid !== uid && u.type !== 'CAP' && type !== 'CAP' && Math.hypot(u.x - px, u.y - py) < spacing);
+    !placeError(t, type, px, py, others, uid, zones) && !others.some((u) => u.uid !== uid && u.type !== 'CAP' && type !== 'CAP' && Math.hypot(u.x - px, u.y - py) < spacing);
   if (ok(x, y)) return { x, y };
   for (let i = 1; i < 400; i++) {
     const a = i * 2.4;

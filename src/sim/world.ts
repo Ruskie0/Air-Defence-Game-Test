@@ -1,6 +1,6 @@
 import { DT } from './constants';
 import { Ciws, GUNS } from './ciws';
-import { MoveOrder, orderMove, stepMoves } from './mobility';
+import { MoveOrder, orderMove, scoot, stepMoves } from './mobility';
 import { SupportCall, stepSupport } from './support';
 import { Modifiers, modifiers } from '../campaign/upgrades';
 import { WEATHER, Weather, WeatherId } from '../campaign/weather';
@@ -8,7 +8,8 @@ import { Arm, Atgm, Cruise, Drone, Emitter, Entity, Fate, GlideBomb, ReconDrone,
 import { Fighter } from './fighter';
 import { V3, add, bearingDeg, clone, dist, norm, polar, scale, sub, v3 } from './math';
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, UnitType, rankOf } from './catalog';
-import { sandboxDeployment } from './deploy';
+import { DEFAULT_ZONES, DeployZone, sandboxDeployment } from './deploy';
+import { Exposure } from './exposure';
 import { Interceptor, LR_MSL, MR_MSL, MissileSpec, SH_MSL } from './missile';
 import { CIWS_RADAR, EW_RADAR, LR_RADAR, MR_RADAR, Radar, RadarSpec, Report, SH_RADAR } from './radar';
 import { Rng } from './rng';
@@ -65,6 +66,13 @@ export interface WorldOptions {
   budgetM?: number;
   /** The day's weather (clear when omitted). */
   weather?: WeatherId;
+  /** Level of the enemy's counter-battery fire (campaign day); 0 turns it off. 4 when omitted. */
+  counterBattery?: number;
+  /** Campaign front line: the towns we hold (defended), and today's assault force if an offensive is on. */
+  towns?: { name: string; x: number; y: number; hp: number }[];
+  assault?: { x: number; y: number; target: string };
+  /** Where ground units may stand (the sandbox's 60 km circle when omitted). */
+  zones?: DeployZone[];
 }
 
 /** What a deployed unit became in this world, so the campaign can read back its state after the day. */
@@ -77,6 +85,8 @@ export interface Fielded {
   radar?: Radar;
   /** Set while the unit is packing up, moving or setting up again. */
   move?: MoveOrder | null;
+  /** How much of its position the enemy has worked out from its launches and emissions, 0 to 100. */
+  heat?: number;
 }
 
 /** Terrain seed of the one map every mode is fought over. */
@@ -109,6 +119,10 @@ export class World {
   /** Support calls budget ($M) and what has been spent from it. */
   budgetM: number;
   supportSpentM = 0;
+  /** Shoot and scoot: exposure of our batteries and the enemy's counter-battery strikes. */
+  readonly exposure: Exposure;
+  /** Where ground units may stand. */
+  readonly zones: readonly DeployZone[];
   /** The quick reaction alert pair has been scrambled this battle. */
   qraUsed = false;
   /** Resupply convoys and repair teams on their way. */
@@ -173,6 +187,20 @@ export class World {
       s.vuln = a.vuln;
       s.alive = s.hp > 0;
     }
+    for (const tn of o.towns ?? []) {
+      const s = this.addSite(tn.name, 'asset', tn.x, tn.y, 0, 450, true);
+      s.role = 'town';
+      // A town is a big area target: it takes several hits to knock flat.
+      s.vuln = 0.5;
+      s.hp = tn.hp;
+      s.alive = s.hp > 0;
+    }
+    if (o.assault) {
+      const s = this.addSite('Assault force', 'asset', o.assault.x, o.assault.y, 0, 250, true);
+      s.role = 'assault';
+    }
+    this.zones = o.zones ?? DEFAULT_ZONES;
+    this.exposure = new Exposure(o.counterBattery ?? 4);
     for (const u of dep.units) this.field(u);
     const wx = Math.pow(10, this.weather.radarLossDb / 10);
     for (const r of this.allRadars()) if (r.spec.freqGHz >= 8) r.wxLoss = wx;
@@ -646,6 +674,15 @@ export class World {
     return this.fielded.find((f) => f.fu?.code === code || f.ciws?.code === code || f.radar?.code === code);
   }
 
+  /** Shoot and scoot: move a unit (by any of its codes) to good ground a few km away. */
+  scootUnit(code: string): string | null {
+    const f = this.fieldedByCode(code);
+    if (!f) return 'no such unit';
+    const err = scoot(this, f);
+    if (!err) this.layoutSeq++;
+    return err;
+  }
+
   /** Hold fire on a SAM battery or gun (by code), or release it. */
   toggleHold(code: string): void {
     const fu = this.unit(code);
@@ -761,6 +798,7 @@ export class World {
     this.tracker.process(this, reports);
 
     for (const u of this.units) u.update(this);
+    this.exposure.step(this);
     if (this.t >= this.nextTewa) {
       this.nextTewa = this.t + 1;
       autoEngage(this);

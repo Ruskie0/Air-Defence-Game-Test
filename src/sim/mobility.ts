@@ -1,6 +1,6 @@
 import type { UnitType } from './catalog';
 import { placeError } from './deploy';
-import { v3 } from './math';
+import { polar, v3 } from './math';
 import type { Fielded, World } from './world';
 
 /**
@@ -67,7 +67,7 @@ export function moveError(w: World, f: Fielded, x: number, y: number): string | 
   if (u.type === 'CAP') return placeError(w.terrain, 'CAP', x, y, []);
   if (!f.sites[0]?.alive) return 'destroyed';
   const others = w.fielded.filter((o) => o !== f).map((o) => (o.move ? { ...o.unit, x: o.move.to.x, y: o.move.to.y } : o.unit));
-  return placeError(w.terrain, u.type, x, y, others, u.uid);
+  return placeError(w.terrain, u.type, x, y, others, u.uid, w.zones);
 }
 
 /** Order a ground unit to a new position (or a CAP pair to a new station). Returns why it cannot go, or null. */
@@ -111,6 +111,28 @@ export function orderMove(w: World, f: Fielded, x: number, y: number): string | 
   const km = Math.hypot(x - main.x, y - main.y) / 1000;
   w.log(`${f.fu?.name ?? f.ciws?.name ?? f.radar?.name ?? f.sites[0].name} ordered to move ${km.toFixed(1)} km: out of action until set up`, 'info');
   return null;
+}
+
+/**
+ * Shoot and scoot: send a ground unit to the first good spot 2 to 4 km away, preferring ground away from the
+ * enemy side. Returns why it cannot go, or null.
+ */
+export function scoot(w: World, f: Fielded): string | null {
+  if (f.unit.type === 'CAP') return 'fighters do not scoot';
+  if (f.move) return 'already moving';
+  const p = f.sites[0].pos;
+  const back = w.terrain.layout.rot + 180;
+  for (const r of [2500, 3500, 4500]) {
+    for (let i = 0; i < 12; i++) {
+      // Fan out from straight back: 0, +30, -30, +60, ...
+      const a = back + Math.ceil(i / 2) * 30 * (i % 2 ? 1 : -1) + w.rng.range(-8, 8);
+      const d = polar(a, r);
+      const x = Math.round(p.x + d.x);
+      const y = Math.round(p.y + d.y);
+      if (!moveError(w, f, x, y)) return orderMove(w, f, x, y);
+    }
+  }
+  return 'no good ground nearby';
 }
 
 /** Put every site of a moving unit `d` metres along its route (clamped to the destination). */

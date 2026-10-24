@@ -11,6 +11,7 @@ import { UPGRADES, UPGRADE_ORDER, UpgradeId } from '../campaign/upgrades';
 import { objectiveDesc, objectiveName } from '../campaign/objectives';
 import { EVENTS } from '../campaign/events';
 import { DEEP_STRIKES, DeepStrikeId, deepStrike, deepStrikeError } from '../campaign/deepstrike';
+import { ASSAULT_HOLD, OFFENSIVE_COST_M, TOWN_THREAT_CUT, TOWN_ZONE_M, nextObjective } from '../campaign/front';
 
 const SAVE_KEY = 'air-defence-campaign-v1';
 
@@ -243,6 +244,7 @@ export class CampaignUi {
           .join('');
     $('plan-left').innerHTML = `
       ${event}
+      ${this.frontPanel()}
       <h3>Intelligence briefing, day ${s.day}</h3>
       <p class="dim">${esc(this.mapLine())}</p>
       <ul class="intel">${intel.map((l) => `<li>${esc(l)}</li>`).join('') || '<li class="dim">Nothing reported.</li>'}</ul>
@@ -256,6 +258,15 @@ export class CampaignUi {
       <h3>Upgrades <span class="dim">one-off, for the rest of the campaign</span></h3>
       <div class="shop">${upgrades}</div>`;
 
+    const towns = (s.front?.towns ?? [])
+      .map((t, i) => {
+        if (!t.ours) return '';
+        const cost = c.townRepairCost(i);
+        const col = t.hp > 60 ? '#5ee07a' : t.hp > 25 ? '#ffd84d' : '#ff4d4d';
+        return `<div class="asset"><span>${esc(t.name)} <span class="dim">+${money(t.incomeM)}/day</span></span><span class="bar"><i style="width:${t.hp}%;background:${col}"></i></span>
+          ${cost > 0 ? `<button data-cui="repairtown" data-i="${i}" ${s.money > 0 ? '' : 'disabled'} title="Rebuild: a battered town pays less, and a town knocked flat falls">Repair ${money(Math.min(cost, s.money))}</button>` : '<span class="dim">intact</span>'}</div>`;
+      })
+      .join('');
     const assets = s.deployment.assets
       .map((a) => {
         const cost = c.repairCost(a.name);
@@ -303,11 +314,44 @@ export class CampaignUi {
 
     $('plan-right').innerHTML = `
       <h3>Defended assets <span class="dim">income tomorrow ${money(c.income())}</span></h3>
-      <div class="assets">${assets}</div>
+      <div class="assets">${assets}${towns}</div>
       <h3>Order of battle <span class="dim">${c.units.length} units</span></h3>
+      <div class="row restock">${
+        c.restockCost() > 0
+          ? `<button data-cui="restock" ${s.money > 0 ? '' : 'disabled'} title="Fill every launcher and top spares up to 4 per battery, as far as the budget goes">Restock all ${money(Math.min(c.restockCost(), s.money))}</button>`
+          : '<span class="dim">Every battery is stocked.</span>'
+      }<label title="Restock automatically at the start of every day"><input type="checkbox" data-cui="autorestock" ${s.autoRestock ? 'checked' : ''}> every morning</label></div>
       ${this.note ? `<div class="order">${esc(this.note)}</div>` : ''}
       <div class="oob">${units || '<div class="dim">No units. Buy some from the procurement list.</div>'}</div>
       <div class="plan-go"><button data-cui="start" class="go big-go">Start day ${s.day} ▶</button></div>`;
+  }
+
+  /** Today's big decision: hold the line, or push up the road to the next town. */
+  private frontPanel(): string {
+    const c = this.c!;
+    const f = c.s.front;
+    if (!f?.towns.length) return '';
+    const next = nextObjective(f);
+    const road = f.towns
+      .map((t, i) => {
+        const km = (Math.hypot(t.x, t.y) / 1000).toFixed(0);
+        const cls = t.ours ? 'good' : i === f.offensive ? 'warn' : 'dim';
+        const st = t.ours ? `ours, ${t.hp}%` : i === f.offensive ? 'offensive today' : i === next ? 'next objective' : 'enemy held';
+        return `<li class="${cls}"><b>${esc(t.name)}</b> ${km} km · ${st} · +${money(t.incomeM)}/day${t.airfield ? ' · <b>take it to win</b>' : ''}</li>`;
+      })
+      .join('');
+    const why = c.offensiveError();
+    const action =
+      f.offensive !== null
+        ? `<p class="warn">The assault force moves up to ${esc(f.towns[f.offensive].name)} today. Keep it above ${ASSAULT_HOLD}% until the day ends. Cover it: units may stand within ${TOWN_ZONE_M / 1000} km of a town we hold.</p>
+           <div class="row"><button data-cui="offensive-cancel" title="Call it off for the money back">Call off the offensive</button></div>`
+        : next >= 0
+          ? `<div class="row"><button data-cui="offensive" class="go" ${why ? 'disabled' : ''} title="${esc(why ?? `The enemy will counter-attack the assault force with drones, missiles, helicopters and jets. Hold it above ${ASSAULT_HOLD}% all day to take the town.`)}">Attack ${esc(f.towns[next].name)} ${money(OFFENSIVE_COST_M)}</button>${why ? ` <span class="dim">${esc(why)}</span>` : ''}</div>`
+          : '<p class="good">Every town on the road is ours.</p>';
+    return `<h3>The front</h3>
+      <p class="dim">Towns we hold pay every day, let units deploy round them, and each one past the first cuts the enemy's raids by ${Math.round(TOWN_THREAT_CUT * 100)}%. Raids also go for our front town: one knocked flat falls.</p>
+      <ul class="intel road">${road}</ul>
+      ${action}`;
   }
 
   private showFocus(): void {
@@ -403,6 +447,7 @@ export class CampaignUi {
               .join('')}</ul>`
           : ''
       }
+      ${r.front?.length ? `<h3>The front</h3><ul class="intel">${r.front.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
       <h3>Damage</h3>
       <p>${dmg.length ? dmg.map((d) => `${d.name} −${d.lost} (now ${d.hp}%)`).join(', ') : 'No damage to the defended assets.'}</p>
       ${r.medals?.length ? `<h3>Medals</h3><p class="good">${r.medals.map(esc).join(', ')}</p>` : ''}
@@ -413,7 +458,7 @@ export class CampaignUi {
         over
           ? `<p>Final score <b>${c.score()}</b> over ${c.s.history.length} days.</p>
              <div class="menu-opts row"><button data-cui="new" class="go">New campaign</button><button data-cui="menu">Main menu</button></div>`
-          : `<p>Budget for tomorrow: <b>${money(c.s.money)}</b> (income ${money(r.income)}: the assets still working${r.objectives?.some((o) => o.done) ? ' plus objective bonuses' : ''}).</p>
+          : `<p>Budget for tomorrow: <b>${money(c.s.money)}</b> (income ${money(r.income)}: the assets still working and the towns we hold${r.objectives?.some((o) => o.done) ? ', plus objective bonuses' : ''}${r.restockM ? `; ${money(r.restockM)} already spent restocking the batteries` : ''}).</p>
              <div class="row"><button data-cui="plan" class="go">Plan day ${c.s.day} ▶</button><button data-cui="menu">Save and quit</button></div>`
       }`;
     $('debrief').classList.remove('hidden');
@@ -530,6 +575,26 @@ export class CampaignUi {
         break;
       case 'repair':
         c.repair(d.name!);
+        break;
+      case 'repairtown':
+        c.repairTown(Number(d.i));
+        break;
+      case 'restock': {
+        const spent = c.restock();
+        this.note = spent > 0 ? `Restocked for ${money(spent)}.` : 'Nothing to restock.';
+        break;
+      }
+      case 'autorestock':
+        c.s.autoRestock = (el as HTMLInputElement).checked;
+        store(c);
+        return;
+      case 'offensive':
+        if (!c.launchOffensive()) return;
+        this.note = `Offensive on ${c.s.front!.towns[c.s.front!.offensive!].name} ordered. Move units up to cover the assault force (yellow on the scope).`;
+        break;
+      case 'offensive-cancel':
+        c.cancelOffensive();
+        this.note = 'Offensive called off.';
         break;
       case 'start':
         this.stopPlacing();

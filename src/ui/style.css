@@ -867,3 +867,44 @@ td.link {
   color: var(--warn);
   border-color: var(--warn);
 }
+
+/* Shoot and scoot: exposure meter on a battery's row, and the located warnings. */
+.heat {
+  display: inline-block;
+  vertical-align: middle;
+  width: 46px;
+  height: 5px;
+  background: #222;
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 0 4px;
+}
+.heat i {
+  display: block;
+  height: 100%;
+}
+.sys.located {
+  border-left: 3px solid #ff4d4d;
+  background: #2a1414;
+}
+.st.blink {
+  animation: blink 1s steps(2, start) infinite;
+}
+@keyframes blink {
+  to {
+    visibility: hidden;
+  }
+}
+p.warn,
+li.warn {
+  color: #ffd84d;
+}
+.row.restock {
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 6px;
+}
+.row.restock label {
+  font-size: 11px;
+  color: var(--dim);
+}

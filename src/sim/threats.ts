@@ -66,15 +66,17 @@ export function spawnDecoyDrones(w: World, n: number, bearing: number, rangeM: n
   }
 }
 
-export function spawnDrones(w: World, n: number, bearing: number, rangeM: number, targets?: Target[]): void {
+/** `origin` launches them from round that point instead of round the airbase (counter-attacks up the front). */
+export function spawnDrones(w: World, n: number, bearing: number, rangeM: number, targets?: Target[], origin?: { x: number; y: number }): void {
   const aims = targets ? targetsByName(w, targets) : targetsByName(w, ['Airbase', 'Power plant', 'CRC']);
+  const o = v3(origin?.x ?? 0, origin?.y ?? 0);
   for (let i = 0; i < n; i++) {
     const lateral = (i - (n - 1) / 2) * 900 + w.rng.gauss() * 300;
-    const start = add(polar(bearing, rangeM + w.rng.range(-2000, 2000)), polar(bearing + 90, lateral));
+    const start = add(o, add(polar(bearing, rangeM + w.rng.range(-2000, 2000)), polar(bearing + 90, lateral)));
     start.z = w.terrain.groundAt(start.x, start.y) + 250;
     const aim = aims[i % aims.length];
     // One dogleg to approach from an off-axis direction.
-    const mid = add(polar(bearing + w.rng.range(-25, 25), rangeM * 0.45), polar(bearing + 90, lateral));
+    const mid = add(o, add(polar(bearing + w.rng.range(-25, 25), rangeM * 0.45), polar(bearing + 90, lateral)));
     const d = new Drone(w.nextName('DRN'), start, [mid], aim.pos, aim.name, w.rng.range(120, 380));
     if (w.rng.chance(0.3)) d.gnssDep = 0.15; // some airframes carry an anti-jam antenna
     w.spawn(d);
@@ -125,12 +127,16 @@ export function spawnStrike(w: World, n: number, bearing: number, rangeM: number
   }
 }
 
-/** Attack helicopters, starting `rangeM` out at treetop height, a few km apart. */
-export function spawnHelos(w: World, n: number, bearing: number, rangeM: number): void {
+/**
+ * Attack helicopters, starting `rangeM` out at treetop height, a few km apart. With an `origin` they start
+ * round that point and creep towards it (a counter-attack on the assault force) instead of the airbase.
+ */
+export function spawnHelos(w: World, n: number, bearing: number, rangeM: number, origin?: { x: number; y: number }): void {
+  const o = v3(origin?.x ?? 0, origin?.y ?? 0);
   for (let i = 0; i < n; i++) {
-    const start = add(polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 2500));
+    const start = add(o, add(polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 2500)));
     start.z = w.terrain.groundAt(start.x, start.y) + 25;
-    w.spawn(new Helo(w.nextName('HEL'), start));
+    w.spawn(new Helo(w.nextName('HEL'), start, origin ? o : undefined));
   }
 }
 

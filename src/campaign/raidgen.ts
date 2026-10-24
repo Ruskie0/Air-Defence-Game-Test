@@ -19,6 +19,12 @@ export interface PlannedPkg {
   reported: boolean;
   /** Aimed at positions an enemy recon drone photographed, instead of the usual targets. */
   aims?: Sighting[];
+  /** Aimed at one site by name (a front-line town, the assault force). */
+  target?: string;
+  /** Launched from near this point rather than from the edge of the map (counter-attacks on the assault force). */
+  origin?: { x: number; y: number };
+  /** Part of the enemy's counter-attack on today's offensive. */
+  counter?: boolean;
 }
 
 /** What the enemy has learned: which kinds of attack and which approach sectors have worked. */
@@ -42,7 +48,7 @@ interface PkgDef {
   size: (day: number, rng: Rng) => number;
   /** Approach sectors this kind may use. */
   sectors: number[];
-  spawn: (w: Parameters<Raid['spawn']>[0], bearing: number, size: number, aims?: Target[]) => void;
+  spawn: (w: Parameters<Raid['spawn']>[0], bearing: number, size: number, aims?: Target[], origin?: { x: number; y: number }) => void;
   describe: (size: number) => string;
 }
 
@@ -50,7 +56,7 @@ export const PKG: Record<PkgKind, PkgDef> = {
   drones: {
     name: 'Drone swarm', cost: (n) => 1 + n * 0.9, minDay: 1, sectors: [0, 1, 2, 3, 4, 5, 6, 7],
     size: (d, r) => Math.min(14, 4 + d + r.int(0, 2)),
-    spawn: (w, b, n, aims) => spawnDrones(w, n, b, 50000, aims),
+    spawn: (w, b, n, aims, o) => spawnDrones(w, n, b, o ? 25000 : 50000, aims, o),
     describe: (n) => `${n} one-way attack drones, low and slow`,
   },
   decoys: {
@@ -80,7 +86,7 @@ export const PKG: Record<PkgKind, PkgDef> = {
   helo: {
     name: 'Attack helicopters', cost: (n) => 2 + n * 2.5, minDay: 3, sectors: [0, 1, 7, 2, 6, 3, 5],
     size: (d) => Math.min(4, 2 + (d >= 6 ? 1 : 0) + (d >= 9 ? 1 : 0)),
-    spawn: (w, b, n) => spawnHelos(w, n, b, 40000),
+    spawn: (w, b, n, _aims, o) => spawnHelos(w, n, b, o ? 22000 : 40000, o),
     describe: (n) => `${n} attack helicopters creeping in behind the hills to pop up and fire missiles at our nearest units. Guns and SHORAD are the answer`,
   },
   sead: {
@@ -130,7 +136,7 @@ export function newEnemy(rot = 0, doctrine?: DoctrineId): EnemyModel {
 }
 
 /** Threat points the enemy can spend on a given day. */
-export const threatBudget = (day: number, scale = 1): number => (8 + day * 11.2) * scale;
+export const threatBudget = (day: number, scale = 1): number => (8 + day * 10.2) * scale;
 
 /**
  * Build a day's raid plan from the enemy's budget and what it has learned. Package sectors are listed
@@ -199,14 +205,15 @@ function pick<T>(rng: Rng, items: T[], weight: (x: T) => number): T {
 export function toRaids(plan: PlannedPkg[]): Raid[] {
   return plan.map((p) => {
     const def = PKG[p.kind];
+    const aims = p.target ? [p.target] : p.aims;
     return {
-      name: `${def.name} from the ${SECTOR_NAMES[sectorOf(p.bearing)]}`,
-      desc: def.describe(p.size) + (p.aims ? ', aimed at our positions their recon photographed' : ''),
+      name: p.counter ? `Counter-attack: ${def.name.toLowerCase()} from the ${SECTOR_NAMES[sectorOf(p.bearing)]}` : `${def.name} from the ${SECTOR_NAMES[sectorOf(p.bearing)]}`,
+      desc: def.describe(p.size) + (p.target ? `, aimed at ${p.target === 'Assault force' ? 'our assault force' : p.target}` : p.aims ? ', aimed at our positions their recon photographed' : ''),
       t: p.t,
       launched: false,
       pkg: p.id,
       unreported: !p.reported,
-      spawn: (w) => def.spawn(w, p.bearing, p.size, p.aims),
+      spawn: (w) => def.spawn(w, p.bearing, p.size, aims, p.origin),
     };
   });
 }

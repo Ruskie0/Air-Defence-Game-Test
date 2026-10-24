@@ -18,6 +18,8 @@ export class Site {
   /** Damage multiplier: area targets like an airbase need several hits. */
   vuln = 1;
   alive = true;
+  /** A town on the campaign front line, or the day's assault force (both are defended assets). */
+  role?: 'town' | 'assault';
   onDestroyed: (() => void) | null = null;
 
   constructor(name: string, kind: SiteKind, pos: V3, radius: number, defended = false) {
@@ -154,6 +156,8 @@ export class FireUnit {
   hold = false;
   /** Packed up or on the move: cannot fire. */
   stowed = false;
+  /** Missiles launched this battle (each one gives the battery's position away a little more). */
+  launched = 0;
   /** Crew rank (0 = Green): each rank gives a missile that misses a second chance to kill. */
   rank = 0;
   private queue: { t: number; trackId: number; manual: boolean }[] = [];
@@ -318,6 +322,7 @@ export class FireUnit {
       from.z += 4;
       w.missiles.push(new Interceptor(w, this.spec, this, this.name, from, pip, null, tr.id));
       w.stats.fired[this.type]++;
+      this.launched++;
       w.stats.costM += this.spec.costM;
     }
   }

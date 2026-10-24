@@ -12,6 +12,8 @@ import type { Ciws } from '../sim/ciws';
 import { CATALOG, RANKS } from '../sim/catalog';
 import { DayObjective, objectiveDesc, objectiveName, objectiveStatus } from '../campaign/objectives';
 import { MOBILITY, moveError, moveStatus } from '../sim/mobility';
+import { Exposure } from '../sim/exposure';
+import type { Fielded } from '../sim/world';
 import { FIELD_REPAIR, QRA, RESUPPLY, callRepair, callResupply, qraError, repairError, resupplyCost, resupplyError, scrambleQra } from '../sim/support';
 import { CLASS_NAME, IDENT_COLOR, IDENT_NAME, fmtTime } from './colors';
 import type { Ppi } from './ppi';
@@ -19,6 +21,10 @@ import type { Ppi } from './ppi';
 export interface GameControl {
   speed: number;
   paused: boolean;
+  /** Run quiet stretches (nothing hostile in the picture) at 16x. */
+  skipQuiet?: boolean;
+  /** Set by the game loop while a quiet stretch is being skipped. */
+  fastForward?: boolean;
 }
 
 const SPEEDS = [1, 2, 4, 8, 16];
@@ -173,7 +179,8 @@ export class Hud {
     if (!f || !f.sites.length && f.unit.type !== 'CAP') return '';
     const st = moveStatus(this.w, f);
     const can = f.unit.type === 'CAP' ? f.fighters?.some((x) => x.alive) : f.sites[0].alive;
-    return `<div class="row"><button data-act="move" data-code="${code}" class="${this.moving === code ? 'on' : ''}" ${can ? '' : 'disabled'} title="Move (G): pick a new position on the map">${f.unit.type === 'CAP' ? 'Move station' : 'Move'}</button>${st ? `<span class="st jam">${esc(st)}</span>` : ''}</div>`;
+    const scoot = f.unit.type !== 'CAP' && can && !f.move ? `<button data-act="scoot" data-code="${code}" title="Shoot and scoot: pack up and move to good ground 2 to 4 km away, which resets the unit's exposure">Scoot</button>` : '';
+    return `<div class="row"><button data-act="move" data-code="${code}" class="${this.moving === code ? 'on' : ''}" ${can ? '' : 'disabled'} title="Move (G): pick a new position on the map">${f.unit.type === 'CAP' ? 'Move station' : 'Move'}</button>${scoot}${st ? `<span class="st jam">${esc(st)}</span>` : ''}</div>`;
   }
 
   private unitAtSite(site: Site): string | null {
@@ -287,6 +294,14 @@ export class Hud {
         if (this.moving === d.code) this.stopMove();
         else this.startMove(d.code!);
         break;
+      case 'scoot': {
+        const err = this.w.scootUnit(d.code!);
+        if (err) this.w.log(`Cannot scoot: ${err}`, 'info');
+        break;
+      }
+      case 'skipquiet':
+        this.ctl.skipQuiet = !this.ctl.skipQuiet;
+        break;
       case 'gnss': {
         const j = w.gnss[Number(d.i)];
         j.on = !j.on;
@@ -387,7 +402,8 @@ export class Hud {
     this.set(
       'speed',
       `<button data-act="pause" class="${this.ctl.paused ? 'on warn' : ''}">${this.ctl.paused ? '▶' : '❚❚'}</button>` +
-        SPEEDS.map((s) => `<button data-act="speed" data-v="${s}" class="${!this.ctl.paused && this.ctl.speed === s ? 'on' : ''}">${s}×</button>`).join(''),
+        SPEEDS.map((s) => `<button data-act="speed" data-v="${s}" class="${!this.ctl.paused && this.ctl.speed === s ? 'on' : ''}">${s}×</button>`).join('') +
+        `<button data-act="skipquiet" class="${this.ctl.skipQuiet ? 'on' : ''}" title="Skip quiet: while nothing hostile or unknown is in the picture, time runs at 16× and drops back the moment a new contact appears">${this.ctl.fastForward ? 'Quiet ▸▸' : 'Skip quiet'}</button>`,
     );
     this.set(
       'wcs',
@@ -498,6 +514,17 @@ export class Hud {
     return `Heat <b>${Math.round((100 * c.heat) / (c.spec.heatS ?? 1))}%</b>`;
   }
 
+  /** Exposure meter (how close the enemy is to locating the unit), or its LOCATED warning. */
+  private exposureTag(f: Fielded): string {
+    const w = this.w;
+    if (!Exposure.tracked(f) || !f.sites[0]?.alive || w.exposure.level <= 0) return '';
+    const l = w.exposure.pending(w, f.unit.uid);
+    if (l && !l.moved && w.t < l.eta) return ` <span class="st dead blink" title="The enemy has located this unit: ${esc(l.weapon)} on its spot. Move it (Scoot) or defend it.">LOCATED ${Math.round(l.eta - w.t)} s</span>`;
+    const h = Math.round(f.heat ?? 0);
+    const col = h > 75 ? '#ff4d4d' : h > 45 ? '#ffb84d' : '#7fc1ff';
+    return `<span class="heat" title="Exposure ${h}%: every launch and every minute of radiating gives the position away. At 100% the enemy locates it and fires a counter-battery strike. Silence lowers it; moving resets it. Strikes left today: ${w.exposure.strikesLeft}"><i style="width:${h}%;background:${col}"></i></span>`;
+  }
+
   private holdButton(code: string, hold: boolean): string {
     return `<button data-act="hold" data-code="${code}" class="${hold ? 'on warn' : ''}" title="Hold fire (H): no automatic engagements. Your direct orders still fire.">${hold ? 'Holding' : 'Hold fire'}</button>`;
   }
@@ -505,6 +532,18 @@ export class Hud {
   private updateSystems(): void {
     const w = this.w;
     const rows: string[] = [];
+    const warn = w.exposure.located.filter((l) => w.t < l.eta + 3);
+    if (warn.length) {
+      rows.push('<h3>Counter-battery fire</h3>');
+      for (const l of warn) {
+        const f = w.fielded.find((x) => x.unit.uid === l.uid);
+        const code = f?.fu?.code ?? f?.radar?.code ?? '';
+        const left = Math.max(0, Math.round(l.eta - w.t));
+        const state = l.moved ? '<span class="st ok">MOVED CLEAR</span>' : f?.move ? `<span class="st emcon">${esc(moveStatus(w, f))}</span>` : `<span class="st dead blink">STRIKE IN ${left} s</span>`;
+        rows.push(`<div class="sys ${l.moved ? '' : 'located'}"><div class="sys-h"><b>${esc(l.unit)}</b> located ${state}</div>
+          <div class="sys-b">${esc(l.weapon)} on its spot${l.moved || f?.move ? '' : ` <button data-act="scoot" data-code="${code}" title="Pack up and move 2 to 4 km, out from under the strike">Scoot</button> <button data-act="unit" data-code="${code}">Select</button>`}</div></div>`);
+      }
+    }
     if (this.campaign?.objectives.length) {
       rows.push('<h3>Objectives</h3>');
       for (const o of this.campaign.objectives) {
@@ -518,8 +557,9 @@ export class Hud {
       const r = u.radar!;
       const active = u.activeTargets(w).size;
       const reload = u.launchers.filter((l) => l.reloadAt > 0 && l.site.alive);
+      const f = w.fieldedByCode(u.code);
       rows.push(`<div class="sys sel-able ${this.unitSel === u.code ? 'focus' : ''}" data-act="unit" data-code="${u.code}">
-        <div class="sys-h"><b>${u.name}</b>${this.badge(u.rank)} ${this.radarState(r.code)}${u.hold ? ' <span class="st emcon">HOLD</span>' : ''}</div>
+        <div class="sys-h"><b>${u.name}</b>${this.badge(u.rank)} ${this.radarState(r.code)}${u.hold ? ' <span class="st emcon">HOLD</span>' : ''}${f ? this.exposureTag(f) : ''}</div>
         <div class="sys-b">Missiles <b>${u.rounds}</b>/${u.maxRounds}${Number.isFinite(u.spares) ? ` +${u.spares}` : ''} · Channels ${active}/${u.channels}${reload.length ? ` · reload ${fmtTime(Math.min(...reload.map((l) => l.reloadAt)) - w.t)}` : ''}
         ${this.holdButton(u.code, u.hold)}${this.radarButtons(r)}</div></div>`);
     }
@@ -533,7 +573,7 @@ export class Hud {
       rows.push('<h3>Sensors</h3>');
       for (const f of ewr) {
         const r = f.radar!;
-        rows.push(`<div class="sys sel-able ${this.unitSel === r.code ? 'focus' : ''}" data-act="unit" data-code="${r.code}"><div class="sys-h"><b>${r.name}</b> ${this.radarState(r.code)}</div>
+        rows.push(`<div class="sys sel-able ${this.unitSel === r.code ? 'focus' : ''}" data-act="unit" data-code="${r.code}"><div class="sys-h"><b>${r.name}</b> ${this.radarState(r.code)}${this.exposureTag(f)}</div>
           <div class="sys-b dim">${f.unit.type === 'EWR' ? 'L-band, 250 km' : 'Low-level, 25 km'} ${this.radarButtons(r)}</div></div>`);
       }
     }

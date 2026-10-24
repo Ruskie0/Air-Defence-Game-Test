@@ -504,10 +504,13 @@ export class Helo extends Air {
   private aim: Site | null = null;
   /** Earliest time of the next pop-up (it relocates between salvos). */
   private readyAt = 0;
+  /** Where it heads: the airbase, or our assault force up the front. */
+  private readonly goal: V3 | null;
 
-  constructor(name: string, pos: V3) {
-    super(name, pos, bearingDeg(pos, v3()), 70);
+  constructor(name: string, pos: V3, goal?: V3) {
+    super(name, pos, bearingDeg(pos, goal ?? v3()), 70);
     this.home = clone(pos);
+    this.goal = goal ? clone(goal) : null;
     this.rcs = 6;
     this.hitRadius = 8;
     this.cmPk = 0.8;
@@ -523,7 +526,7 @@ export class Helo extends Air {
     let best: Site | null = null;
     let bd = HELO_RANGE;
     for (const s of w.sites) {
-      if (!s.alive || s.kind === 'asset' || s.kind === 'gnss' || s.kind === 'decoy') continue;
+      if (!s.alive || (s.kind === 'asset' && s.role !== 'assault') || s.kind === 'gnss' || s.kind === 'decoy') continue;
       const d = hdist(eye, s.pos);
       if (d < bd && w.terrain.los(eye, s.pos)) {
         bd = d;
@@ -536,7 +539,7 @@ export class Helo extends Air {
   update(w: World, dt: number): void {
     switch (this.phase) {
       case 'ingress': {
-        const ab = w.site('Airbase')!.pos;
+        const ab = this.goal ?? w.site('Airbase')!.pos;
         this.steer(ab.x, ab.y, dt);
         if (w.t >= this.nextLook && w.t >= this.readyAt) {
           this.nextLook = w.t + 2;
@@ -550,7 +553,7 @@ export class Helo extends Air {
             this.shots = 0;
           }
         }
-        if (hdist(this.pos, ab) < 5000) this.phase = 'egress';
+        if (hdist(this.pos, ab) < (this.goal ? 1500 : 5000)) this.phase = 'egress';
         break;
       }
       case 'popup': {

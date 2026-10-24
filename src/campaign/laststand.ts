@@ -92,6 +92,8 @@ export class LastStand {
     for (const t of ['EWR', 'GUN', 'SH'] as UnitType[]) this.c.add(t);
     for (const u of this.c.units) u.spares = u.launchers.length ? 4 : 0;
     this.c.s.plan = [];
+    // One battle round the airbase: no front line.
+    this.c.s.front = undefined;
     this.w = this.c.makeWorld(false);
     this.w.budgetM = START_BUDGET_M;
     // Civil traffic keeps flying through it all.
@@ -114,6 +116,7 @@ export class LastStand {
     w.scenario.done = false;
     w.scenario.doneMsg = `Wave ${this.wave} held.`;
     w.qraUsed = false;
+    w.exposure.rearm(this.wave);
     w.log(`Wave ${this.wave}: ${plan.length} packages inbound`, 'raid');
   }
 

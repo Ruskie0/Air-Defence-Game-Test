@@ -130,6 +130,33 @@ The main menu offers a ten-day campaign next to the sandbox. Each day has a plan
 - **Saving.** The campaign state is plain JSON saved to `localStorage` after every change; storage
   errors are ignored so the game also runs where storage is blocked.
 
+## Core loop (October 2026 redesign)
+
+Playtests showed the battle played itself (automatic engagement won 4 of 6 campaigns with no input), quiet
+stretches dragged, mornings were reload bookkeeping and there was nothing to win. Three pillars now decide
+what goes in: every shot has a price beyond money, the map is the prize, and days are short and dense.
+
+- **Shoot and scoot** (`src/sim/exposure.ts`). Launches and radiating build each battery's exposure
+  (`Fielded.heat`, 0 to 100); silence drains it and moving resets it. At 100 the enemy locates the battery
+  and fires a counter-battery strike at the spot: loitering munitions (days 1 to 2), strike missiles (from
+  day 3) or ballistic missiles (from day 5), arriving in about 75 to 90 s. `1 + level/3` strikes a battle,
+  two minutes apart. `World.scootUnit` moves a unit 2 to 4 km to good ground. The Emission discipline
+  upgrade slows exposure by 35%.
+- **The front line** (`src/campaign/front.ts`). Up to four towns up the main approach (fewer on peninsula
+  maps). Held towns are defended sites (`Site.role = 'town'`), pay income, widen the deploy area
+  (`DeployZone`: 35 km round the airbase, 25 km round each held town) and cut the enemy's threat budget by
+  10% each past the first. An offensive ($30M, from day 2) puts an assault force (`role = 'assault'`) short
+  of the next town and adds counter-attack packages aimed at it (`PlannedPkg.target`, `origin`, `counter`).
+  It takes the town if it ends the day above 40%. About 30% of drone, cruise and strike packages go for the
+  front town from day 2; a town at 0% falls, with every town beyond it. Taking the airfield at the end of
+  the road wins at once.
+- **Pacing**. Skip quiet (`GameControl.skipQuiet`, on by default) runs at 16x while no hostile, unknown or
+  pending track is in the picture. Restock all and auto-restock (`Campaign.restock`) replace the morning
+  reload clicks.
+
+Balance with these: threat budget `8 + 10.2 x day`; the automatic commander (scoots located MR and SHORAD,
+garrisons the front town, attacks when it has $140M spare) wins 4 of 6 on Regular and holds 1 to 3 towns.
+
 ## Roadmap
 
 1. **Mission briefing and scoring.** Rules of engagement per day (initial WCS, an ADIZ, a hostile-act

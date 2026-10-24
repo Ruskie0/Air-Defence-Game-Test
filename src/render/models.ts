@@ -281,7 +281,39 @@ function recon(): THREE.BufferGeometry {
   return k.build();
 }
 
+/** Low-level strike jet: two-seat cockpit, wings fully swept for the dash, twin engines, single tall fin, two bombs. */
+function strike(): THREE.BufferGeometry {
+  const c = 0x6c7464;
+  const k = new Kit();
+  k.lathe([[-10.5, 0], [-10.2, 0.8], [-5, 1.15], [1, 1.2], [5, 1.0], [8.2, 0.6], [10.5, 0]], c, 14, 0, 0, 1.2, 0.85);
+  for (const x of [-0.9, 0.9]) k.tube(0.62, 0.55, 1.0, NOZZLE, x, -0.1, -10.6);
+  k.ellipsoid(0.75, 0.55, 2.2, GLASS, 0, 0.8, 5.0);
+  k.box(1.4, 0.18, 0.08, c, 0, 0.95, 4.9);
+  k.plate(sym([[1.2, 4.5], [2.4, 0.8], [5.6, 0.2], [2.2, -1.2]]), 0.25, c);
+  k.plate(sym([[1.2, 1.2], [8.0, -5.6], [8.0, -6.6], [1.4, -3.4]]), 0.16, c, 0.1);
+  k.plate(sym([[1.0, -7.6], [4.4, -9.6], [4.4, -10.4], [1.0, -10.2]]), 0.14, c, -0.1);
+  k.fin([[-5.8, 0.9], [-9.6, 5.2], [-10.8, 5.2], [-10.4, 0.9]], 0.16, c);
+  for (const x of [-0.75, 0.75]) {
+    k.lathe([[-1.9, 0], [-1.7, 0.26], [1.3, 0.26], [1.9, 0]], 0x4f5a40, 8, x, -1.25);
+    k.cross([[-1.5, 0.26], [-1.9, 0.45], [-1.9, 0.26]], 0.02, 0x4f5a40, Math.PI / 4);
+  }
+  return k.build();
+}
+
+/** Winged glide bomb: a heavy bomb body with a strap-on kit of long folding wings and an X tail. */
+function bomb(): THREE.BufferGeometry {
+  const c = 0x4f5a40;
+  const k = new Kit();
+  k.lathe([[-1.7, 0], [-1.6, 0.18], [-1.1, 0.24], [0.8, 0.24], [1.4, 0.16], [1.7, 0]], c, 10);
+  k.box(0.3, 0.12, 1.1, 0x3b4430, 0, 0.27, 0.1);
+  k.plate(sym([[0.1, 0.3], [1.35, 0.0], [1.35, -0.18], [0.1, -0.05]]), 0.025, 0x3b4430, 0.34);
+  k.cross([[-1.15, 0.2], [-1.6, 0.48], [-1.75, 0.48], [-1.72, 0.18]], 0.02, c, Math.PI / 4);
+  return k.build();
+}
+
 const AIR: Record<string, () => THREE.BufferGeometry> = {
+  strike,
+  bomb,
   recon,
   fighter,
   sead,
@@ -327,6 +359,8 @@ export function interceptorModel(code: string): THREE.Mesh {
 
 /** Rough size of each kind, for wreck fires and crash effects (1 = a cruise missile). */
 export const WRECK_SIZE: Record<string, number> = {
+  strike: 1.8,
+  bomb: 0.7,
   recon: 1.4,
   drone: 0.6,
   arm: 0.5,
@@ -524,7 +558,34 @@ function laserTurret(): { yaw: THREE.BufferGeometry; gun: THREE.BufferGeometry }
   return { yaw: y.build(), gun: g.build() };
 }
 
+/** EW jammer: a shelter truck with a telescopic mast; the emitter head is built separately at the mast top. */
+function jammerBase(): THREE.BufferGeometry {
+  const k = new Kit();
+  chassis(k, 9, 2.55, [-2.9, 1.6, 3.0]);
+  k.box(2.5, 2.4, 5.4, 0x5a6440, 0, 2.5, 1.5);
+  k.box(0.9, 0.8, 0.9, OLIVE_D, -0.6, 4.1, 3.5);
+  for (const x of [-1.3, 1.3]) k.box(0.05, 1.6, 0.9, 0x3d432a, x, 2.5, 0.2);
+  // Telescopic mast in three sections from the shelter roof.
+  const sec: [number, number, number][] = [[0.22, 3.7, 2.4], [0.16, 6.0, 2.4], [0.11, 8.3, 2.4]];
+  for (const [r, y, h] of sec) k.add(new THREE.CylinderGeometry(r, r, h, 8), 0x6a6d66, 0, y, 1.5);
+  return k.build();
+}
+
+/** Jammer emitter head: a horizontal boom of four log-periodic antennas and a flat panel array. */
+function jammerHead(): THREE.BufferGeometry {
+  const k = new Kit();
+  k.box(3.2, 0.14, 0.14, 0x5a5d58, 0, 0, 0);
+  for (const x of [-1.5, -0.5, 0.5, 1.5]) {
+    k.box(0.06, 0.06, 1.2, 0x5a5d58, x, 0, 0.6);
+    for (let i = 0; i < 5; i++) k.box(0.9 - i * 0.15, 0.03, 0.03, 0x8a8c86, x, 0, 0.15 + i * 0.22);
+  }
+  k.box(1.6, 1.0, 0.12, 0x4b5230, 0, 0.7, -0.15);
+  return k.build();
+}
+
 const GROUND: Record<string, () => THREE.BufferGeometry> = {
+  'jammer-base': jammerBase,
+  'jammer-head': jammerHead,
   'gun35-base': gun35Base,
   'gun35-yaw': () => gun35Turret().yaw,
   'gun35-gun': () => gun35Turret().gun,

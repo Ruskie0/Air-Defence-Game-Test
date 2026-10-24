@@ -72,7 +72,7 @@ const MISSILE_SMOKE: Record<string, { s0: number; s1: number; life: number; flam
   AAM: { s0: 4, s1: 40, life: 24, flame: 4 },
 };
 
-const CONTRAIL_KINDS = new Set(['fighter', 'bomber', 'sead', 'soj', 'airliner']);
+const CONTRAIL_KINDS = new Set(['fighter', 'bomber', 'sead', 'soj', 'airliner', 'strike']);
 
 /** Smoke, fire, debris, contrails and tracers, all driven by sim time so they freeze when paused. */
 export class Effects {
@@ -139,6 +139,8 @@ export class Effects {
     this.exhaust(w, dt);
     this.aircraft(w, dt, visible);
     this.burning(w, dt);
+    this.jammers(w, dt);
+    this.lowFlyers(w, dt, visible);
     this.updateDebris(w, dt);
     this.guns(w, dt);
     this.fire.update(dt, WIND_X, WIND_Z);
@@ -447,6 +449,60 @@ export class Effects {
       this.lastEmit.set(key, { x, y, z });
     }
     for (const id of this.lastEmit.keys()) if (id < 0 && !seen.has(id)) this.lastEmit.delete(id);
+  }
+
+  /** A jamming EW truck: a flickering violet glow at the emitter and a slow pulse spreading from it. */
+  private jammers(w: World, dt: number): void {
+    if (dt <= 0) return;
+    for (const j of w.ewj) {
+      if (!j.isEmitting()) continue;
+      const p = j.pos;
+      const x = p.x;
+      const y = p.z;
+      const z = -p.y;
+      const k = 0.6 + 0.4 * rnd();
+      this.fire.spawn({ x, y, z, life: Math.max(0.06, dt * 1.5), size0: 3 * k, size1: 3 * k, c0: [3.2, 1.0, 5.5], minPx: 2.5, windK: 0 });
+      const acc = (this.siteAcc.get(j) ?? 0) + dt;
+      if (acc >= 1.6) {
+        this.fire.spawn({ x, y, z, life: 1.6, size0: 6, size1: 260, alpha: 0.22, c0: [0.9, 0.3, 1.6], c1: [0.2, 0.05, 0.4], windK: 0 });
+        this.siteAcc.set(j, 0);
+      } else this.siteAcc.set(j, acc);
+    }
+  }
+
+  /** Jets at treetop height whip up a thin trail of dust and leaves behind them. */
+  private lowFlyers(w: World, dt: number, visible: (e: Entity) => boolean): void {
+    if (dt <= 0) return;
+    for (const e of w.entities) {
+      if (!e.alive || e.munition || e.speed < 180 || !visible(e)) continue;
+      const g = w.terrain.groundAt(e.pos.x, e.pos.y);
+      const agl = e.pos.z - g;
+      if (agl > 160 || g <= 0.5) continue;
+      const n = Math.round(e.speed * dt / 60 + rnd());
+      for (let i = 0; i < n; i++) {
+        const back = rnd() * e.speed * dt + 20;
+        const sp = e.speed || 1;
+        const x = e.pos.x - (e.vel.x / sp) * back;
+        const y = e.pos.y - (e.vel.y / sp) * back;
+        const gg = w.terrain.groundAt(x, y);
+        this.puff({
+          x: x + sym(8),
+          y: gg + 2,
+          z: -y + sym(8),
+          vx: (e.vel.x / sp) * 15 + sym(6),
+          vy: 3 + rnd() * 5,
+          vz: (-e.vel.y / sp) * 15 + sym(6),
+          life: 6 + rnd() * 5,
+          size0: 6,
+          size1: 30 + rnd() * 20,
+          alpha: 0.45 * (1 - agl / 160),
+          c0: [0.45, 0.4, 0.31],
+          c1: [0.58, 0.55, 0.5],
+          drag: 1.2,
+          lift: 0.3,
+        });
+      }
+    }
   }
 
   /** Destroyed sites keep burning: a fire at the base and a smoke column drifting downwind. */

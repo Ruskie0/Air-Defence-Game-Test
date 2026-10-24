@@ -489,12 +489,13 @@ export class View3D {
           box(4, 2, 3, olive);
           box(5, 5, 0.4, 0x4b5230, 0, 2, 0);
           break;
-        case 'jammer':
-          // EW jammer truck: shelter body and a mast of dish emitters (placeholder until it gets a proper model).
-          box(2.6, 2.4, 8, olive);
-          box(0.3, 10, 0.3, 0x777777, 0, 2.4, -2);
-          box(2.4, 1.2, 0.4, 0x4b5230, 0, 11, -2);
+        case 'jammer': {
+          // EW jammer truck: shelter and telescopic mast carrying the emitter head (it glows while jamming, see Effects).
+          const truck = part('jammer-base');
+          truck.rotation.y = -(w.terrain.layout.rot ?? 0) * DEG;
+          part('jammer-head', truck, 9.5).position.z = 1.5;
           break;
+        }
       }
       const icon = new THREE.Sprite(new THREE.SpriteMaterial({ map: MARKERS.site, depthTest: false, transparent: true, sizeAttenuation: false }));
       icon.scale.setScalar(s.defended ? 0.018 : 0.011);

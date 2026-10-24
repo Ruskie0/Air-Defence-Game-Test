@@ -27,6 +27,8 @@ export interface EnemyModel {
   axisW: number[];
   /** Our positions its recon drones photographed yesterday: today's strikes go for them. */
   known?: Sighting[];
+  /** Kinds of attack our deep strikes have knocked back, with the days left until they recover. */
+  suppressed?: Partial<Record<PkgKind, number>>;
 }
 
 interface PkgDef {
@@ -138,7 +140,7 @@ export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: n
     // At most two decoy packages a day: they are there to thin out a real attack, not to be the attack.
     const decoys = out.filter((p) => p.kind === 'decoys').length;
     const recon = out.some((p) => p.kind === 'recon');
-    const kind = pick(rng, affordable, (k) => ((k === 'decoys' && decoys >= 2) || (k === 'recon' && recon) ? 0 : enemy.kindW[k]));
+    const kind = pick(rng, affordable, (k) => ((k === 'decoys' && decoys >= 2) || (k === 'recon' && recon) ? 0 : enemy.kindW[k] * ((enemy.suppressed?.[k] ?? 0) > 0 ? 0.25 : 1)));
     const def = PKG[kind];
     const sector = (pick(rng, def.sectors, (s) => enemy.axisW[(s + k) % 8]) + k) % 8;
     const bearing = (sector * 45 + rng.range(-18, 18) + 360) % 360;

@@ -3,6 +3,7 @@
 import { Campaign, Difficulty } from '../src/campaign/campaign';
 import { PKG, SECTOR_NAMES, sectorOf } from '../src/campaign/raidgen';
 import { CATALOG, UnitType } from '../src/sim/catalog';
+import { DeepStrikeId, deepStrike, deepStrikeError } from '../src/campaign/deepstrike';
 
 const seed = Number(process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 1);
 const verbose = process.argv.includes('--verbose');
@@ -42,6 +43,16 @@ function shop(): string[] {
     if (c.replaceAircraft(u)) bought.push('replacement fighter');
   }
   const saving = c.unlocked('LR') && count('LR') < 1;
+  // One deep strike a day at the biggest threat in today's plan, when there is money to spare.
+  if (!saving && c.s.money > 140 && !process.argv.includes('--no-strikes')) {
+    const has = (k: string): number => c.s.plan.filter((p) => p.kind === k).reduce((n, p) => n + p.size, 0);
+    const order: [DeepStrikeId, number][] = [['tbm', has('tbm') * 3], ['airfield', has('strike') + has('sead') + has('bomber') * 3], ['drones', has('drones') / 3]];
+    const best = order.filter(([id, v]) => v > 2 && !deepStrikeError(c, id)).sort((a, b) => b[1] - a[1])[0];
+    if (best) {
+      const r = deepStrike(c, best[0]);
+      if (r) bought.push(`deep strike ${best[0]} (${c.s.deepStrike?.ok ? 'hit' : 'failed'})`);
+    }
+  }
   for (const id of ['pdfuze', 'hardened'] as const) if (!saving && c.s.money > 150 && c.upgrade(id)) bought.push(id);
   for (const u of c.units) if (!saving && (u.type === 'LR' || u.type === 'MR') && c.s.money > 250 && c.addLauncher(u)) bought.push(`launcher ${u.type}`);
   return bought;

@@ -5,11 +5,12 @@ import { UPGRADES, UpgradeId } from './upgrades';
 import { DayObjective, objectiveName, objectiveStatus, pickObjectives } from './objectives';
 import { ReconDrone } from '../sim/entities';
 import { EVENTS, EventId, rollEvent } from './events';
+import type { DeepStrikeId } from './deepstrike';
 import { hdist, v3 } from '../sim/math';
 import { CLASSIC_LAYOUT, MapLayout, MapType, Terrain, legacyLayout, randomLayout, typeForSeed } from '../sim/terrain';
 import { MAP_SEED } from '../sim/world';
 import { World } from '../sim/world';
-import { EnemyModel, PKG, PlannedPkg, SECTOR_NAMES, newEnemy, planDay, sectorOf, toRaids } from './raidgen';
+import { EnemyModel, PKG, PkgKind, PlannedPkg, SECTOR_NAMES, newEnemy, planDay, sectorOf, toRaids } from './raidgen';
 
 export const CAMPAIGN_DAYS = 10;
 export { CAP_RADIUS, DEPLOY_RADIUS };
@@ -79,6 +80,8 @@ export interface CampaignState {
   eventResult?: string;
   /** Taken off the next income (an event). */
   incomePenalty?: number;
+  /** Today's deep strike, once flown. */
+  deepStrike?: { id: DeepStrikeId; ok: boolean; text: string } | null;
 }
 
 /** Where new units go before the player moves them, in order of preference. */
@@ -369,11 +372,20 @@ export class Campaign {
   // ------------------------------------------------------------- the day
 
   replan(): void {
+    // Targets our deep strikes hit recover a day at a time.
+    const sup = this.s.enemy.suppressed;
+    if (sup) for (const k of Object.keys(sup) as PkgKind[]) if (--sup[k]! <= 0) delete sup[k];
+    this.s.deepStrike = null;
     this.s.plan = planDay(this.s.day, this.s.seed, this.s.enemy, this.s.nextPkg, this.layout.rot, this.diff.threat);
     this.s.nextPkg += this.s.plan.length;
     this.s.objectives = pickObjectives(this.s.plan, this.s.day, this.s.seed);
     this.s.event = rollEvent(this);
     this.s.eventResult = undefined;
+  }
+
+  /** Pick today's bonus objectives again after the plan changed. */
+  refreshObjectives(): void {
+    this.s.objectives = pickObjectives(this.s.plan, this.s.day, this.s.seed);
   }
 
   /** Re-aim today's strike packages after the enemy learned new positions (an event). */
@@ -417,6 +429,8 @@ export class Campaign {
       });
     const missed = this.s.plan.filter((p) => !p.reported).length;
     if (missed) lines.push(`Intel coverage is incomplete: expect ${missed === 1 ? 'one package' : 'more packages'} we have not seen.`);
+    const sup = Object.entries(this.s.enemy.suppressed ?? {}).filter(([, n]) => n! > 0);
+    if (sup.length) lines.push(`Still recovering from our deep strikes: ${sup.map(([k, n]) => `${PKG[k as PkgKind].name.toLowerCase()} (${n} day${n! > 1 ? 's' : ''})`).join(', ')}.`);
     return lines;
   }
 

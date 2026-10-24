@@ -1,6 +1,7 @@
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, RANKS, ROUND_COST, UnitType, launcherOffsets, newUnit, rankOf } from '../sim/catalog';
 import { CAP_RADIUS, DEPLOY_RADIUS, nearestFree, placeError } from '../sim/deploy';
 import { finishMoves } from '../sim/mobility';
+import { finishConvoys } from '../sim/support';
 import { UPGRADES, UpgradeId } from './upgrades';
 import { DayObjective, objectiveName, objectiveStatus, pickObjectives } from './objectives';
 import { ReconDrone } from '../sim/entities';
@@ -610,6 +611,7 @@ export class Campaign {
       w.detonate(e);
     }
 
+    finishConvoys(w);
     finishMoves(w);
     // Support calls made during the battle are paid for now.
     s.money = Math.max(0, s.money - w.supportSpentM);

@@ -523,6 +523,14 @@ export class World {
         hit = true;
       }
     }
+    // Supply trucks caught in the blast.
+    for (const c of this.entities) {
+      if (c.kind !== 'convoy' || !c.alive || dist(e.pos, c.pos) > wh.lethalR + 15) continue;
+      c.alive = false;
+      this.setFate(c, 'impact', e.name);
+      this.log(`${c.name} destroyed on the road by ${e.name}: its missiles are lost`, 'damage');
+      hit = true;
+    }
     this.setFate(e, 'impact', e.targetName, { hit });
     if (hit) {
       this.stats.leakers++;

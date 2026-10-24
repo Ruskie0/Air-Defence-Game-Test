@@ -14,7 +14,7 @@ import { DayObjective, objectiveDesc, objectiveName, objectiveStatus } from '../
 import { MOBILITY, moveError, moveStatus } from '../sim/mobility';
 import { Exposure } from '../sim/exposure';
 import type { Fielded } from '../sim/world';
-import { FIELD_REPAIR, QRA, RESUPPLY, callRepair, callResupply, qraError, repairError, resupplyCost, resupplyError, scrambleQra } from '../sim/support';
+import { CONVOY_SPEED, Convoy, batteryPos, FIELD_REPAIR, QRA, RESUPPLY, callRepair, callResupply, depots, qraError, repairError, resupplyCost, resupplyError, scrambleQra } from '../sim/support';
 import { CLASS_NAME, IDENT_COLOR, IDENT_NAME, fmtTime } from './colors';
 import type { Ppi } from './ppi';
 
@@ -157,8 +157,23 @@ export class Hud {
     if (!f || !f.sites.length) return '';
     const btns: string[] = [];
     if (f.fu) {
-      const err = resupplyError(w, f.fu);
-      btns.push(`<button data-act="resupply" data-code="${f.fu.code}" ${err ? 'disabled' : ''} title="${esc(err ?? `${RESUPPLY.rounds} spare missiles in ${fmtTime(RESUPPLY.delayS)}`)}">Resupply ${this.cost(resupplyCost(f.fu))}</button>`);
+      const fu = f.fu;
+      const err = resupplyError(w, fu);
+      const convoy = w.entities.find((e): e is Convoy => e instanceof Convoy && e.alive && e.fu === fu);
+      if (convoy) btns.push(`<span class="dim">Convoy from ${esc(convoy.from)}, ${fmtTime(convoy.eta(w))} out</span>`);
+      else if (err) btns.push(`<button disabled title="${esc(err)}">Resupply</button>`);
+      else {
+        // The nearest depot is quickest; the airbase, further back, is safest.
+        const ds = depots(w, fu);
+        const opts = ds[0].name === 'Airbase' ? [ds[0]] : [ds[0], ...ds.filter((s) => s.name === 'Airbase')];
+        for (const d of opts) {
+          const km = Math.hypot(d.pos.x - batteryPos(fu).x, d.pos.y - batteryPos(fu).y) / 1000;
+          const t = RESUPPLY.loadS + (km * 1000) / CONVOY_SPEED;
+          btns.push(
+            `<button data-act="resupply" data-code="${fu.code}" data-name="${esc(d.name)}" title="${esc(`${RESUPPLY.rounds} spare missiles by road from ${d.name}: ${km.toFixed(0)} km, about ${fmtTime(t)}. Convoys driving near the front get hunted by loitering munitions.`)}">Resupply from ${esc(d.name)} ${this.cost(resupplyCost(fu))}</button>`,
+          );
+        }
+      }
     }
     const hurt = f.sites.filter((x) => x.alive && x.hp < 100);
     for (const site of hurt.slice(0, 3)) {
@@ -282,7 +297,7 @@ export class Hud {
         break;
       case 'resupply': {
         const fu = w.unit(d.code!);
-        if (fu) this.lastOrder = callResupply(w, fu) ?? 'Resupply convoy on its way.';
+        if (fu) this.lastOrder = callResupply(w, fu, d.name) ?? 'Resupply convoy on its way.';
         break;
       }
       case 'repair': {

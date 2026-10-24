@@ -9,9 +9,9 @@ import type { World } from './world';
  */
 export const ARMOUR = {
   /** Where it masses, back down the road from the town (m), its road speed (m/s) and when it sets off (s). */
-  startM: 12000,
-  speed: 8,
-  setOffS: 120,
+  startM: 8000,
+  speed: 12,
+  setOffS: 60,
   /** The assault on the town lasts this long once the column is there (s). */
   assaultS: 300,
   /** The town falls if its health drops below this while the assault is on. */

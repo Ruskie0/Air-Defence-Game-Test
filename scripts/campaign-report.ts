@@ -110,7 +110,7 @@ while (!c.s.over) {
   let cb = 0;
   let realS = 0;
   const tempo = new Tempo();
-  while (!w.scenario.done && w.t < last + 1200) {
+  while (!w.scenario.done && w.t < last + 3600) {
     w.step();
     // Real time a player at 1x would spend on this battle with auto tempo on.
     realS += 1 / 60 / tempo.update(w);
@@ -129,6 +129,8 @@ while (!c.s.over) {
       while (cb < w.exposure.located.length && w.t > w.exposure.located[cb].eta) cb++;
     }
   }
+  const stuck = w.entities.filter((e) => e.alive && e.side === 'red');
+  if (verbose && stuck.length) console.log(`  still up at the end: ${stuck.map((e) => `${e.name}@${Math.round(Math.hypot(e.pos.x, e.pos.y) / 1000)}km`).join(', ')}`);
   if (day === logDay) for (const e of w.logEntries) console.log(`  ${(e.t / 60).toFixed(1).padStart(5)} ${e.msg}`);
   const r = c.settle(w);
   const dmg = r.damage.filter((d) => d.lost > 0).map((d) => `${d.name} -${d.lost} (${d.hp})`).join(', ') || 'none';

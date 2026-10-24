@@ -412,8 +412,8 @@ export class Bomber extends Air {
       }
     } else {
       // Head out past the start point and off the map.
-      this.steer(this.home.x * 2, this.home.y * 2, dt);
-      if (Math.hypot(this.pos.x, this.pos.y) > 210000) this.alive = false;
+      this.steer(this.home.x, this.home.y, dt);
+      if (hdist(this.pos, this.home) < 4000 || Math.hypot(this.pos.x, this.pos.y) > 210000) w.retire(this);
     }
     this.integrate(w, dt);
   }
@@ -481,8 +481,8 @@ export class Striker extends Air {
         }
         break;
       case 'egress':
-        this.steer(this.home.x * 2, this.home.y * 2, dt);
-        if (Math.hypot(this.pos.x, this.pos.y) > 150000) w.retire(this);
+        this.steer(this.home.x, this.home.y, dt);
+        if (hdist(this.pos, this.home) < 4000 || Math.hypot(this.pos.x, this.pos.y) > 150000) w.retire(this);
         break;
     }
     this.integrate(w, dt);
@@ -581,8 +581,8 @@ export class Helo extends Air {
       }
       case 'egress':
         this.cmdSpd = 75;
-        this.steer(this.home.x * 2, this.home.y * 2, dt);
-        if (Math.hypot(this.pos.x, this.pos.y) > 90000) w.retire(this);
+        this.steer(this.home.x, this.home.y, dt);
+        if (hdist(this.pos, this.home) < 2000 || Math.hypot(this.pos.x, this.pos.y) > 150000) w.retire(this);
         break;
     }
     this.integrate(w, dt);
@@ -726,8 +726,8 @@ export class Sead extends Air {
       }
     } else {
       // Head out past the start point and off the map.
-      this.steer(this.home.x * 2, this.home.y * 2, dt);
-      if (Math.hypot(this.pos.x, this.pos.y) > 210000) this.alive = false;
+      this.steer(this.home.x, this.home.y, dt);
+      if (hdist(this.pos, this.home) < 4000 || Math.hypot(this.pos.x, this.pos.y) > 210000) w.retire(this);
     }
     this.integrate(w, dt);
   }
@@ -739,6 +739,10 @@ export class Soj extends Air {
   readonly side = 'red' as const;
   private readonly legs: [V3, V3];
   private leg = 0;
+  private readonly home: V3;
+  /** Time on the racetrack before it has to go home (s), counted from when it first reaches it. */
+  private onStation = 1500;
+  private stationUntil = Infinity;
 
   /** `entry`: where it comes onto the map from its rear base; it flies from there to the racetrack. */
   constructor(name: string, center: V3, bearingFromCenter: number, entry?: V3) {
@@ -747,6 +751,7 @@ export class Soj extends Air {
     const b = add(center, polar(across + 180, 22000));
     super(name, entry ? v3(entry.x, entry.y, 9500) : v3(a.x, a.y, 9500), entry ? bearingDeg(entry, a) : across + 180, 210);
     this.legs = [a, b];
+    this.home = entry ? v3(entry.x, entry.y, 9500) : clone(a);
     this.rcs = 15;
     this.hitRadius = 14;
     this.cmdAlt = 9500;
@@ -755,9 +760,18 @@ export class Soj extends Air {
   }
 
   update(w: World, dt: number): void {
-    const p = this.legs[this.leg];
-    if (hdist(this.pos, p) < 3000) this.leg = 1 - this.leg;
-    this.steer(p.x, p.y, dt);
+    if (w.t > this.stationUntil) {
+      // Off station: back the way it came.
+      this.steer(this.home.x, this.home.y, dt);
+      if (hdist(this.pos, this.home) < 5000) w.retire(this);
+    } else {
+      const p = this.legs[this.leg];
+      if (hdist(this.pos, p) < 3000) {
+        this.leg = 1 - this.leg;
+        if (this.stationUntil === Infinity) this.stationUntil = w.t + this.onStation;
+      }
+      this.steer(p.x, p.y, dt);
+    }
     this.integrate(w, dt);
   }
 }

@@ -63,11 +63,11 @@ interface BaseDef {
 }
 
 export const BASE_DEFS: Record<BaseKind, BaseDef> = {
-  airfield: { name: 'Forward airfield', stock: { strike: 6, sead: 4, recon: 3 }, daily: { strike: 0.8, sead: 0.5, recon: 1 }, known: true },
-  farp: { name: 'Helicopter forward arming point', stock: { helo: 6 }, daily: { helo: 1 }, known: false },
+  airfield: { name: 'Forward airfield', stock: { strike: 8, sead: 4, recon: 3 }, daily: { strike: 1, sead: 0.6, recon: 1 }, known: true },
+  farp: { name: 'Helicopter forward arming point', stock: { helo: 10 }, daily: { helo: 1.6 }, known: false },
   drones: { name: 'Drone launch team', stock: { drone: 22 }, daily: { drone: 7 }, known: false },
   tbm: { name: 'Ballistic missile launch area', stock: { tbm: 8 }, daily: { tbm: 1.5 }, known: false },
-  glcm: { name: 'Cruise missile battery', stock: { cruise: 14 }, daily: { cruise: 3 }, known: false },
+  glcm: { name: 'Cruise missile battery', stock: { cruise: 24 }, daily: { cruise: 6 }, known: false },
   rear: { name: 'Rear air base (beyond the map)', stock: { bomber: 3, soj: 2 }, daily: { bomber: 0.4, soj: 0.3 }, known: true },
 };
 
@@ -118,10 +118,21 @@ export function makeTheatre(t: Terrain, seed: number, towns: TheatreTown[] = [],
   add('airfield', airTown ?? landNear(t, rng.range(-10000, 10000), Math.max(minV + 25000, 100000)), '', airTown?.name);
   // Helicopters stage from the nearest enemy-held town short of the airfield.
   const farpTown = enemyTowns.find((x) => !x.airfield);
-  add('farp', farpTown ?? landNear(t, rng.range(-15000, 15000), Math.max(minV, 60000)), farpTown ? ` at ${farpTown.name}` : '', farpTown?.name);
+  // Across the water the far shore is too far for drones and helicopters: they come off ships out at sea.
+  const sea = L.tipM && L.farShoreM ? (u: number, v: number): { x: number; y: number } => {
+    const p = t.toWorld(u, v);
+    return { x: Math.round(p.x), y: Math.round(p.y) };
+  } : null;
+  if (farpTown) add('farp', farpTown, ` at ${farpTown.name}`, farpTown.name);
+  else if (sea) add('farp', sea(rng.range(-12000, 12000), L.tipM! + rng.range(40000, 50000)), ' (assault ship)');
+  else add('farp', landNear(t, rng.range(-15000, 15000), Math.max(minV, 60000)));
   // Drone teams: one in each enemy-held town short of the airfield, and one on each flank.
   for (const tn of enemyTowns.filter((x) => !x.airfield)) add('drones', { x: tn.x, y: tn.y }, ` at ${tn.name}`, tn.name);
-  for (const side of [-1, 1]) add('drones', landNear(t, side * rng.range(30000, 42000), Math.max(minV, 55000) + rng.range(0, 10000)), side < 0 ? ' (left flank)' : ' (right flank)');
+  for (const side of [-1, 1]) {
+    const name = side < 0 ? 'left' : 'right';
+    if (sea) add('drones', sea(side * rng.range(22000, 32000), L.tipM! + rng.range(28000, 38000)), ` (${name} launch ship)`);
+    else add('drones', landNear(t, side * rng.range(30000, 42000), Math.max(minV, 55000) + rng.range(0, 10000)), ` (${name} flank)`);
+  }
   for (const side of [-1, 1]) add('tbm', landNear(t, side * rng.range(20000, 35000), rng.range(118000, 135000)), side < 0 ? ' (west)' : ' (east)');
   add('glcm', landNear(t, rng.range(-15000, 15000), rng.range(105000, 120000)));
   // The rear air base is off the map: its aircraft enter along a corridor at the map edge.

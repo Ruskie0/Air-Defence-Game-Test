@@ -311,7 +311,72 @@ function bomb(): THREE.BufferGeometry {
   return k.build();
 }
 
+/** Attack helicopter (Apache / Mi-28 class): narrow tandem-cockpit fuselage, stub wings with missile racks, tail boom. */
+function helo(): THREE.BufferGeometry {
+  const c = 0x4a5238;
+  const k = new Kit();
+  k.lathe([[-3.2, 0], [-2.8, 0.75], [-0.5, 1.0], [2.6, 0.95], [4.4, 0.72], [5.6, 0.32], [5.9, 0]], c, 12, 0, 0, 0.72, 1.15);
+  k.ellipsoid(0.5, 0.62, 2.0, GLASS, 0, 0.75, 3.1);
+  k.box(0.08, 0.5, 0.08, DARK, 0, 1.15, 2.4);
+  k.tube(0.42, 0.2, 7.2, c, 0, 0.35, -6.4);
+  k.fin([[-9.0, 0.3], [-9.9, 2.6], [-10.6, 2.6], [-10.3, 0.3]], 0.12, c);
+  k.plate(sym([[0.1, -9.3], [1.5, -9.5], [1.5, -10.1], [0.1, -10.1]]), 0.08, c, 0.45);
+  // Engines either side of the rotor mast, with exhausts angled out.
+  for (const x of [-0.92, 0.92]) {
+    k.tube(0.4, 0.36, 2.8, c, x, 0.85, 0.2);
+    k.tube(0.3, 0.3, 0.5, NOZZLE, x * 1.1, 0.85, -1.4);
+  }
+  k.box(0.9, 0.5, 1.6, c, 0, 1.15, 0.4);
+  k.box(0.22, 0.75, 0.22, DARK, 0, 1.7, 0.4);
+  // Stub wings with a rocket pod and a four-round missile rack on each side.
+  k.plate(sym([[0.5, 1.0], [2.5, 0.85], [2.5, 0.0], [0.5, -0.15]]), 0.12, c, 0.15);
+  for (const x of [-2.25, 2.25]) {
+    k.lathe([[-0.8, 0], [-0.75, 0.24], [0.7, 0.24], [0.8, 0.1]], 0x3d442e, 8, x, -0.2);
+    for (const [dx, dy] of [[-0.12, -0.08], [0.12, -0.08], [-0.12, -0.3], [0.12, -0.3]]) k.tube(0.07, 0.07, 1.6, 0x5c6346, x * 0.62 + dx, dy, 0.55, 6);
+  }
+  // Chin gun, landing gear and tail wheel.
+  k.ellipsoid(0.28, 0.24, 0.28, DARK, 0, -0.85, 4.1);
+  k.box(0.06, 0.06, 1.5, DARK, 0, -0.95, 4.9);
+  for (const x of [-1.05, 1.05]) {
+    k.box(0.08, 0.9, 0.08, DARK, x * 0.85, -0.85, 1.9);
+    k.wheel(0.32, 0.2, TYRE, x, -1.3, 1.9);
+  }
+  k.wheel(0.18, 0.12, TYRE, 0, -0.35, -9.4);
+  return k.build();
+}
+
+/** Main rotor (four blades and hub), spun about Y. */
+function heloRotor(): THREE.BufferGeometry {
+  const k = new Kit();
+  k.ellipsoid(0.35, 0.18, 0.35, DARK, 0, 0, 0);
+  for (let i = 0; i < 4; i++) {
+    const a = (i * Math.PI) / 2 + 0.2;
+    k.box(0.5, 0.05, 7.2, 0x2f322b, Math.sin(a) * 3.75, 0, Math.cos(a) * 3.75, 0, a, 0);
+  }
+  return k.build();
+}
+
+/** Tail rotor on the left of the fin, spun about X. */
+function heloTail(): THREE.BufferGeometry {
+  const k = new Kit();
+  k.box(0.04, 2.6, 0.22, 0x2f322b);
+  k.box(0.04, 0.22, 2.6, 0x2f322b);
+  return k.build();
+}
+
+/** Small anti-tank guided missile: slim body, four mid-body wings and tail fins. */
+function atgm(): THREE.BufferGeometry {
+  const c = 0x6b6e5c;
+  const k = new Kit();
+  k.lathe([[-0.8, 0], [-0.8, 0.09], [0.6, 0.09], [0.75, 0.06], [0.8, 0]], c, 8);
+  k.cross([[0.1, 0.09], [-0.15, 0.24], [-0.3, 0.24], [-0.3, 0.09]], 0.01, c, Math.PI / 4);
+  k.cross([[-0.6, 0.09], [-0.75, 0.17], [-0.8, 0.17], [-0.8, 0.09]], 0.01, c);
+  return k.build();
+}
+
 const AIR: Record<string, () => THREE.BufferGeometry> = {
+  helo,
+  atgm,
   strike,
   bomb,
   recon,
@@ -347,8 +412,25 @@ export const CHARRED_MAT = new THREE.MeshStandardMaterial({ vertexColors: true, 
  */
 export function airModel(kind: string, munition = false): THREE.Mesh {
   const key = AIR[kind] ? kind : /drone|decoy|uav|loiter/i.test(kind) ? 'drone' : munition ? 'cruise' : 'fighter';
-  return new THREE.Mesh(cached(key, AIR[key]), MODEL_MAT);
+  const body = new THREE.Mesh(cached(key, AIR[key]), MODEL_MAT);
+  if (key === 'helo') {
+    // Rotors are children so View3D can spin them; the blur disc goes when it becomes a wreck.
+    const rotor = new THREE.Mesh(cached('helo-rotor', heloRotor), MODEL_MAT);
+    rotor.name = 'rotor';
+    rotor.position.set(0, 2.1, 0.4);
+    const disc = new THREE.Mesh(ROTOR_DISC, ROTOR_BLUR_MAT);
+    disc.name = 'blur';
+    rotor.add(disc);
+    const tail = new THREE.Mesh(cached('helo-tail', heloTail), MODEL_MAT);
+    tail.name = 'tailrotor';
+    tail.position.set(-0.22, 1.9, -10.1);
+    body.add(rotor, tail);
+  }
+  return body;
 }
+
+const ROTOR_DISC = new THREE.CircleGeometry(7.4, 32).rotateX(-Math.PI / 2);
+const ROTOR_BLUR_MAT = new THREE.MeshBasicMaterial({ color: 0x2f322b, transparent: true, opacity: 0.18, depthWrite: false, side: THREE.DoubleSide });
 
 export function interceptorModel(code: string): THREE.Mesh {
   return new THREE.Mesh(
@@ -357,8 +439,28 @@ export function interceptorModel(code: string): THREE.Mesh {
   );
 }
 
+/** Overall length of each air model in metres, so View3D can keep every kind a readable size on screen. */
+export const MODEL_LEN: Record<string, number> = {
+  fighter: 16,
+  sead: 17,
+  strike: 21,
+  bomber: 42,
+  soj: 36,
+  airliner: 40,
+  recon: 10,
+  helo: 17,
+  drone: 3.5,
+  cruise: 6,
+  tbm: 12,
+  arm: 4.2,
+  bomb: 3.4,
+  atgm: 1.6,
+};
+
 /** Rough size of each kind, for wreck fires and crash effects (1 = a cruise missile). */
 export const WRECK_SIZE: Record<string, number> = {
+  helo: 1.5,
+  atgm: 0.3,
   strike: 1.8,
   bomb: 0.7,
   recon: 1.4,

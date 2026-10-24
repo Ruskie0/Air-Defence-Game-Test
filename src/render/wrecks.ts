@@ -7,7 +7,7 @@ import { CHARRED_MAT, WRECK_SIZE } from './models';
 
 const G = 9.81;
 /** Terminal velocity of each falling wreck in m/s; aircraft break up and tumble, so they fall slower than intact. */
-const TERMINAL: Record<string, number> = { bomb: 200, recon: 70, drone: 40, arm: 160, cruise: 150, tbm: 260 };
+const TERMINAL: Record<string, number> = { helo: 55, atgm: 120, bomb: 200, recon: 70, drone: 40, arm: 160, cruise: 150, tbm: 260 };
 const AIRCRAFT_TERMINAL = 120;
 /** Wrecks on the ground are removed this long after landing (sim seconds). */
 const KEEP_S = 300;
@@ -69,6 +69,8 @@ export class Wrecks {
     const kick = Math.min(40, vel.length() * 0.15 + 8);
     vel.add(this.v.set(sym(kick), sym(kick) * 0.6, sym(kick)));
     const spinK = e.kind === 'drone' ? 2.5 : munition ? 3 : 1;
+    // A rotor's blur disc does not survive the hit.
+    body.getObjectByName('blur')?.removeFromParent();
     this.group.add(body);
     this.list.push({
       obj: body,

@@ -415,20 +415,22 @@ export class Effects {
       if (!e.alive || !visible(e)) continue;
       const contrail = CONTRAIL_KINDS.has(e.kind) && e.pos.z > 7800;
       const tbm = e.kind === 'tbm' && e.pos.z < 70000 && e.speed > 900;
-      if (!contrail && !tbm) continue;
+      const atgm = e.kind === 'atgm';
+      if (!contrail && !tbm && !atgm) continue;
       const key = -e.id;
       seen.add(key);
       const x = e.pos.x;
       const y = e.pos.z;
       const z = -e.pos.y;
       if (tbm) this.fire.spawn({ x, y, z, life: Math.max(0.05, dt * 1.5), size0: 14, size1: 14, c0: [12, 6, 2.5], minPx: 4, windK: 0 });
+      if (atgm) this.fire.spawn({ x, y, z, life: Math.max(0.05, dt * 1.5), size0: 1.2, size1: 1.2, c0: [12, 7, 3], minPx: 2.5, windK: 0 });
       const last = this.lastEmit.get(key);
       if (!last) {
         this.lastEmit.set(key, { x, y, z });
         continue;
       }
       const seg = Math.hypot(x - last.x, y - last.y, z - last.z);
-      const spacing = Math.max(tbm ? 150 : 70, seg / 10);
+      const spacing = Math.max(tbm ? 150 : atgm ? 8 : 70, seg / 10);
       const n = Math.floor(seg / spacing);
       if (n === 0) continue;
       for (let k = 1; k <= n; k++) {
@@ -437,10 +439,10 @@ export class Effects {
           x: last.x + (x - last.x) * f,
           y: last.y + (y - last.y) * f,
           z: last.z + (z - last.z) * f,
-          life: tbm ? 20 : 70,
-          size0: tbm ? 10 : 6,
-          size1: tbm ? 50 : 75,
-          alpha: tbm ? 0.3 : 0.32,
+          life: tbm ? 20 : atgm ? 6 : 70,
+          size0: tbm ? 10 : atgm ? 1.5 : 6,
+          size1: tbm ? 50 : atgm ? 9 : 75,
+          alpha: tbm ? 0.3 : atgm ? 0.5 : 0.32,
           c0: [0.98, 0.98, 1],
           c1: [0.9, 0.92, 0.96],
           drag: 0.2,
@@ -497,10 +499,42 @@ export class Effects {
     }
   }
 
+  /** A low helicopter's rotor wash kicks up a ring of dust below it. */
+  private downwash(w: World, e: Entity, dt: number): void {
+    const g = w.terrain.groundAt(e.pos.x, e.pos.y);
+    const agl = e.pos.z - g;
+    if (agl > 60 || g <= 0.5) return;
+    const k = 1 - agl / 60;
+    const n = Math.round(dt * 8 * k + rnd());
+    for (let i = 0; i < n; i++) {
+      const a = rnd() * Math.PI * 2;
+      const r = 6 + rnd() * 10;
+      this.puff({
+        x: e.pos.x + Math.cos(a) * r,
+        y: g + 1.5,
+        z: -e.pos.y + Math.sin(a) * r,
+        vx: Math.cos(a) * 9,
+        vy: 0.5 + rnd(),
+        vz: Math.sin(a) * 9,
+        life: 3 + rnd() * 3,
+        size0: 5,
+        size1: 24 + rnd() * 12,
+        alpha: 0.32 * k,
+        c0: [0.5, 0.45, 0.35],
+        c1: [0.6, 0.57, 0.5],
+        drag: 0.5,
+      });
+    }
+  }
+
   /** Jets at treetop height whip up a thin trail of dust and leaves behind them. */
   private lowFlyers(w: World, dt: number, visible: (e: Entity) => boolean): void {
     if (dt <= 0) return;
     for (const e of w.entities) {
+      if (e.kind === 'helo' && e.alive && visible(e)) {
+        this.downwash(w, e, dt);
+        continue;
+      }
       if (!e.alive || e.munition || e.speed < 180 || !visible(e)) continue;
       const g = w.terrain.groundAt(e.pos.x, e.pos.y);
       const agl = e.pos.z - g;
@@ -817,34 +851,62 @@ export class Effects {
         continue;
       }
       if (c.spec.kind === 'gun35') this.airbursts(w, c);
-      if (c.firing && c.site.alive) {
-        const g = c.gun;
-        const az = (c.aimAz * Math.PI) / 180;
-        const el = (c.aimEl * Math.PI) / 180;
-        const fx = Math.sin(az) * Math.cos(el);
-        const fy = Math.cos(az) * Math.cos(el);
-        const fz = Math.sin(el);
-        const x = g.x + fx * 3;
-        const y = g.z + fz * 3;
-        const z = -(g.y + fy * 3);
-        const big = c.spec.kind === 'gun35' ? 2 : 1;
-        this.fire.spawn({ x, y, z, life: Math.max(0.04, dt * 1.2), size0: 3.5 * big, size1: 3.5 * big, c0: [16, 9, 3.5], minPx: 3, windK: 0 });
-        this.puff({ x, y, z, vx: fx * 6, vy: fz * 6 + 1, vz: -fy * 6, life: 4, size0: 2, size1: 16, alpha: 0.25, c0: [0.6, 0.6, 0.6], drag: 0.8 });
+      const gun35 = c.spec.kind === 'gun35';
+      const g = c.gun;
+      const az = (c.aimAz * Math.PI) / 180;
+      const el = (c.aimEl * Math.PI) / 180;
+      const fx = Math.sin(az) * Math.cos(el);
+      const fy = Math.cos(az) * Math.cos(el);
+      const fz = Math.sin(el);
+      const mx = g.x + fx * (gun35 ? 4 : 2.5);
+      const my = g.z + fz * (gun35 ? 4 : 2.5);
+      const mz = -(g.y + fy * (gun35 ? 4 : 2.5));
+      if (gun35) {
+        // The 35 mm fires distinct heavy shots: one flash, a blast cone and a puff of smoke per round.
+        let shots = 0;
+        for (const r of c.rounds) {
+          if (r.t0 <= w.t - dt - 1e-6 || ++shots > 3) continue;
+          this.fire.spawn({ x: mx, y: my, z: mz, life: 0.07, size0: 9, size1: 5, c0: [22, 12, 4], minPx: 4, windK: 0 });
+          for (let i = 0; i < 3; i++) {
+            const k = 3 + i * 3;
+            this.fire.spawn({ x: mx + fx * k, y: my + fz * k, z: mz - fy * k, life: 0.05, size0: 6 - i * 1.5, size1: 3, c0: [14, 6, 1.5], windK: 0 });
+          }
+          this.puff({ x: mx, y: my, z: mz, vx: fx * 14 + sym(2), vy: fz * 14 + 1, vz: -fy * 14 + sym(2), life: 5 + rnd() * 2, size0: 3, size1: 22, alpha: 0.4, c0: [0.62, 0.6, 0.57], drag: 1.2, lift: 0.2 });
+        }
+      } else if (c.firing && c.site.alive) {
+        // The Gatling's flame flickers continuously and it wraps the mount in grey smoke.
+        const k = 0.7 + 0.6 * rnd();
+        const life = Math.max(0.04, dt * 1.2);
+        this.fire.spawn({ x: mx, y: my, z: mz, life, size0: 4.5 * k, size1: 4.5 * k, c0: [18, 10, 4], minPx: 3.5, windK: 0 });
+        this.fire.spawn({ x: mx + fx * 2, y: my + fz * 2, z: mz - fy * 2, life, size0: 2.5 * k, size1: 2.5 * k, c0: [12, 5, 1.2], windK: 0 });
+        if (rnd() < dt * 30) {
+          this.puff({ x: mx, y: my, z: mz, vx: fx * 8 + sym(2), vy: fz * 8 + 1, vz: -fy * 8 + sym(2), life: 5 + rnd() * 2, size0: 2.5, size1: 20 + rnd() * 8, alpha: 0.32, c0: [0.66, 0.65, 0.63], drag: 0.9, lift: 0.3 });
+        }
       }
       for (const r of c.rounds) {
-        if (!r.tracer || n >= max || this.burst.has(r)) continue;
+        if (this.burst.has(r)) continue;
+        const age = w.t - r.t0;
+        // Tracer compound burns out after about 3 s of flight.
+        const k = Math.max(0, 1 - age / 3.2);
+        if (k <= 0) continue;
+        if (r.tracer || gun35) {
+          // A glowing head keeps the stream visible from far away, where a line is under a pixel wide.
+          this.fire.spawn({ x: r.pos.x, y: r.pos.z, z: -r.pos.y, life: Math.max(0.04, dt * 1.2), size0: gun35 ? 1.6 : 1.3, size1: 1, c0: gun35 ? [9 * k, 5 * k, 1.5 * k] : [11 * k, 4 * k, 1 * k], minPx: gun35 ? 2.6 : 2, windK: 0 });
+        }
+        // Every Gatling round draws a faint streak and every fourth a bright tracer, so the burst reads as a hose.
+        if ((!r.tracer && gun35) || n >= max) continue;
+        const b = r.tracer ? k : 0.3 * k;
         const o = n * 6;
+        const tl = gun35 ? 0.05 : 0.035;
         this.trPos[o] = r.pos.x;
         this.trPos[o + 1] = r.pos.z;
         this.trPos[o + 2] = -r.pos.y;
-        this.trPos[o + 3] = r.pos.x - r.vel.x * 0.035;
-        this.trPos[o + 4] = r.pos.z - r.vel.z * 0.035;
-        this.trPos[o + 5] = -(r.pos.y - r.vel.y * 0.035);
-        // Tracer compound burns out after about 3 s of flight.
-        const k = Math.max(0, 1 - (w.t - r.t0) / 3.2);
-        this.trCol[o] = 9 * k;
-        this.trCol[o + 1] = 3 * k;
-        this.trCol[o + 2] = 0.8 * k;
+        this.trPos[o + 3] = r.pos.x - r.vel.x * tl;
+        this.trPos[o + 4] = r.pos.z - r.vel.z * tl;
+        this.trPos[o + 5] = -(r.pos.y - r.vel.y * tl);
+        this.trCol[o] = 9 * b;
+        this.trCol[o + 1] = 3 * b;
+        this.trCol[o + 2] = 0.8 * b;
         this.trCol[o + 3] = this.trCol[o + 4] = this.trCol[o + 5] = 0;
         n++;
       }

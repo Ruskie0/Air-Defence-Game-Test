@@ -265,6 +265,7 @@ export class Interceptor {
     const tgt = this.home!;
     let pk = this.spec.pk * Math.exp(-((miss / this.spec.lethalR) ** 2));
     if (tgt.kind === 'tbm') pk *= 0.9;
+    pk *= tgt.cmPk;
     const kill = w.rng.chance(pk);
     w.onMissileDetonation(this, tgt, miss, kill);
   }

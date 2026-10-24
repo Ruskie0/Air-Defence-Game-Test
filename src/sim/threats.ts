@@ -1,8 +1,8 @@
 import { V3, add, clone, polar, v3 } from './math';
-import { Airliner, Bomber, Cruise, Drone, ReconDrone, Sead, Soj, Tbm } from './entities';
+import { Airliner, Bomber, Cruise, Drone, ReconDrone, Sead, Soj, Striker, Tbm } from './entities';
 import type { World } from './world';
 
-export type ThreatType = 'drones' | 'decoys' | 'recon' | 'cruise' | 'bomber' | 'sead' | 'soj' | 'tbm' | 'airliner' | 'airliner-dark';
+export type ThreatType = 'drones' | 'decoys' | 'recon' | 'cruise' | 'bomber' | 'strike' | 'sead' | 'soj' | 'tbm' | 'airliner' | 'airliner-dark';
 
 export const THREAT_LABELS: Record<ThreatType, string> = {
   drones: 'Drone swarm (6)',
@@ -10,6 +10,7 @@ export const THREAT_LABELS: Record<ThreatType, string> = {
   recon: 'Recon drone',
   cruise: 'Cruise missiles (4)',
   bomber: 'Strike bomber (4 ALCM)',
+  strike: 'Strike jets, low level (2)',
   sead: 'SEAD pair (ARMs)',
   soj: 'Stand-off jammer',
   tbm: 'Ballistic missiles (2)',
@@ -112,6 +113,17 @@ export function spawnBombers(w: World, n: number, bearing: number, rangeM: numbe
   }
 }
 
+/** Strike fighters: in high, down to treetop height for the last 75 km, pop up and glide-bomb their target. */
+export function spawnStrike(w: World, n: number, bearing: number, rangeM: number, targets?: Target[]): void {
+  const aims = targets ? targetsByName(w, targets) : targetsByName(w, ['Airbase', 'Power plant', 'CRC', 'MR radar']);
+  const first = w.rng.int(0, aims.length - 1);
+  for (let i = 0; i < n; i++) {
+    const start = add(polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 3000));
+    start.z = 8000;
+    w.spawn(new Striker(w.nextName('STK'), start, aims[(first + i) % aims.length]));
+  }
+}
+
 export function spawnSead(w: World, n: number, bearing: number, rangeM: number): void {
   for (let i = 0; i < n; i++) {
     const start = add(polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 4000));
@@ -167,6 +179,8 @@ export function spawnThreat(w: World, type: ThreatType, bearing: number): void {
       return spawnCruise(w, 4, bearing, 120000);
     case 'bomber':
       return spawnBombers(w, 1, bearing, 190000);
+    case 'strike':
+      return spawnStrike(w, 2, bearing, 150000);
     case 'sead':
       return spawnSead(w, 2, bearing, 160000);
     case 'soj':

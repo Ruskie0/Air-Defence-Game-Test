@@ -138,6 +138,7 @@ export class Campaign {
       s.enemy.kindW.decoys ??= 0.8;
       s.upgrades ??= [];
       s.enemy.kindW.recon ??= 1;
+      s.enemy.kindW.strike ??= 1;
       s.objectives ??= pickObjectives(s.plan, s.day, s.seed);
       return new Campaign(s);
     } catch {

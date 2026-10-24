@@ -1,9 +1,9 @@
 import { Rng } from '../sim/rng';
 import type { Raid } from '../sim/scenario';
 import type { Sighting } from '../sim/entities';
-import { type Target, spawnBombers, spawnCruise, spawnDarkAirliner, spawnDecoyDrones, spawnDrones, spawnRecon, spawnSead, spawnSoj, spawnTbm } from '../sim/threats';
+import { type Target, spawnBombers, spawnCruise, spawnDarkAirliner, spawnDecoyDrones, spawnDrones, spawnRecon, spawnSead, spawnSoj, spawnStrike, spawnTbm } from '../sim/threats';
 
-export type PkgKind = 'drones' | 'decoys' | 'recon' | 'cruise' | 'sead' | 'soj' | 'bomber' | 'tbm' | 'dark';
+export type PkgKind = 'drones' | 'decoys' | 'recon' | 'cruise' | 'strike' | 'sead' | 'soj' | 'bomber' | 'tbm' | 'dark';
 
 /** One enemy package in a day's raid plan. */
 export interface PlannedPkg {
@@ -66,6 +66,12 @@ export const PKG: Record<PkgKind, PkgDef> = {
     spawn: (w, b, n, aims) => spawnCruise(w, n, b, 130000, aims),
     describe: (n) => `${n} terrain-following cruise missiles`,
   },
+  strike: {
+    name: 'Strike jets', cost: (n) => 3 + n * 4, minDay: 4, sectors: [0, 1, 7, 2, 6, 3, 5],
+    size: (d, r) => Math.min(4, 2 + (d >= 7 ? 1 : 0) + (d >= 9 ? r.int(0, 1) : 0)),
+    spawn: (w, b, n, aims) => spawnStrike(w, n, b, 150000, aims),
+    describe: (n) => `${n} strike fighters that will come in at treetop height, pop up and glide-bomb a site. Low-flying jets with no IFF are declared hostile inside 45 km`,
+  },
   sead: {
     name: 'SEAD pair', cost: () => 10, minDay: 3, sectors: [7, 0, 1, 6, 2],
     size: () => 2,
@@ -106,7 +112,7 @@ export function newEnemy(rot = 0): EnemyModel {
   const rel = [1.3, 1, 1, 0.8, 0.8, 0.7, 0.9, 1];
   const k = sectorOf(rot);
   return {
-    kindW: { drones: 1.4, decoys: 0.8, recon: 1, cruise: 1, sead: 1, soj: 0.8, bomber: 0.9, tbm: 1, dark: 0.5 },
+    kindW: { drones: 1.4, decoys: 0.8, recon: 1, cruise: 1, strike: 1, sead: 1, soj: 0.8, bomber: 0.9, tbm: 1, dark: 0.5 },
     axisW: rel.map((_x, a) => rel[(a - k + 8) % 8]),
   };
 }
@@ -144,7 +150,7 @@ export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: n
   const known = [...(enemy.known ?? [])].sort((a, b) => Number(/radar|SAM/.test(b.name)) - Number(/radar|SAM/.test(a.name)));
   if (known.length) {
     for (const p of out) {
-      if ((p.kind === 'cruise' || p.kind === 'tbm' || p.kind === 'drones') && rng.chance(0.65)) p.aims = known.slice(0, Math.max(1, p.size));
+      if ((p.kind === 'cruise' || p.kind === 'tbm' || p.kind === 'drones' || p.kind === 'strike') && rng.chance(0.65)) p.aims = known.slice(0, Math.max(1, p.size));
     }
   }
   if (day >= PKG.dark.minDay && rng.chance(0.45)) {

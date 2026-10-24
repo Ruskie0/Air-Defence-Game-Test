@@ -30,6 +30,8 @@ const CASES: Case[] = [
   { name: 'cruise', threat: 'cruise', kinds: ['cruise'] },
   { name: 'alcm', threat: 'bomber', kinds: ['cruise'] },
   { name: 'tbm', threat: 'tbm', kinds: ['tbm'] },
+  { name: 'jet', threat: 'strike', kinds: ['strike'] },
+  { name: 'bomb', threat: 'strike', kinds: ['bomb'] },
 ];
 
 const terrain = mapArg && mapArg !== 'classic' ? new Terrain(seed0, mapArg) : new Terrain(20261023);
@@ -69,7 +71,7 @@ for (const c of CASES) {
       while (w.t - t1 < 900) {
         w.step();
         for (const e of w.entities) if (c.kinds.includes(e.kind) && e.side === 'red') seen.set(e.id, e);
-        if (w.t - t1 > 30 && w.pendingCount === 0 && !w.entities.some((e) => e.alive && e.side === 'red' && (e.munition || e.kind === 'sead' || e.kind === 'bomber'))) break;
+        if (w.t - t1 > 30 && w.pendingCount === 0 && !w.entities.some((e) => e.alive && e.side === 'red' && (e.munition || e.kind === 'sead' || e.kind === 'bomber' || e.kind === 'strike'))) break;
       }
       for (const e of seen.values()) {
         tally.n++;

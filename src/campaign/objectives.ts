@@ -4,7 +4,7 @@ import type { World } from '../sim/world';
 import type { PkgKind, PlannedPkg } from './raidgen';
 
 /** Bonus objectives: optional goals for a campaign day that pay out on top of the day's income. */
-export type ObjectiveId = 'clean' | 'lights' | 'jammer' | 'bombers' | 'recon' | 'thrift' | 'intact';
+export type ObjectiveId = 'clean' | 'lights' | 'jammer' | 'bombers' | 'recon' | 'strikers' | 'thrift' | 'intact';
 
 export interface DayObjective {
   id: ObjectiveId;
@@ -20,6 +20,7 @@ const DEFS: Record<ObjectiveId, { name: string; desc: (o: DayObjective) => strin
   lights: { name: 'Keep the lights on', desc: () => 'The power plant takes no damage.' },
   jammer: { name: 'Splash the jammer', desc: () => 'Shoot down the stand-off jammer.', needs: 'soj' },
   bombers: { name: 'Bomber hunt', desc: () => 'Shoot down every bomber.', needs: 'bomber' },
+  strikers: { name: 'Jet hunt', desc: () => 'Shoot down every strike fighter.', needs: 'strike' },
   recon: { name: 'Blind them', desc: () => 'Shoot down every enemy recon drone.', needs: 'recon' },
   thrift: { name: 'Missile discipline', desc: (o) => `Fire no more than ${o.limit} missiles.` },
   intact: { name: 'No losses', desc: () => 'Lose no air defence equipment.' },
@@ -33,7 +34,7 @@ export function pickObjectives(plan: PlannedPkg[], day: number, seed: number): D
   const rng = new Rng(seed * 31337 + day * 7);
   const kinds = new Set(plan.map((p) => p.kind));
   // Real threats in the plan, for the missile budget: decoys count for nothing.
-  const threats = plan.filter((p) => p.kind !== 'decoys' && p.kind !== 'dark').reduce((n, p) => n + (p.kind === 'bomber' ? 4 * p.size : p.kind === 'sead' ? 4 : p.size), 0);
+  const threats = plan.filter((p) => p.kind !== 'decoys' && p.kind !== 'dark').reduce((n, p) => n + (p.kind === 'bomber' ? 4 * p.size : p.kind === 'sead' ? 4 : p.kind === 'strike' ? 3 * p.size : p.size), 0);
   const pool: DayObjective[] = [
     { id: 'clean', rewardM: 15 + 2 * day },
     { id: 'lights', rewardM: 10 + day },
@@ -42,6 +43,7 @@ export function pickObjectives(plan: PlannedPkg[], day: number, seed: number): D
   ];
   if (kinds.has('soj')) pool.push({ id: 'jammer', rewardM: 25 }, { id: 'jammer', rewardM: 25 });
   if (kinds.has('bomber')) pool.push({ id: 'bombers', rewardM: 30 }, { id: 'bombers', rewardM: 30 });
+  if (kinds.has('strike')) pool.push({ id: 'strikers', rewardM: 25 }, { id: 'strikers', rewardM: 25 });
   if (kinds.has('recon')) pool.push({ id: 'recon', rewardM: 20 }, { id: 'recon', rewardM: 20 });
   const out: DayObjective[] = [];
   while (out.length < 2 && pool.length) {
@@ -76,6 +78,8 @@ export function objectiveStatus(o: DayObjective, w: World, final = false): Objec
       return allKilled('soj');
     case 'bombers':
       return allKilled('bomber');
+    case 'strikers':
+      return allKilled('strike');
     case 'recon':
       return allKilled('recon');
   }

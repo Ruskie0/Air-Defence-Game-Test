@@ -19,7 +19,7 @@ import {
 import type { World } from './world';
 
 export type Side = 'blue' | 'red' | 'neutral';
-export type Kind = 'drone' | 'cruise' | 'bomber' | 'sead' | 'soj' | 'tbm' | 'arm' | 'airliner' | 'fighter';
+export type Kind = 'drone' | 'cruise' | 'bomber' | 'strike' | 'bomb' | 'sead' | 'soj' | 'tbm' | 'arm' | 'airliner' | 'fighter';
 
 export interface Warhead {
   lethalR: number;
@@ -84,6 +84,8 @@ export abstract class Entity {
   decoy = false;
   /** An enemy reconnaissance drone (it photographs our positions). */
   recon = false;
+  /** Countermeasures (chaff, flares, jamming pod): multiplies the kill chance of a missile that reaches it. */
+  cmPk = 1;
   warhead: Warhead | null = null;
   target: V3 | null = null;
   targetName = '';
@@ -412,6 +414,106 @@ export class Bomber extends Air {
       if (Math.hypot(this.pos.x, this.pos.y) > 210000) this.alive = false;
     }
     this.integrate(w, dt);
+  }
+}
+
+/**
+ * Strike fighter: comes in high, drops to treetop height about 95 km out, pops up near the target to release
+ * two GNSS-guided glide bombs, then runs for home low. Carries chaff, flares and a jamming pod (`cmPk`).
+ */
+export class Striker extends Air {
+  readonly kind = 'strike' as const;
+  readonly side = 'red' as const;
+  bombs = 2;
+  phase: 'transit' | 'low' | 'popup' | 'egress' = 'transit';
+  private readonly home: V3;
+  readonly aim: { pos: V3; name: string };
+
+  constructor(name: string, pos: V3, aim: { pos: V3; name: string }) {
+    super(name, pos, bearingDeg(pos, aim.pos), 250);
+    this.home = clone(pos);
+    this.aim = aim;
+    this.rcs = 3;
+    this.hitRadius = 8;
+    this.cmPk = 0.7;
+    this.cmdAlt = 8000;
+    this.turnRate = 5;
+    this.climb = 90;
+    this.accel = 12;
+  }
+
+  update(w: World, dt: number): void {
+    const tgt = this.aim.pos;
+    const d = hdist(this.pos, tgt);
+    switch (this.phase) {
+      case 'transit':
+        this.steer(tgt.x, tgt.y, dt);
+        if (d < 95000) {
+          this.phase = 'low';
+          this.tfAgl = 90;
+          this.cmdSpd = 280;
+          this.climb = 160;
+        }
+        break;
+      case 'low':
+        this.steer(tgt.x, tgt.y, dt);
+        if (d < 15000) {
+          this.phase = 'popup';
+          this.tfAgl = null;
+          this.cmdAlt = w.terrain.groundAt(this.pos.x, this.pos.y) + 3000;
+        }
+        break;
+      case 'popup':
+        this.steer(tgt.x, tgt.y, dt);
+        if (d < 10500) {
+          for (let i = 0; i < this.bombs; i++) {
+            const p = add(tgt, v3(w.rng.gauss() * 30, w.rng.gauss() * 30, 0));
+            w.launchBomb(this, p, this.aim.name, i * 0.6);
+          }
+          this.bombs = 0;
+          this.phase = 'egress';
+          this.tfAgl = 90;
+          this.cmdSpd = 300;
+          w.log(`${this.name} bombs away, egressing low`, 'info');
+        }
+        break;
+      case 'egress':
+        this.steer(this.home.x, this.home.y, dt);
+        if (Math.hypot(this.pos.x, this.pos.y) > 150000) w.retire(this);
+        break;
+    }
+    this.integrate(w, dt);
+  }
+}
+
+/** Glide bomb: unpowered, GNSS-guided, glides from its release point onto where it believes the target is. */
+export class GlideBomb extends Entity {
+  readonly kind = 'bomb' as const;
+  readonly side = 'red' as const;
+  private readonly t0: number;
+
+  constructor(name: string, pos: V3, vel: V3, target: V3, targetName: string, t0: number) {
+    super(name, pos);
+    this.vel = clone(vel);
+    this.target = clone(target);
+    this.targetName = targetName;
+    this.t0 = t0;
+    this.rcs = 0.05;
+    this.hitRadius = 1;
+    this.munition = true;
+    this.warhead = { lethalR: 28, dmg: 45 };
+    this.gnssDep = 0.6;
+  }
+
+  update(w: World, dt: number): void {
+    const aim = sub(this.target!, this.navErr);
+    // Glide at a steady 220 m/s along a line that steepens as it closes, with a little lift-limited turn rate.
+    const want = scale(norm(sub(aim, this.pos)), 220);
+    const k = Math.min(1, dt * 1.5);
+    this.vel = v3(this.vel.x + (want.x - this.vel.x) * k, this.vel.y + (want.y - this.vel.y) * k, this.vel.z + (want.z - this.vel.z) * k);
+    this.pos = addScaled(this.pos, this.vel, dt);
+    const gnd = w.terrain.groundAt(this.pos.x, this.pos.y);
+    if (this.pos.z <= gnd + 2 || dist(this.pos, aim) < 8 || w.t - this.t0 > 120) w.detonate(this);
   }
 }
 

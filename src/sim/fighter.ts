@@ -127,7 +127,7 @@ export class Fighter extends Air {
           this.toStation(w);
           break;
         }
-        if (cleared && !this.aam && this.missiles > 0 && tr.confirmed && R < this.aamRange(p, v) && R > AAM_MSL.minRangeM && off < 45) {
+        if (cleared && !this.aam && this.missiles > 0 && tr.confirmed && w.t - tr.t < 3 && w.t > tr.kaUntil && R < this.aamRange(p, v) && R > AAM_MSL.minRangeM && off < 45) {
           this.missiles--;
           this.aam = new Interceptor(w, AAM_MSL, null, this.name, this.pos, p, clone(this.vel), tr.id);
           w.missiles.push(this.aam);

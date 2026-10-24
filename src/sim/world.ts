@@ -3,7 +3,7 @@ import { Ciws, GUNS } from './ciws';
 import { MoveOrder, orderMove, stepMoves } from './mobility';
 import { SupportCall, stepSupport } from './support';
 import { Modifiers, modifiers } from '../campaign/upgrades';
-import { Arm, Cruise, Emitter, Entity, Fate, ReconDrone, Sighting } from './entities';
+import { Arm, Cruise, Emitter, Entity, Fate, GlideBomb, ReconDrone, Sighting } from './entities';
 import { Fighter } from './fighter';
 import { V3, add, bearingDeg, clone, dist, norm, scale, sub, v3 } from './math';
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, UnitType, rankOf } from './catalog';
@@ -461,6 +461,15 @@ export class World {
     cm.hdg = (from as unknown as { hdg: number }).hdg ?? 180;
     cm.pkg = from.pkg;
     this.spawn(cm);
+    this.tracker.markHostileAct(this, from.pos);
+  }
+
+  /** A strike fighter releases a glide bomb at `target` (after `delay` s, for a stick of bombs). */
+  launchBomb(from: Entity, target: V3, name: string, delay = 0): void {
+    const b = new GlideBomb(this.nextName('GB'), from.pos, from.vel, target, name, this.t + delay);
+    b.pkg = from.pkg;
+    if (delay > 0) this.spawnLater(b, delay);
+    else this.spawn(b);
     this.tracker.markHostileAct(this, from.pos);
   }
 

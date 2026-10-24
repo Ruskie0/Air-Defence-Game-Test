@@ -271,6 +271,8 @@ export class Tracker {
     // Nothing with wings flies below ~75 m/s: slower than that is a drone, low (attack) or high (recon).
     else if (spd < 75 && hi < 140) cls = 'UAV';
     else if (agl < 350 && spd > 150 && tr.velSigma < 80 && tr.rcsDb < -6) cls = 'CM';
+    // A small object descending steadily at speed is a guided munition (glide bomb, cruise missile in its dive).
+    else if (spd > 150 && tr.velSigma < 80 && tr.rcsDb < -6 && tr.vel.z < -25) cls = 'CM';
     else if (tr.iffM3 >= 2 && alt > 6000 && lo > 150 && hi < 320) cls = 'CIV';
     else if (lo > 75 && tr.velSigma < 60) cls = 'FW';
     else cls = tr.cls;
@@ -287,6 +289,12 @@ export class Tracker {
     else if (!tr.jam && tr.squawk > 0.6 && tr.hits > 8 && (cls === 'CIV' || cls === 'FW' || cls === 'UNK')) {
       id = 'NEU';
       tr.hostileAct = false;
+    }
+    else if (cls === 'FW' && !tr.hostileAct && tr.iffNone >= 3 && agl < 400 && lo > 200 && inbound(tr, 45000)) {
+      // Criteria-based ID: a fast jet with no IFF running in at low level towards our sites is treated as hostile.
+      tr.hostileAct = true;
+      id = 'HOS';
+      w.log(`${tr.label} low-level fast mover inbound, no IFF: declared hostile`, 'alert');
     }
     else if (tr.jam || tr.hostileAct || cls === 'TBM' || cls === 'MSL' || cls === 'CM' || cls === 'UAV') id = 'HOS';
     else if (cls === 'CIV') id = 'NEU';
@@ -417,4 +425,12 @@ function intersect(a: Strobe, b: Strobe): { p: V3; s: number } | null {
   // Position error of a two-bearing fix: each bearing error displaces the fix along the other line.
   const s = Math.hypot(ta * a.sigmaDeg * DEG, tb * b.sigmaDeg * DEG) / sinAng;
   return { p, s };
+}
+
+/** Within `rangeM` of the airbase and heading roughly towards it. */
+function inbound(tr: Track, rangeM: number): boolean {
+  const R = Math.hypot(tr.pos.x, tr.pos.y);
+  if (R > rangeM) return false;
+  const vh = Math.hypot(tr.vel.x, tr.vel.y);
+  return vh > 1 && -(tr.pos.x * tr.vel.x + tr.pos.y * tr.vel.y) / (R * vh) > 0.7;
 }

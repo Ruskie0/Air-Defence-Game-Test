@@ -51,7 +51,7 @@ class Loop {
   }
 }
 
-const JET: Partial<Record<Kind, number>> = { fighter: 2500, sead: 2500, bomber: 4000, soj: 3500, airliner: 3500 };
+const JET: Partial<Record<Kind, number>> = { fighter: 2500, strike: 2500, sead: 2500, bomber: 4000, soj: 3500, airliner: 3500 };
 
 export class SoundEngine {
   muted = false;

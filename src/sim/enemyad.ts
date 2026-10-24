@@ -143,7 +143,8 @@ export class RedSam extends Entity {
     this.tgt = tgt;
     this.t0 = t0;
     this.vel = scale(norm(sub(tgt.pos, pos)), 300);
-    this.rcs = 0.1;
+    // Not for our radars to track: it is over in seconds and nothing of ours shoots at it.
+    this.rcs = 0;
     this.hitRadius = 1;
     this.munition = true;
   }

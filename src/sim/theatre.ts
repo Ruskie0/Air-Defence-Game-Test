@@ -63,11 +63,11 @@ interface BaseDef {
 }
 
 export const BASE_DEFS: Record<BaseKind, BaseDef> = {
-  airfield: { name: 'Forward airfield', stock: { strike: 8, sead: 4, recon: 3 }, daily: { strike: 1, sead: 0.6, recon: 1 }, known: true },
-  farp: { name: 'Helicopter forward arming point', stock: { helo: 10 }, daily: { helo: 1.6 }, known: false },
-  drones: { name: 'Drone launch team', stock: { drone: 22 }, daily: { drone: 7 }, known: false },
-  tbm: { name: 'Ballistic missile launch area', stock: { tbm: 8 }, daily: { tbm: 1.5 }, known: false },
-  glcm: { name: 'Cruise missile battery', stock: { cruise: 24 }, daily: { cruise: 6 }, known: false },
+  airfield: { name: 'Forward airfield', stock: { strike: 8, sead: 4, recon: 3 }, daily: { strike: 1.5, sead: 0.8, recon: 1 }, known: true },
+  farp: { name: 'Helicopter forward arming point', stock: { helo: 10 }, daily: { helo: 2.5 }, known: false },
+  drones: { name: 'Drone launch team', stock: { drone: 22 }, daily: { drone: 10 }, known: false },
+  tbm: { name: 'Ballistic missile launch area', stock: { tbm: 8 }, daily: { tbm: 2 }, known: false },
+  glcm: { name: 'Cruise missile battery', stock: { cruise: 24 }, daily: { cruise: 9 }, known: false },
   sam: { name: 'SAM site', stock: { sam: 6 }, daily: { sam: 2 }, known: true },
   rear: { name: 'Rear air base (beyond the map)', stock: { bomber: 3, soj: 2 }, daily: { bomber: 0.4, soj: 0.3 }, known: true },
 };

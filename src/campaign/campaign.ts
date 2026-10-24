@@ -25,7 +25,7 @@ import { DeployZone, inZones } from '../sim/deploy';
 
 export const CAMPAIGN_DAYS = 10;
 /** Scale on the enemy's threat points for a whole day, shared between its operations (balance). */
-export const DAY_THREAT = 2;
+export const DAY_THREAT = 1.9;
 /** What the enemy remembers of a position it photographed or located is good for this long (minutes). */
 const SIGHTING_MIN = 18 * 60;
 export { CAP_RADIUS, DEPLOY_RADIUS };
@@ -304,10 +304,11 @@ export class Campaign {
     for (const [name, left] of Object.entries(reps)) {
       const a = this.s.deployment.assets.find((x) => x.name === name);
       if (!a) continue;
-      const n = Math.min(left, pts, 100 - a.hp);
-      a.hp = Math.min(100, Math.round((a.hp + n) * 10) / 10);
+      // Whole points only, so health stays a whole number.
+      const n = Math.floor(Math.min(left, pts, 100 - a.hp));
+      a.hp += n;
       reps[name] = left - n;
-      if (reps[name] <= 0.05 || a.hp >= 100) {
+      if (reps[name] < 1 || a.hp >= 100) {
         delete reps[name];
         out.push(`Repairs to the ${name.toLowerCase()} are finished.`);
       }
@@ -604,10 +605,14 @@ export class Campaign {
     const day = this.s.day;
     const rng = new Rng(this.s.seed * 97 + day * 13 + (this.s.pulseIdx ?? 0) * 7);
     const at = assaultSpot(this.terrain, f, f.offensive);
-    const kinds: [PkgKind, number][] = [['drones', Math.min(12, 4 + Math.floor(day / 2))]];
-    if (day >= 2) kinds.push(['cruise', Math.min(5, 2 + Math.floor(day / 4))]);
-    if (day >= 3) kinds.push(['helo', day >= 6 ? 3 : 2]);
-    if (day >= 4) kinds.push(['strike', day >= 8 ? 3 : 2]);
+    // The enemy fights hardest for its forward airfield: everything it has goes at that assault force.
+    const field = f.towns[f.offensive].airfield;
+    const big = (n: number): number => (field ? Math.ceil(n * 1.5) : n);
+    const kinds: [PkgKind, number][] = [['drones', big(Math.min(12, 4 + Math.floor(day / 2)))]];
+    if (day >= 2) kinds.push(['cruise', big(Math.min(5, 2 + Math.floor(day / 4)))]);
+    if (day >= 3 || field) kinds.push(['helo', big(day >= 6 ? 3 : 2)]);
+    if (day >= 4 || field) kinds.push(['strike', big(day >= 8 ? 3 : 2)]);
+    if (field) kinds.push(['sead', 2], ['drones', big(4 + Math.floor(day / 2))]);
     const counters: PlannedPkg[] = [];
     kinds.forEach(([kind, size], i) => {
       counters.push({

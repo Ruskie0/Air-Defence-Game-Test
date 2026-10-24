@@ -44,7 +44,7 @@ function shop(): string[] {
   }
   const saving = c.unlocked('LR') && count('LR') < 1;
   // One deep strike a day at the biggest threat in today's plan, when there is money to spare.
-  if (!saving && c.s.money > 140 && !process.argv.includes('--no-strikes')) {
+  if (!saving && c.s.money > 70 && !process.argv.includes('--no-strikes')) {
     const has = (k: string): number => c.s.plan.filter((p) => p.kind === k).reduce((n, p) => n + p.size, 0);
     const order: [DeepStrikeId, number][] = [['tbm', has('tbm') * 3], ['airfield', has('strike') + has('sead') + has('bomber') * 3], ['drones', has('drones') / 3]];
     const best = order.filter(([id, v]) => v > 2 && !deepStrikeError(c, id)).sort((a, b) => b[1] - a[1])[0];

@@ -30,6 +30,8 @@ export interface PlannedPkg {
   from?: { x: number; y: number };
   /** Part of the enemy's counter-attack on today's offensive. */
   counter?: boolean;
+  /** Air support for the enemy's own ground offensive on one of our towns. */
+  push?: boolean;
 }
 
 /** What the enemy has learned: which kinds of attack and which approach sectors have worked. */

@@ -1,4 +1,5 @@
 import { EnemyBase, makeTheatre } from './theatre';
+import { EnemyArmour } from './enemyarmour';
 import { DT } from './constants';
 import { Ciws, GUNS } from './ciws';
 import { MoveOrder, orderMove, scoot, stepMoves } from './mobility';
@@ -78,6 +79,8 @@ export interface WorldOptions {
   towns?: { name: string; x: number; y: number; hp: number }[];
   /** Today's assault force: its start line, the town it goes for, and where its column sets off from (it starts on its start line when omitted). */
   assault?: { x: number; y: number; target: string; from?: { x: number; y: number } };
+  /** The enemy's ground offensive on one of our towns, if one is on: the town, and the enemy town it comes from. */
+  enemyAssault?: { target: string; from: { x: number; y: number }; to: { x: number; y: number } };
   /** Where ground units may stand (the sandbox's 60 km circle when omitted). */
   zones?: DeployZone[];
   /** The enemy's installations, which every enemy weapon launches from (a fresh default theatre when omitted). */
@@ -184,6 +187,8 @@ export class World {
   readonly radiating = new Map<string, number>();
   /** Package tag given to everything spawned while it is set. */
   spawnTag = -1;
+  /** The enemy's armoured column, when it is attacking one of our towns in this raid. */
+  enemyArmour: EnemyArmour | null = null;
   /** Everything that died or left in the last 20 s, newest last (for wrecks and kill feeds). */
   deaths: Entity[] = [];
   /** Enemy aircraft shot down this battle, keyed "package|kind" (the campaign takes them off their bases' strength). */
@@ -249,6 +254,7 @@ export class World {
       this.startHp.set(s.name, s.hp);
     }
     if (this.column) this.spawn(this.column);
+    if (o.enemyAssault) this.enemyArmour = new EnemyArmour(o.enemyAssault.target, o.enemyAssault.from, o.enemyAssault.to);
     this.redSupport.launch(this, o.counterBattery ?? 0);
     this.scenario = new Scenario(o.raids, this.terrain.layout.rot);
     if (o.civil ?? true) this.scenario.start(this);
@@ -893,6 +899,7 @@ export class World {
     for (const u of this.units) u.update(this);
     this.exposure.step(this);
     this.enemyAd.step(this);
+    this.enemyArmour?.step(this, dt);
     if (this.t >= this.nextTewa) {
       this.nextTewa = this.t + 1;
       autoEngage(this);

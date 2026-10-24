@@ -12,6 +12,7 @@ import type { Ciws } from '../sim/ciws';
 import { CATALOG, RANKS } from '../sim/catalog';
 import { DayObjective, objectiveDesc, objectiveName, objectiveStatus } from '../campaign/objectives';
 import { hhmm } from '../campaign/clock';
+import { ARMOUR } from '../sim/enemyarmour';
 import { MOBILITY, moveError, moveStatus } from '../sim/mobility';
 import { Exposure } from '../sim/exposure';
 import { ENEMY_AD } from '../sim/enemyad';
@@ -620,6 +621,17 @@ export class Hud {
       rows.push(`<h3>Assault${col ? ` on ${esc(col.objective)}` : ''}</h3><div class="sys assault"><div class="sys-h"><b>Assault force</b> ${st} <button data-act="flyto" data-x="${Math.round(aSite.pos.x)}" data-y="${Math.round(aSite.pos.y)}" title="Fly the camera to the assault force">Fly to</button></div>
         <div class="sys-b">Road <span class="heat" style="width:80px"><i style="width:${pct}%;background:#78ffaa"></i></span> ${pct}%${eta}</div>
         <div class="sys-b">Health <span class="heat" style="width:80px"><i style="width:${hp}%;background:${hp >= 40 ? '#ffd84d' : '#ff4d4d'}"></i></span> ${hp}% <span class="dim">(must end the raid above 40%)</span></div></div>`);
+    }
+    const arm = w.enemyArmour;
+    if (arm) {
+      const town = w.site(arm.target);
+      const hp = town?.alive ? Math.round(town.hp) : 0;
+      const st = arm.outcome === 'taken' ? '<span class="st dead">TOWN OVERRUN</span>'
+        : arm.outcome === 'repulsed' ? '<span class="st ok">BEATEN OFF</span>'
+        : arm.state === 'assaulting' ? '<span class="st dead blink">ASSAULTING</span>'
+        : arm.state === 'moving' ? `<span class="st jam">${(arm.distM / 1000).toFixed(1)} KM OUT</span>` : '<span class="st">MASSING</span>';
+      rows.push(`<h3>Enemy attack on ${esc(arm.target)}</h3><div class="sys located"><div class="sys-h"><b>Enemy armour</b> ${st} <button data-act="flyto" data-x="${Math.round(arm.pos.x)}" data-y="${Math.round(arm.pos.y)}" title="Fly the camera to the enemy column">Fly to</button></div>
+        <div class="sys-b">${esc(arm.target)} <span class="heat" style="width:80px"><i style="width:${hp}%;background:${hp >= ARMOUR.takeHp ? '#ffd84d' : '#ff4d4d'}"></i></span> ${hp}% <span class="dim">(falls if below ${ARMOUR.takeHp}% while it is assaulted)</span></div></div>`);
     }
     if (this.campaign?.objectives.length) {
       rows.push('<h3>Objectives</h3>');

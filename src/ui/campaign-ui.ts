@@ -1,6 +1,7 @@
 import { loadBest } from '../campaign/laststand';
 import { MEDALS, MedalId, earnedMedals } from '../campaign/medals';
-import { CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty } from '../campaign/campaign';
+import { ARMOUR_STRIKE, CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty } from '../campaign/campaign';
+import { ARMOUR } from '../sim/enemyarmour';
 import { DELIVERY_H, PULSES, REPAIR_PER_H, hhmm, stamp } from '../campaign/clock';
 import type { View3D } from '../render/view3d';
 import { CATALOG, DeployedUnit, RANKS, UnitType, rankOf } from '../sim/catalog';
@@ -469,7 +470,23 @@ export class CampaignUi {
     return `<h3>The front</h3>
       <p class="dim">Towns we hold pay every day, let units deploy round them, and each one past the first cuts the enemy's raids by ${Math.round(TOWN_THREAT_CUT * 100)}%. Raids also go for our front town: one knocked flat falls.</p>
       <ul class="intel road">${road}</ul>
+      ${this.pushPanel()}
       ${action}`;
+  }
+
+  /** The enemy's own attack on one of our towns: when it is coming, and the chance to break it up first. */
+  private pushPanel(): string {
+    const c = this.c!;
+    const p = c.s.enemyPush;
+    const f = c.s.front;
+    if (!p || !f) return '';
+    const town = f.towns[p.town]?.name ?? '';
+    if (p.broken) return `<p class="good">The enemy attack on ${esc(town)} was broken up by our strike.</p>`;
+    const now = c.pushNow;
+    const why = c.armourStrikeError();
+    return `<div class="event"><h3>Enemy armour massing at ${esc(f.towns[p.from]?.name ?? '')}</h3>
+      <p>${now ? `It attacks ${esc(town)} with the next raid` : `Intel expects it to attack ${esc(town)} in a later raid today`}, behind drones and missiles aimed at the town. If the raids knock the town below ${ARMOUR.takeHp}% while the armour assaults it, the town falls. Cover it with air defence, or hit the armour before it moves.</p>
+      <div class="row"><button data-cui="armourstrike" ${why ? 'disabled' : ''} title="${esc(why ?? `${Math.round(ARMOUR_STRIKE.chance * 100)}% chance to break the attack up before it starts`)}">Strike the armour ${money(ARMOUR_STRIKE.costM)} · ${Math.round(ARMOUR_STRIKE.chance * 100)}%</button>${p.struck ? ' <span class="dim">Our strike missed.</span>' : ''}</div></div>`;
   }
 
   private showFocus(): void {
@@ -737,6 +754,12 @@ export class CampaignUi {
         if (!c.launchOffensive()) return;
         this.note = `Offensive on ${c.s.front!.towns[c.s.front!.offensive!].name} ordered. Move units up to cover the assault force (yellow on the scope).`;
         break;
+      case 'armourstrike': {
+        const r = c.strikeArmour();
+        if (!r) return;
+        this.note = r;
+        break;
+      }
       case 'offensive-cancel':
         c.cancelOffensive();
         this.note = 'Offensive called off.';

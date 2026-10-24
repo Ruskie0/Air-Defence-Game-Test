@@ -1,5 +1,4 @@
 import { Cruise, Drone, Tbm } from './entities';
-import { ENEMY_AD } from './enemyad';
 import { add, polar, v3 } from './math';
 import type { Fielded, World } from './world';
 
@@ -44,6 +43,8 @@ export class Exposure {
   /** Campaign day (or equivalent) that sets the strike's weapons; 0 turns counter-battery fire off. */
   level: number;
   strikesLeft: number;
+  /** Shortest gap between two strikes (s): Last Stand shortens it wave by wave. */
+  cooldownS = EXPOSURE.cooldownS;
   readonly located: Located[] = [];
   private nextAt = 0;
   private nextStep = 0;
@@ -82,11 +83,8 @@ export class Exposure {
       const before = this.fired.get(f) ?? 0;
       if (n > before) heat += (n - before) * (EXPOSURE.launch[type] ?? 0) * w.mods.exposureMult;
       this.fired.set(f, n);
-      // An enemy radar watching the spot pins launches and emissions down faster.
-      const seen = w.enemyAd?.watched(w, f.sites[0].pos) ? ENEMY_AD.exposureMult : 1;
-      if (n > before) heat += (n - before) * (EXPOSURE.launch[type] ?? 0) * w.mods.exposureMult * (seen - 1);
       if (f.move) heat = 0;
-      else if (f.radar?.isEmitting()) heat += (EXPOSURE.radiate[type] ?? 0) * dt * w.mods.exposureMult * seen;
+      else if (f.radar?.isEmitting()) heat += (EXPOSURE.radiate[type] ?? 0) * dt * w.mods.exposureMult;
       else heat -= EXPOSURE.decay * dt;
       f.heat = Math.min(EXPOSURE.threshold, Math.max(0, heat));
       if (f.heat >= EXPOSURE.threshold && this.canStrike(w, f)) this.locate(w, f);
@@ -111,7 +109,7 @@ export class Exposure {
 
   private locate(w: World, f: Fielded): void {
     this.strikesLeft--;
-    this.nextAt = w.t + EXPOSURE.cooldownS;
+    this.nextAt = w.t + this.cooldownS;
     f.heat = 0;
     const pos = f.sites[0].pos;
     const name = w.unitName(f);

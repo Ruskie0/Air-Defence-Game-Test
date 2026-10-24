@@ -6,7 +6,6 @@ import { CATALOG, UnitType } from '../src/sim/catalog';
 import { DeepStrikeId, deepStrike, deepStrikeError } from '../src/campaign/deepstrike';
 import { assaultSpot } from '../src/campaign/front';
 import { nearestFree } from '../src/sim/deploy';
-import { scrambleQra } from '../src/sim/support';
 
 const seed = Number(process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 1);
 const verbose = process.argv.includes('--verbose');
@@ -99,27 +98,12 @@ while (!c.s.over) {
   const w = c.makeWorld();
   const spent = c.s.money;
   if (process.argv.includes('--no-cb')) w.exposure.strikesLeft = 0;
-  if (process.argv.includes('--no-enemy-ad')) (w as { enemyAd: unknown }).enemyAd = null;
   for (const j of w.gnss) j.on = true;
   const last = Math.max(0, ...w.scenario.raids.map((r) => r.t));
   const scoot = !process.argv.includes('--no-scoot');
   let cb = 0;
-  // Sweep the enemy-held towns' air defences first thing: one fighter per town, nearest first.
-  const sweep = !process.argv.includes('--no-sweep');
-  // With no fighters of our own, scramble the alert pair to clear the way for an offensive.
-  const sent = new Set<object>();
   while (!w.scenario.done && w.t < last + 1200) {
     w.step();
-    if (sweep && w.enemyAd && w.t > 20 && w.t % 5 < 1 / 60) {
-      const assault = w.sites.some((x) => x.role === 'assault');
-      if (assault && !w.fighters.length && !w.qraUsed) scrambleQra(w);
-      const towns = w.enemyAd.towns();
-      for (const fg of w.fighters) {
-        if (sent.has(fg) || !towns.length || fg.sweepError(w, towns[0])) continue;
-        sent.add(fg);
-        fg.sweep(w, towns.shift()!);
-      }
-    }
     // Shoot and scoot: move a located battery out from under the strike once its missiles in the air are
     // done (they need its radar), with time left to get clear. The LR battery takes too long to pack: it stays
     // and fights for itself.
@@ -141,7 +125,6 @@ while (!c.s.over) {
   console.log(
     `\nDay ${day}  budget left after shopping $${Math.round(spent)}M  bought: ${bought.join(', ') || 'nothing'}` +
       `\n  raid: ${plan}` +
-      (w.enemyAd ? `\n  enemy AD: ${w.enemyAd.sites.map((a) => `${a.site.name}${a.site.alive ? '' : ' (destroyed)'}`).join(', ')}; ${w.logEntries.filter((e) => e.msg.includes('enemy SAM')).length} SAM events` : '') +
       `\n  counter-battery: ${w.exposure.located.map((l) => `${l.unit}@${Math.round(l.t)}s${l.moved ? ' (moved)' : ''}`).join(', ') || 'none'}` +
       `\n  kills ${r.kills}, leakers ${r.leakers}, missiles ${r.missilesFired} ($${r.missileCostM}M), civil ${r.civilian}, fratricide ${r.fratricide}, ${Math.round(w.t / 60)} min` +
       `\n  damage: ${dmg}${r.losses.length ? `\n  lost: ${r.losses.join(', ')}` : ''}` +

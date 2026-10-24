@@ -17,9 +17,6 @@ export interface Town {
   hp: number;
   /** The last town is the enemy's forward airfield: taking it wins the campaign. */
   airfield?: boolean;
-  /** Days until the enemy rebuilds the SAM site or radar we knocked out in this town (0 or absent: standing). */
-  samDown?: number;
-  radarDown?: number;
 }
 
 export interface FrontState {
@@ -124,22 +121,4 @@ export function assaultSpot(t: Terrain, f: FrontState, i: number): { x: number; 
 /** Daily income from the towns we hold: a battered town pays less. */
 export function townIncome(f: FrontState | undefined): number {
   return Math.round((f?.towns ?? []).filter((x) => x.ours).reduce((s, x) => s + x.incomeM * (0.5 + x.hp / 200), 0));
-}
-
-/** Enemy air defences come up in the towns they hold from this day on. */
-export const ENEMY_AD_DAY = 2;
-/** Days the enemy needs to bring a SAM or radar we knocked out back into action. */
-export const AD_REBUILD_DAYS = 3;
-
-/**
- * The enemy-held towns with air defences today: the next two up the road. Each has a SAM and a radar unless
- * we knocked it out in the last few days.
- */
-export function enemyAdTowns(f: FrontState | undefined, day: number): { tn: Town; sam: boolean; radar: boolean }[] {
-  if (!f || day < ENEMY_AD_DAY) return [];
-  return f.towns
-    .filter((tn) => !tn.ours)
-    .slice(0, 2)
-    .map((tn) => ({ tn, sam: !tn.samDown, radar: !tn.radarDown }))
-    .filter((x) => x.sam || x.radar);
 }

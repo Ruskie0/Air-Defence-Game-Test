@@ -15,7 +15,7 @@ import { World } from '../sim/world';
 import { doctrineOf, pickDoctrine } from './doctrine';
 import { award, battleMedals } from './medals';
 import { EnemyModel, PKG, PkgKind, PlannedPkg, SECTOR_NAMES, newEnemy, planDay, sectorOf, toRaids } from './raidgen';
-import { AD_REBUILD_DAYS, ASSAULT_HOLD, FrontState, enemyAdTowns, OFFENSIVE_COST_M, TAKEN_HP, TOWN_THREAT_CUT, assaultSpot, deployZones, frontTown, newFront, nextObjective, townIncome, townsHeld } from './front';
+import { ASSAULT_HOLD, FrontState, OFFENSIVE_COST_M, TAKEN_HP, TOWN_THREAT_CUT, assaultSpot, deployZones, frontTown, newFront, nextObjective, townIncome, townsHeld } from './front';
 import { Rng } from '../sim/rng';
 import { DeployZone, inZones } from '../sim/deploy';
 
@@ -504,11 +504,6 @@ export class Campaign {
     const f = this.s.front;
     if (f) {
       f.offensive = null;
-      // Knocked-out enemy air defences come back a day at a time.
-      for (const tn of f.towns) {
-        if (tn.samDown) tn.samDown--;
-        if (tn.radarDown) tn.radarDown--;
-      }
       // Some of the raids go for our most forward town.
       const front = frontTown(f);
       const rng = new Rng(this.s.seed * 53 + this.s.day * 7);
@@ -564,11 +559,6 @@ export class Campaign {
       const held = f.towns.filter((t) => t.ours);
       const next = nextObjective(f);
       lines.push(`Front line: we hold ${held.map((t) => t.name).join(', ') || 'nothing beyond the airbase'}.${next >= 0 ? ` Next up the road: ${f.towns[next].name}${f.towns[next].airfield ? ', the enemy forward airfield' : ''}, ${(Math.hypot(f.towns[next].x, f.towns[next].y) / 1000).toFixed(0)} km out.` : ''}`);
-      const ad = enemyAdTowns(f, this.s.day);
-      if (ad.length)
-        lines.push(
-          `Enemy air defences: ${ad.map((a) => `${a.tn.name} (${[a.sam ? 'SAM' : '', a.radar ? 'radar' : ''].filter(Boolean).join(' and ')})`).join(', ')}. Their SAMs shoot at fighters within 35 km; their radars make our batteries nearby easier to locate and call artillery onto an assault force. A fighter sweep can knock them out for ${AD_REBUILD_DAYS - 1} days.`,
-        );
       if (f.offensive !== null) lines.push(`Offensive on ${f.towns[f.offensive].name} today: keep the assault force above ${ASSAULT_HOLD}% until the day ends and the town is ours. Expect a counter-attack on it.`);
     }
     lines.push(...this.s.plan
@@ -598,7 +588,6 @@ export class Campaign {
     return new World({
       towns: f?.towns.filter((t) => t.ours).map((t) => ({ name: t.name, x: t.x, y: t.y, hp: t.hp })),
       assault: off ? { ...assaultSpot(this.terrain, f!, f!.offensive!), target: off.name } : undefined,
-      enemyTowns: withRaids ? enemyAdTowns(f, this.s.day).map((a) => ({ name: a.tn.name, x: a.tn.x, y: a.tn.y, sam: a.sam, radar: a.radar })) : undefined,
       zones: this.zones,
       seed: this.s.seed * 31 + this.s.day,
       terrain: this.terrain,
@@ -685,14 +674,6 @@ export class Campaign {
       for (const tn of f.towns) {
         const site = tn.ours ? w.site(tn.name) : undefined;
         if (site) tn.hp = Math.round(site.hp);
-      }
-      // Enemy SAMs and radars our sweeps knocked out stay down for a few days.
-      for (const a of w.enemyAd?.sites ?? []) {
-        const tn = f.towns.find((x) => x.name === a.town);
-        if (!tn || a.site.alive) continue;
-        if (a.kind === 'sam') tn.samDown = AD_REBUILD_DAYS;
-        else tn.radarDown = AD_REBUILD_DAYS;
-        frontLines.push(`The ${a.site.name} is out of action: the enemy needs ${AD_REBUILD_DAYS - 1} days to bring it back.`);
       }
       const fallen = f.towns.findIndex((tn) => tn.ours && tn.hp <= 0);
       if (fallen >= 0) {

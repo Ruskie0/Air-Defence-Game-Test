@@ -341,7 +341,7 @@ export class CampaignUi {
         const full = b.start ? total({ stock: b.start }) : 0;
         const pct = full ? Math.min(100, (100 * total(b)) / full) : 100;
         const col = pct > 60 ? '#ff6b5b' : pct > 30 ? '#ffb05b' : '#8a8a8a';
-        return `<div class="eb"><span><b>${esc(b.name)}</b> <span class="dim">${b.kind === 'rear' ? 'beyond the map' : `${km} km`}</span><br><small>${esc(stockText(b))}</small></span><span class="bar" title="Strength left against what it started the war with"><i style="width:${pct}%;background:${col}"></i></span></div>`;
+        return `<div class="eb"><span><b>${esc(b.name)}</b> ${b.kind === 'rear' ? '' : `<span class="dim">${km} km</span>`}<br><small>${esc(stockText(b))}</small></span><span class="bar" title="Strength left against what it started the war with"><i style="width:${pct}%;background:${col}"></i></span></div>`;
       })
       .join('');
     const hidden = bases.filter((b) => !b.known && !b.lost);

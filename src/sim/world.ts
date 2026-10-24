@@ -9,6 +9,7 @@ import { Fighter } from './fighter';
 import { V3, add, bearingDeg, clone, dist, norm, polar, scale, sub, v3 } from './math';
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, UnitType, rankOf } from './catalog';
 import { DEFAULT_ZONES, DeployZone, sandboxDeployment } from './deploy';
+import { EnemyAd, EnemyTownAd } from './enemyad';
 import { Exposure } from './exposure';
 import { Interceptor, LR_MSL, MR_MSL, MissileSpec, SH_MSL } from './missile';
 import { CIWS_RADAR, EW_RADAR, LR_RADAR, MR_RADAR, Radar, RadarSpec, Report, SH_RADAR } from './radar';
@@ -71,6 +72,8 @@ export interface WorldOptions {
   /** Campaign front line: the towns we hold (defended), and today's assault force if an offensive is on. */
   towns?: { name: string; x: number; y: number; hp: number }[];
   assault?: { x: number; y: number; target: string };
+  /** Enemy-held towns on the front line and the air defences still standing in them. */
+  enemyTowns?: EnemyTownAd[];
   /** Where ground units may stand (the sandbox's 60 km circle when omitted). */
   zones?: DeployZone[];
 }
@@ -121,6 +124,8 @@ export class World {
   supportSpentM = 0;
   /** Shoot and scoot: exposure of our batteries and the enemy's counter-battery strikes. */
   readonly exposure: Exposure;
+  /** SAMs and radars in the enemy-held towns (kept apart from our own sites). */
+  readonly enemyAd: EnemyAd | null;
   /** Where ground units may stand. */
   readonly zones: readonly DeployZone[];
   /** The quick reaction alert pair has been scrambled this battle. */
@@ -201,6 +206,9 @@ export class World {
     }
     this.zones = o.zones ?? DEFAULT_ZONES;
     this.exposure = new Exposure(o.counterBattery ?? 4);
+    this.enemyAd = o.enemyTowns?.length
+      ? new EnemyAd(this, o.enemyTowns, (name, kind, x, y) => new Site(name, kind, v3(x, y, this.terrain.groundAt(x, y)), 60))
+      : null;
     for (const u of dep.units) this.field(u);
     const wx = Math.pow(10, this.weather.radarLossDb / 10);
     for (const r of this.allRadars()) if (r.spec.freqGHz >= 8) r.wxLoss = wx;
@@ -807,6 +815,7 @@ export class World {
 
     for (const u of this.units) u.update(this);
     this.exposure.step(this);
+    this.enemyAd?.step(this);
     if (this.t >= this.nextTewa) {
       this.nextTewa = this.t + 1;
       autoEngage(this);

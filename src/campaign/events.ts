@@ -1,8 +1,6 @@
 import { CATALOG, newUnit } from '../sim/catalog';
 import { Rng } from '../sim/rng';
 import type { Campaign } from './campaign';
-import { planDay } from './raidgen';
-import { WEATHER } from './weather';
 
 /** Between-day events: a situation with two choices, shown on the planning screen. */
 export type EventId = 'arms' | 'intel' | 'strike' | 'allies' | 'preempt' | 'press';
@@ -43,7 +41,7 @@ export const EVENTS: Record<EventId, EventDef> = {
   },
   intel: {
     title: 'An informant',
-    text: 'Someone on the other side offers the complete strike plan for tomorrow, every package and its timing.',
+    text: 'Someone on the other side offers the complete plan for their next operation, every package and its timing.',
     choices: [
       { label: 'Pay the informant', detail: 'Every package of the day is reported', costM: 20 },
       { label: 'Refuse', detail: 'Rely on our own intelligence' },
@@ -66,7 +64,7 @@ export const EVENTS: Record<EventId, EventDef> = {
     apply: (c, i) => {
       if (i === 0) return 'The workers are back at their posts.';
       c.s.incomePenalty = 30;
-      return 'The plant runs on a skeleton crew: income tomorrow is $30M lower.';
+      return 'The plant runs on a skeleton crew: the income at 06:00 is $30M lower.';
     },
   },
   allies: {
@@ -97,9 +95,9 @@ export const EVENTS: Record<EventId, EventDef> = {
     ok: (c) => c.s.day >= 3,
     apply: (c, i) => {
       if (i === 1) return 'No strike tonight.';
-      const plan = planDay(c.s.day, c.s.seed + 1, c.s.enemy, c.s.nextPkg, c.layout.rot, c.diff.threat * 0.75, WEATHER[c.s.weather ?? 'clear'].noDrones);
-      c.s.nextPkg += plan.length;
-      c.replacePlan(plan);
+      // A quarter off everything the enemy flies today, starting with its next operation.
+      if (c.s.dayBudget) c.s.dayBudget *= 0.75;
+      c.replacePlan(c.pulsePlan(1, 1));
       return 'The strike went in: the enemy has less to throw at us today. Read the new briefing.';
     },
   },

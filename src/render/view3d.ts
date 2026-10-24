@@ -838,7 +838,7 @@ export class View3D {
 
   /** What the player can see of an entity: own side, recent detections, or everything with "show undetected". */
   isVisible(e: Entity): boolean {
-    return e.airborne && (this.showTruth || e.side === 'blue' || this.world.t - e.lastDetected < 12);
+    return (e.airborne || e.kind === 'convoy') && (this.showTruth || e.side === 'blue' || this.world.t - e.lastDetected < 12);
   }
 
   /** Clear trees and houses around every site whenever the set of sites changes, so nothing is buried in a forest. */

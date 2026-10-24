@@ -374,7 +374,24 @@ function atgm(): THREE.BufferGeometry {
   return k.build();
 }
 
+/** Resupply convoy: four canvas-backed trucks in column, nose along +Z like the air models (it is steered the same way). */
+function convoy(): THREE.BufferGeometry {
+  const k = new Kit();
+  const c = 0x5b6236;
+  for (let i = 0; i < 4; i++) {
+    const z0 = 22 - i * 15;
+    k.box(2.5, 0.5, 8.6, 0x2c2e26, 0, 1.0, z0);
+    k.box(2.5, 2.2, 2.2, c, 0, 2.2, z0 + 3.1);
+    k.box(2.2, 0.8, 0.06, GLASS, 0, 2.7, z0 + 4.22);
+    k.box(2.5, 2.4, 5.6, i % 2 ? 0x6b6a4c : 0x626447, 0, 2.6, z0 - 1.3);
+    for (const x of [-1.2, 1.2]) for (const dz of [3.1, -0.6, -2.4]) k.wheel(0.55, 0.4, TYRE, x, 0.55, z0 + dz);
+  }
+  // The sim carries the convoy 2 m above the road.
+  return k.build().translate(0, -2, 0);
+}
+
 const AIR: Record<string, () => THREE.BufferGeometry> = {
+  convoy,
   helo,
   atgm,
   strike,
@@ -441,6 +458,7 @@ export function interceptorModel(code: string): THREE.Mesh {
 
 /** Overall length of each air model in metres, so View3D can keep every kind a readable size on screen. */
 export const MODEL_LEN: Record<string, number> = {
+  convoy: 60,
   fighter: 16,
   sead: 17,
   strike: 21,

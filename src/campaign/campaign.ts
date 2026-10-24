@@ -313,6 +313,17 @@ export class Campaign {
         out.push(`Repairs to the ${name.toLowerCase()} are finished.`);
       }
     }
+    // Unit crews patch up their own equipment at the same rate, free.
+    for (const u of this.units) {
+      if (u.hp !== undefined) {
+        u.hp = Math.min(100, Math.floor(u.hp + pts));
+        if (u.hp >= 100) {
+          delete u.hp;
+          out.push(`${CATALOG[u.type].name} repaired.`);
+        }
+      }
+      for (const l of u.launchers) if (l.hp !== undefined && (l.hp = Math.min(100, Math.floor(l.hp + pts))) >= 100) delete l.hp;
+    }
     this.s.sorties = (this.s.sorties ?? []).filter((r) => r.until > t);
     return out;
   }
@@ -453,6 +464,12 @@ export class Campaign {
     if (this.started) (this.s.repairs ??= {})[name] = this.repairing(name) + pts;
     else a.hp += pts;
     return true;
+  }
+
+  /** A unit's worst damaged site (main site or launcher), 100 when undamaged, and when its crew will have it repaired. */
+  unitDamage(u: DeployedUnit): { hp: number; done: number | null } {
+    const hp = Math.min(u.hp ?? 100, ...u.launchers.map((l) => l.hp ?? 100));
+    return { hp, done: hp < 100 ? this.clock + ((100 - hp) / REPAIR_PER_H) * 60 : null };
   }
 
   /** When the crews will have finished an asset's repairs (clock), or null if nothing is being repaired. */
@@ -863,7 +880,7 @@ export class Campaign {
           continue;
         }
         u.launchers = f.fu.launchers
-          .map((l, i) => ({ ...u.launchers[i], x: Math.round(l.site.pos.x), y: Math.round(l.site.pos.y), rounds: l.rounds }))
+          .map((l, i) => ({ ...u.launchers[i], x: Math.round(l.site.pos.x), y: Math.round(l.site.pos.y), rounds: l.rounds, hp: l.site !== main && l.site.hp < 99.5 ? Math.round(l.site.hp) : undefined }))
           .filter((_l, i) => {
             const alive = f.fu!.launchers[i].site.alive;
             if (!alive) losses.push(`${f.fu!.name} launcher ${i + 1}`);
@@ -887,6 +904,9 @@ export class Campaign {
         const after = rankOf(u.xp);
         if (after > before) promotions.push(`${shooter} promoted to ${RANKS[after].name}`);
       }
+      // Damage stays until the crews have repaired it.
+      if (main && main.alive && main.hp < 99.5) u.hp = Math.round(main.hp);
+      else delete u.hp;
       // Units moved during the battle stay where they ended up.
       u.x = f.unit.x;
       u.y = f.unit.y;

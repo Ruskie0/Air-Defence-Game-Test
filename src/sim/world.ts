@@ -390,6 +390,12 @@ export class World {
       }
     }
     if (f.radar && u.armWatch) f.radar.armWatch = true;
+    // Damage from an earlier raid that the crews have not yet repaired.
+    if (u.hp !== undefined && f.sites[0]) f.sites[0].hp = Math.max(1, u.hp);
+    f.fu?.launchers.forEach((l, i) => {
+      const hp = u.launchers[i]?.hp;
+      if (hp !== undefined && l.site !== f.sites[0]) l.site.hp = Math.max(1, hp);
+    });
     this.fielded.push(f);
     return f;
   }

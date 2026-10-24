@@ -1,5 +1,6 @@
 import type { View3D } from '../render/view3d';
 import { bearingDeg, dist, headingOf, len, v3 } from '../sim/math';
+import { EARLY_BONUS_M } from '../campaign/laststand';
 import { THREAT_LABELS, ThreatType, spawnThreat } from '../sim/threats';
 import { missilesOnTrack, timeToGo } from '../sim/tewa';
 import type { Ident, Track } from '../sim/tracker';
@@ -33,7 +34,7 @@ export class Hud {
   /** Campaign mode hides the sandbox spawn panel and offers to end the day once the raids are over. */
   campaign: { day: number; days: number; objectives: DayObjective[]; onEndDay: () => void } | null = null;
   /** Last Stand: the wave counter and best score in the top bar. */
-  stand: { wave: number; best: number } | null = null;
+  stand: { wave: number; best: number; canCallEarly: boolean; callEarly: () => void } | null = null;
   private readonly view: View3D;
   private readonly ppi: Ppi;
   private readonly ctl: GameControl;
@@ -307,6 +308,9 @@ export class Hud {
       case 'qra':
         this.lastOrder = scrambleQra(w) ?? 'Alert pair scrambled.';
         break;
+      case 'nextwave':
+        this.stand?.callEarly();
+        break;
       case 'endday':
         this.campaign?.onEndDay();
         break;
@@ -416,6 +420,7 @@ export class Hud {
         'raid',
         day +
           `<span class="lbl">RAIDS</span> all ${total} launched${clear ? ', airspace clear' : ''}` +
+          (this.stand?.canCallEarly ? `<button data-act="nextwave" class="go" title="Count this wave as held now for +$${EARLY_BONUS_M}M, while what is left of it is still in the air">Next wave now</button>` : '') +
           (this.campaign ? `<button data-act="endday" class="${clear ? 'go' : ''}" title="${clear ? 'Go to the debrief' : 'Threats are still inbound: ending now counts them as leakers'}">End day</button>` : ''),
       );
       return;

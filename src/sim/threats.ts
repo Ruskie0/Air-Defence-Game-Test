@@ -2,10 +2,11 @@ import { V3, add, clone, polar, v3 } from './math';
 import { Airliner, Bomber, Cruise, Drone, Sead, Soj, Tbm } from './entities';
 import type { World } from './world';
 
-export type ThreatType = 'drones' | 'cruise' | 'bomber' | 'sead' | 'soj' | 'tbm' | 'airliner' | 'airliner-dark';
+export type ThreatType = 'drones' | 'decoys' | 'cruise' | 'bomber' | 'sead' | 'soj' | 'tbm' | 'airliner' | 'airliner-dark';
 
 export const THREAT_LABELS: Record<ThreatType, string> = {
   drones: 'Drone swarm (6)',
+  decoys: 'Decoy drones (10)',
   cruise: 'Cruise missiles (4)',
   bomber: 'Strike bomber (4 ALCM)',
   sead: 'SEAD pair (ARMs)',
@@ -31,6 +32,20 @@ function targetsByName(w: World, names: string[]): Aim[] {
   const all = strikeTargets(w);
   const picked = names.map((n) => all.find((a) => a.name === n)).filter((a): a is Aim => !!a);
   return picked.length ? picked : all;
+}
+
+/**
+ * Cheap decoy drones: on radar they look like attack drones, but they carry no warhead. They exist to soak
+ * up missiles and pull fire units into tying up their channels.
+ */
+export function spawnDecoyDrones(w: World, n: number, bearing: number, rangeM: number): void {
+  const before = w.entities.length;
+  spawnDrones(w, n, bearing, rangeM);
+  for (const e of w.entities.slice(before)) {
+    if (e.kind !== 'drone') continue;
+    e.warhead = null;
+    e.decoy = true;
+  }
 }
 
 export function spawnDrones(w: World, n: number, bearing: number, rangeM: number, targets?: string[]): void {
@@ -128,6 +143,8 @@ export function spawnThreat(w: World, type: ThreatType, bearing: number): void {
   switch (type) {
     case 'drones':
       return spawnDrones(w, 6, bearing, 45000);
+    case 'decoys':
+      return spawnDecoyDrones(w, 10, bearing, 45000);
     case 'cruise':
       return spawnCruise(w, 4, bearing, 120000);
     case 'bomber':

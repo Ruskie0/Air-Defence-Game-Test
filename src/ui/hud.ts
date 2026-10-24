@@ -107,7 +107,7 @@ export class Hud {
     const f = w.fieldedByCode(code);
     if (!f) return;
     this.moving = code;
-    this.lastOrder = f.unit.type === 'CAP' ? 'Click the map for the new CAP station. Esc cancels.' : `Click the map where the unit should go. It packs up, drives there and sets up again (${MOBILITY[f.unit.type].packS + MOBILITY[f.unit.type].setupS} s out of action plus the drive). Esc cancels.`;
+    this.lastOrder = f.unit.type === 'CAP' ? 'Click the map for the new CAP station. Esc cancels.' : `Click the map where the unit should go. It packs up, drives there and sets up again (${Math.round((MOBILITY[f.unit.type].packS + MOBILITY[f.unit.type].setupS) * w.mods.moveMult)} s out of action plus the drive). Esc cancels.`;
     const v = this.view;
     const reach = CATALOG[f.unit.type].rangeKm;
     v.onGroundHover = (p) => {

@@ -98,7 +98,7 @@ export function orderMove(w: World, f: Fielded, x: number, y: number): string | 
   } else {
     f.move = {
       phase: 'pack',
-      until: w.t + mob.packS,
+      until: w.t + mob.packS * w.mods.moveMult,
       to: { x, y },
       from: { x: main.x, y: main.y },
       start: f.sites.map((s) => ({ x: s.pos.x, y: s.pos.y, mast: s.pos.z - w.terrain.groundAt(s.pos.x, s.pos.y) })),
@@ -171,7 +171,7 @@ export function stepMoves(w: World, dt: number): boolean {
         arrive(w, f);
         moved = true;
         m.phase = 'setup';
-        m.until = w.t + MOBILITY[f.unit.type].setupS;
+        m.until = w.t + MOBILITY[f.unit.type].setupS * w.mods.moveMult;
       }
     } else if (m.phase === 'setup' && w.t >= m.until) {
       f.move = null;

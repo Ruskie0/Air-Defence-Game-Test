@@ -374,7 +374,24 @@ function atgm(): THREE.BufferGeometry {
   return k.build();
 }
 
+/** Resupply convoy: four canvas-backed trucks in column, nose along +Z like the air models (it is steered the same way). */
+function convoy(): THREE.BufferGeometry {
+  const k = new Kit();
+  const c = 0x5b6236;
+  for (let i = 0; i < 4; i++) {
+    const z0 = 22 - i * 15;
+    k.box(2.5, 0.5, 8.6, 0x2c2e26, 0, 1.0, z0);
+    k.box(2.5, 2.2, 2.2, c, 0, 2.2, z0 + 3.1);
+    k.box(2.2, 0.8, 0.06, GLASS, 0, 2.7, z0 + 4.22);
+    k.box(2.5, 2.4, 5.6, i % 2 ? 0x6b6a4c : 0x626447, 0, 2.6, z0 - 1.3);
+    for (const x of [-1.2, 1.2]) for (const dz of [3.1, -0.6, -2.4]) k.wheel(0.55, 0.4, TYRE, x, 0.55, z0 + dz);
+  }
+  // The sim carries the convoy 2 m above the road.
+  return k.build().translate(0, -2, 0);
+}
+
 const AIR: Record<string, () => THREE.BufferGeometry> = {
+  convoy,
   helo,
   atgm,
   strike,
@@ -441,6 +458,7 @@ export function interceptorModel(code: string): THREE.Mesh {
 
 /** Overall length of each air model in metres, so View3D can keep every kind a readable size on screen. */
 export const MODEL_LEN: Record<string, number> = {
+  convoy: 60,
   fighter: 16,
   sead: 17,
   strike: 21,
@@ -685,7 +703,39 @@ function jammerHead(): THREE.BufferGeometry {
   return k.build();
 }
 
+/** Main battle tank: hull with a sloped glacis, tracks, a turret and a long gun. Faces -Z like the other ground units. */
+function tank(): THREE.BufferGeometry {
+  const k = new Kit();
+  const c = 0x5a6138;
+  k.box(3.4, 1.0, 6.8, c, 0, 1.15, 0);
+  k.box(3.4, 0.5, 1.2, c, 0, 1.4, -3.6, -0.5, 0, 0);
+  for (const x of [-1.55, 1.55]) {
+    k.box(0.6, 0.95, 7.0, TYRE, x, 0.5, 0);
+    k.box(0.7, 0.12, 7.0, c, x, 1.05, 0);
+  }
+  k.box(2.4, 0.75, 3.2, c, 0, 2.0, 0.4);
+  k.box(1.8, 0.6, 0.9, c, 0, 1.95, -1.4, -0.4, 0, 0);
+  k.tube(0.09, 0.11, 4.8, 0x4a4f30, 0, 2.05, -3.6, 8);
+  k.box(0.5, 0.3, 0.5, OLIVE_D, 0.6, 2.5, 0.8);
+  return k.build();
+}
+
+/** Infantry fighting vehicle: a taller, boxier hull with a small turret and autocannon. */
+function ifv(): THREE.BufferGeometry {
+  const k = new Kit();
+  const c = 0x5f6640;
+  k.box(3.1, 1.5, 6.2, c, 0, 1.35, 0);
+  k.box(3.1, 0.5, 1.0, c, 0, 1.6, -3.25, -0.6, 0, 0);
+  for (const x of [-1.45, 1.45]) k.box(0.5, 0.85, 6.2, TYRE, x, 0.45, 0);
+  k.box(1.5, 0.55, 1.8, c, -0.3, 2.35, -0.2);
+  k.tube(0.05, 0.05, 2.6, 0x3d4228, -0.3, 2.4, -2.2, 6);
+  k.box(0.9, 0.9, 0.08, OLIVE_D, 0, 1.4, 3.1);
+  return k.build();
+}
+
 const GROUND: Record<string, () => THREE.BufferGeometry> = {
+  tank,
+  ifv,
   'jammer-base': jammerBase,
   'jammer-head': jammerHead,
   'gun35-base': gun35Base,
@@ -705,6 +755,96 @@ const GROUND: Record<string, () => THREE.BufferGeometry> = {
 };
 
 /** A ground-unit part by name; antennas take `antenna-<signature>` and masts `mast-<height>`. */
+const WALLS = [0xd8d0bc, 0xcfc4a8, 0xe4ddd0, 0xc9b58f, 0xb9a98a, 0xd6c7b0];
+const ROOFS = [0x8e4a32, 0x7a3d2a, 0x9a5a3c, 0x5c5a58, 0x6b4a3a];
+
+/** A gabled house or church nave: walls, and a pitched roof as an extruded triangle, along local Z. */
+function house(k: Kit, w: number, h: number, l: number, wall: number, roof: number, x: number, y: number, z: number, ry: number): void {
+  k.box(w, h, l, wall, x, y + h / 2, z, 0, ry, 0);
+  const pitch = w * 0.42;
+  const tri = new THREE.Shape([new THREE.Vector2(-w / 2 - 0.4, 0), new THREE.Vector2(w / 2 + 0.4, 0), new THREE.Vector2(0, pitch)]);
+  const g = new THREE.ExtrudeGeometry(tri, { depth: l + 0.6, bevelEnabled: false });
+  g.translate(0, 0, -(l + 0.6) / 2);
+  k.add(g, roof, x, y + h, z, 0, ry, 0);
+}
+
+/**
+ * A front-line town about 700 m across: a main street and a cross street of houses with pitched roofs, a
+ * square with a church and spire, and outlying farms. Each building sits on the ground under it
+ * (`ground` gives the height relative to the site's origin), and `seed` varies the layout.
+ */
+export function townGeometry(seed: number, ground: (x: number, z: number) => number): THREE.BufferGeometry {
+  let a = seed >>> 0 || 1;
+  const rnd = (): number => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const pick = <T,>(xs: T[]): T => xs[Math.floor(rnd() * xs.length)];
+  const k = new Kit();
+  const rot = rnd() * Math.PI;
+  const cs = Math.cos(rot);
+  const sn = Math.sin(rot);
+  // Local street frame (u along the main street, v across) to site coordinates.
+  const at = (u: number, v: number): [number, number] => [u * cs + v * sn, -u * sn + v * cs];
+  const street = (len: number, wid: number, angle: number): void => {
+    for (let u = -len / 2; u < len / 2; u += 40) {
+      const [x, z] = at(Math.cos(angle) * (u + 20), Math.sin(angle) * (u + 20));
+      k.box(wid, 0.3, 42, 0x4a4844, x, ground(x, z) + 0.15, z, 0, rot + angle + Math.PI / 2, 0);
+    }
+  };
+  street(760, 8, 0);
+  street(480, 6, Math.PI / 2);
+  // The square and its church.
+  k.box(46, 0.25, 46, 0x8d8780, 0, ground(0, 0) + 0.12, 0, 0, rot, 0);
+  const [cx, cz] = at(-34, 24);
+  const cy = ground(cx, cz);
+  house(k, 12, 11, 26, 0xd9d2c3, 0x5c5a58, cx, cy, cz, rot + Math.PI / 2);
+  const [tx, tz] = at(-50, 24);
+  k.box(7, 26, 7, 0xd9d2c3, tx, cy + 13, tz, 0, rot, 0);
+  k.add(new THREE.ConeGeometry(4.6, 16, 4).rotateY(Math.PI / 4), 0x4f5d55, tx, cy + 34, tz, 0, rot, 0);
+  // Houses lining both sides of both streets, with gaps.
+  const lineStreet = (len: number, angle: number, setback: number): void => {
+    for (const side of [-1, 1]) {
+      for (let u = -len / 2; u < len / 2; u += 13 + rnd() * 10) {
+        if (Math.abs(u) < 32 || rnd() < 0.15) continue;
+        const off = setback + rnd() * 6;
+        const uu = Math.cos(angle) * u - Math.sin(angle) * side * off;
+        const vv = Math.sin(angle) * u + Math.cos(angle) * side * off;
+        const [x, z] = at(uu, vv);
+        const w = 7 + rnd() * 4;
+        house(k, w, 5 + rnd() * 3 + (rnd() < 0.2 ? 3 : 0), 9 + rnd() * 5, pick(WALLS), pick(ROOFS), x, ground(x, z), z, rot + angle + (rnd() < 0.5 ? 0 : Math.PI / 2));
+      }
+    }
+  };
+  lineStreet(700, 0, 15);
+  lineStreet(440, Math.PI / 2, 13);
+  // A second row behind the main street, then the old town filling in the blocks round the square.
+  lineStreet(520, 0, 38);
+  for (let u = -230; u <= 230; u += 21) {
+    for (let v = -200; v <= 200; v += 21) {
+      if (Math.abs(v) < 24 || Math.abs(u) < 22 || (Math.abs(u) < 70 && Math.abs(v) < 70)) continue;
+      const r = Math.hypot(u, v * 1.2);
+      if (r > 240 || rnd() > 0.55 * (1 - r / 260)) continue;
+      const [x, z] = at(u + (rnd() - 0.5) * 6, v + (rnd() - 0.5) * 6);
+      house(k, 7 + rnd() * 4, 5 + rnd() * 4, 9 + rnd() * 5, pick(WALLS), pick(ROOFS), x, ground(x, z), z, rot + (rnd() < 0.5 ? 0 : Math.PI / 2));
+    }
+  }
+  // Farms on the edge, each a house and a barn.
+  for (let i = 0; i < 7; i++) {
+    const ang = rnd() * Math.PI * 2;
+    const r = 330 + rnd() * 120;
+    const x = Math.cos(ang) * r;
+    const z = Math.sin(ang) * r;
+    const y = ground(x, z);
+    const ry = rnd() * Math.PI;
+    house(k, 9, 6, 13, pick(WALLS), pick(ROOFS), x, y, z, ry);
+    house(k, 14, 7, 24, 0x7a6450, 0x5c5a58, x + Math.cos(ry) * 22, ground(x + Math.cos(ry) * 22, z - Math.sin(ry) * 22), z - Math.sin(ry) * 22, ry);
+  }
+  return k.build();
+}
+
 export function groundGeometry(name: string): THREE.BufferGeometry {
   if (name.startsWith('antenna-')) return cached(name, () => antenna(name.slice(8)));
   if (name.startsWith('mast-')) return cached(name, () => mast(Number(name.slice(5))));

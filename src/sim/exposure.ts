@@ -43,6 +43,8 @@ export class Exposure {
   /** Campaign day (or equivalent) that sets the strike's weapons; 0 turns counter-battery fire off. */
   level: number;
   strikesLeft: number;
+  /** Shortest gap between two strikes (s): Last Stand shortens it wave by wave. */
+  cooldownS = EXPOSURE.cooldownS;
   readonly located: Located[] = [];
   private nextAt = 0;
   private nextStep = 0;
@@ -107,7 +109,7 @@ export class Exposure {
 
   private locate(w: World, f: Fielded): void {
     this.strikesLeft--;
-    this.nextAt = w.t + EXPOSURE.cooldownS;
+    this.nextAt = w.t + this.cooldownS;
     f.heat = 0;
     const pos = f.sites[0].pos;
     const name = w.unitName(f);

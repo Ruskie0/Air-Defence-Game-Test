@@ -34,7 +34,7 @@ export interface CampaignHost {
   toMenu(): void;
   /** Start the sandbox on a new map (of this type, or a random one). */
   startSandbox(type?: MapType): void;
-  startTraining(): void;
+  startTraining(lesson?: 'basics' | 'front'): void;
   startLastStand(type?: MapType): void;
 }
 
@@ -99,6 +99,10 @@ export class CampaignUi {
         <button data-cui="training" class="big ${saved ? '' : 'go'}">
           <b>Training</b>
           <small>New here? A short guided battle: tracks, weapons control, firing by hand and dealing with radar-hunting SEAD. About ten minutes.</small>
+        </button>
+        <button data-cui="training-front" class="big">
+          <b>Training: the front</b>
+          <small>The second lesson: get an assault column up the road, sweep an enemy SAM site, shoot and scoot, and call a supply convoy.</small>
         </button>
         <div class="big-group">
           <div class="big-h"><b>New campaign</b>
@@ -516,6 +520,9 @@ export class CampaignUi {
         return;
       case 'training':
         this.host.startTraining();
+        return;
+      case 'training-front':
+        this.host.startTraining('front');
         return;
       case 'laststand':
         this.host.startLastStand(this.mapPick);

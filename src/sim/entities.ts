@@ -449,7 +449,8 @@ export class Striker extends Air {
     const d = hdist(this.pos, tgt);
     switch (this.phase) {
       case 'transit':
-        this.steer(tgt.x, tgt.y, dt);
+        // An approach waypoint first, when the planner wants it to come in from another direction.
+        if (this.followWaypoints(dt, 4000)) this.steer(tgt.x, tgt.y, dt);
         if (d < 95000) {
           this.phase = 'low';
           this.tfAgl = 90;
@@ -458,7 +459,7 @@ export class Striker extends Air {
         }
         break;
       case 'low':
-        this.steer(tgt.x, tgt.y, dt);
+        if (this.followWaypoints(dt, 4000)) this.steer(tgt.x, tgt.y, dt);
         if (d < 15000) {
           this.phase = 'popup';
           this.tfAgl = null;
@@ -739,11 +740,12 @@ export class Soj extends Air {
   private readonly legs: [V3, V3];
   private leg = 0;
 
-  constructor(name: string, center: V3, bearingFromCenter: number) {
+  /** `entry`: where it comes onto the map from its rear base; it flies from there to the racetrack. */
+  constructor(name: string, center: V3, bearingFromCenter: number, entry?: V3) {
     const across = bearingFromCenter + 90;
     const a = add(center, polar(across, 22000));
     const b = add(center, polar(across + 180, 22000));
-    super(name, v3(a.x, a.y, 9500), across + 180, 210);
+    super(name, entry ? v3(entry.x, entry.y, 9500) : v3(a.x, a.y, 9500), entry ? bearingDeg(entry, a) : across + 180, 210);
     this.legs = [a, b];
     this.rcs = 15;
     this.hitRadius = 14;

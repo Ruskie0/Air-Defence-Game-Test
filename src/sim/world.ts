@@ -1,3 +1,4 @@
+import { EnemyBase, makeTheatre } from './theatre';
 import { DT } from './constants';
 import { Ciws, GUNS } from './ciws';
 import { MoveOrder, orderMove, scoot, stepMoves } from './mobility';
@@ -73,6 +74,8 @@ export interface WorldOptions {
   assault?: { x: number; y: number; target: string };
   /** Where ground units may stand (the sandbox's 60 km circle when omitted). */
   zones?: DeployZone[];
+  /** The enemy's installations, which every enemy weapon launches from (a fresh default theatre when omitted). */
+  theatre?: EnemyBase[];
 }
 
 /** What a deployed unit became in this world, so the campaign can read back its state after the day. */
@@ -98,6 +101,8 @@ export class World {
   readonly seed: number;
   readonly rng: Rng;
   readonly terrain: Terrain;
+  /** Enemy installations: where every enemy weapon starts. Shared with the campaign, which keeps the stocks. */
+  theatre: EnemyBase[];
   entities: Entity[] = [];
   missiles: Interceptor[] = [];
   readonly sites: Site[] = [];
@@ -158,6 +163,8 @@ export class World {
   spawnTag = -1;
   /** Everything that died or left in the last 20 s, newest last (for wrecks and kill feeds). */
   deaths: Entity[] = [];
+  /** Enemy aircraft shot down this battle, by kind (the campaign takes them off their bases' strength). */
+  readonly redAirLost = new Map<string, number>();
   /** Track id remaps from fusion merges, so the UI can follow a selected track. */
   readonly remapped = new Map<number, number>();
   private readonly byId = new Map<number, Entity>();
@@ -200,6 +207,7 @@ export class World {
       s.role = 'assault';
     }
     this.zones = o.zones ?? DEFAULT_ZONES;
+    this.theatre = o.theatre ?? makeTheatre(this.terrain, this.seed);
     this.exposure = new Exposure(o.counterBattery ?? 4);
     for (const u of dep.units) this.field(u);
     const wx = Math.pow(10, this.weather.radarLossDb / 10);
@@ -495,6 +503,8 @@ export class World {
     if (e.fate) return;
     e.fate = { how, by, t: this.t, pos: clone(e.pos), vel: clone(e.vel), air: how === 'missile' || how === 'gun' || how === 'laser', ...extra };
     this.deaths.push(e);
+    // Enemy aircraft shot down are lost to their base for good.
+    if (e.side === 'red' && !e.munition && e.fate.air) this.redAirLost.set(e.kind, (this.redAirLost.get(e.kind) ?? 0) + 1);
   }
 
   /** An entity leaves the battle without being destroyed (egress, landing, end of flight). */

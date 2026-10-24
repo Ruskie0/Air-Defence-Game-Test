@@ -29,6 +29,25 @@ export interface DeployedUnit {
   armWatch?: boolean;
   /** Starts the day on hold fire (no automatic engagements). */
   holdFire?: boolean;
+  /** Kills over the whole campaign: the crew's experience. */
+  xp?: number;
+}
+
+/** Crew ranks by campaign kills. Each rank above Green makes the unit a little deadlier and quicker to reload. */
+export const RANKS = [
+  { name: 'Green', xp: 0, badge: '' },
+  { name: 'Trained', xp: 3, badge: '★' },
+  { name: 'Veteran', xp: 8, badge: '★★' },
+  { name: 'Elite', xp: 15, badge: '★★★' },
+];
+
+/** Rank index (0 = Green) for a number of kills. */
+export function rankOf(xp = 0): number {
+  let r = 0;
+  RANKS.forEach((k, i) => {
+    if (xp >= k.xp) r = i;
+  });
+  return r;
 }
 
 export interface AssetState {

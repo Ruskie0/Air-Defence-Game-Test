@@ -122,6 +122,8 @@ export class FireUnit {
   hold = false;
   /** Packed up or on the move: cannot fire. */
   stowed = false;
+  /** Crew rank (0 = Green): each rank gives a missile that misses a second chance to kill. */
+  rank = 0;
   private queue: { t: number; trackId: number; manual: boolean }[] = [];
 
   constructor(

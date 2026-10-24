@@ -1,4 +1,4 @@
-import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, ROUND_COST, UnitType, launcherOffsets, newUnit } from '../sim/catalog';
+import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, RANKS, ROUND_COST, UnitType, launcherOffsets, newUnit, rankOf } from '../sim/catalog';
 import { CAP_RADIUS, DEPLOY_RADIUS, nearestFree, placeError } from '../sim/deploy';
 import { finishMoves } from '../sim/mobility';
 import { UPGRADES, UpgradeId } from './upgrades';
@@ -41,6 +41,8 @@ export interface DayReport {
   losses: string[];
   /** What the enemy took away from the day. */
   lessons: string[];
+  /** Crews that went up a rank. */
+  promotions?: string[];
 }
 
 export interface CampaignState {
@@ -393,6 +395,7 @@ export class Campaign {
 
     finishMoves(w);
     const losses: string[] = [];
+    const promotions: string[] = [];
     const before = new Map(s.deployment.assets.map((a) => [a.name, a.hp]));
     s.deployment.assets = DEFENDED_ASSETS.map((a) => ({ name: a.name, hp: Math.round(w.site(a.name)?.hp ?? 0) }));
     const kept: DeployedUnit[] = [];
@@ -421,6 +424,14 @@ export class Campaign {
       } else if (main && !main.alive) {
         losses.push(main.name);
         continue;
+      }
+      // Crews gain experience from their kills.
+      const shooter = f.fu?.name ?? f.ciws?.name;
+      if (shooter) {
+        const before = rankOf(u.xp);
+        u.xp = (u.xp ?? 0) + (w.stats.killsBy[shooter] ?? 0);
+        const after = rankOf(u.xp);
+        if (after > before) promotions.push(`${shooter} promoted to ${RANKS[after].name}`);
       }
       // Units moved during the battle stay where they ended up.
       u.x = f.unit.x;
@@ -476,6 +487,7 @@ export class Campaign {
       damage: s.deployment.assets.map((a) => ({ name: a.name, lost: (before.get(a.name) ?? 100) - a.hp, hp: a.hp })),
       losses,
       lessons,
+      promotions,
     };
     s.history.push(report);
 

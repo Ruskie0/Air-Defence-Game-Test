@@ -750,3 +750,4 @@ td.link {
 .diff button.on {
   border-color: var(--accent);
 }
+.rank{color:#ffd84d;font-size:10px;letter-spacing:-1px}

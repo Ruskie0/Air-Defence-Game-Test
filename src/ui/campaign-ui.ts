@@ -1,6 +1,6 @@
 import { CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty } from '../campaign/campaign';
 import type { View3D } from '../render/view3d';
-import { CATALOG, DeployedUnit, UnitType } from '../sim/catalog';
+import { CATALOG, DeployedUnit, RANKS, UnitType, rankOf } from '../sim/catalog';
 import { bearingDeg, v3 } from '../sim/math';
 import { MAP_TYPES, MAP_TYPE_LIST, MapType } from '../sim/terrain';
 import type { World } from '../sim/world';
@@ -223,6 +223,11 @@ export class CampaignUi {
           rows.push(`Missiles <b>${rounds}</b>/${max}${u.spares ? ` +${u.spares} spare` : ''} · ${u.launchers.length} launcher${u.launchers.length > 1 ? 's' : ''}`);
         }
         if (u.type === 'CAP') rows.push(`Aircraft <b>${u.aircraft}</b>/2 · station ${(Math.hypot(u.x, u.y) / 1000).toFixed(0)} km out`);
+        if (u.xp || u.launchers.length || u.type === 'CIWS' || u.type === 'GUN' || u.type === 'LASER') {
+          const rank = rankOf(u.xp);
+          const next = RANKS[rank + 1];
+          rows.push(`Crew <b>${RANKS[rank].name} ${RANKS[rank].badge}</b> · ${u.xp ?? 0} kills${next ? `, ${next.xp - (u.xp ?? 0)} to ${next.name}` : ''}`);
+        }
         if (info.sector) rows.push(`Sector facing <b>${Math.round(u.facing).toString().padStart(3, '0')}°</b> (±60°)`);
         const reload = c.reloadCost(u);
         const actions = [
@@ -337,6 +342,7 @@ export class CampaignUi {
       </div>
       <h3>Damage</h3>
       <p>${dmg.length ? dmg.map((d) => `${d.name} −${d.lost} (now ${d.hp}%)`).join(', ') : 'No damage to the defended assets.'}</p>
+      ${r.promotions?.length ? `<h3>Promotions</h3><p class="good">${r.promotions.map(esc).join(', ')}</p>` : ''}
       ${r.losses.length ? `<h3>Equipment lost</h3><p>${r.losses.map(esc).join(', ')}</p>` : ''}
       ${r.lessons.length ? `<h3>Enemy assessment</h3><ul class="intel">${r.lessons.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
       ${

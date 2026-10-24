@@ -5,7 +5,7 @@ import { Modifiers, modifiers } from '../campaign/upgrades';
 import { Arm, Cruise, Emitter, Entity, Fate } from './entities';
 import { Fighter } from './fighter';
 import { V3, add, bearingDeg, clone, dist, norm, scale, sub, v3 } from './math';
-import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, UnitType } from './catalog';
+import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, UnitType, rankOf } from './catalog';
 import { sandboxDeployment } from './deploy';
 import { Interceptor, LR_MSL, MR_MSL, MissileSpec, SH_MSL } from './missile';
 import { CIWS_RADAR, EW_RADAR, LR_RADAR, MR_RADAR, Radar, RadarSpec, Report, SH_RADAR } from './radar';
@@ -201,10 +201,12 @@ export class World {
         return launcher;
       });
       const info = CATALOG[type];
-      const reloadS = info.reloadS! * this.mods.reloadMult;
+      const rank = rankOf(u.xp);
+      const reloadS = info.reloadS! * this.mods.reloadMult * (1 - 0.1 * rank);
       const fu = new FireUnit(type, id.code, u.uid, id.name, missile, r, launchers, info.channels!, reloadS, type === 'MR');
       fu.spares = u.spares;
       fu.hold = !!u.holdFire;
+      fu.rank = rank;
       // A launch with rounds already missing starts the reload clock straight away.
       for (const l of launchers) if (l.rounds < l.max && fu.spares > 0) l.reloadAt = reloadS;
       this.units.push(fu);
@@ -233,6 +235,7 @@ export class World {
         f.radar = r;
         const c = new Ciws(code, name, s, r, spec);
         c.auto = !u.holdFire;
+        c.rank = rankOf(u.xp);
         this.ciws.push(c);
         f.ciws = c;
         break;
@@ -434,6 +437,8 @@ export class World {
     const tr = this.tracker.get(m.trackId);
     if (tr) tr.kaUntil = this.t + 5;
     const label = tr?.label ?? tgt.name;
+    // Experienced crews squeeze a kill out of some near misses.
+    if (!kill && m.fu && m.fu.rank > 0 && this.rng.chance(0.12 * m.fu.rank)) kill = true;
     if (kill) this.killEntity(tgt, `${m.spec.name} (${label}, miss ${miss.toFixed(0)} m)`, m.unit);
     else this.log(`${m.spec.name} detonated ${miss.toFixed(0)} m from ${label}: target survived`, 'engage');
   }

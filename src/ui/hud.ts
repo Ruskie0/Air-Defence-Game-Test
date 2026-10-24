@@ -8,7 +8,7 @@ import type { World } from '../sim/world';
 import type { Radar } from '../sim/radar';
 import type { Site } from '../sim/sites';
 import type { Ciws } from '../sim/ciws';
-import { CATALOG } from '../sim/catalog';
+import { CATALOG, RANKS } from '../sim/catalog';
 import { MOBILITY, moveError, moveStatus } from '../sim/mobility';
 import { CLASS_NAME, IDENT_COLOR, IDENT_NAME, fmtTime } from './colors';
 import type { Ppi } from './ppi';
@@ -420,6 +420,11 @@ export class Hud {
       `<button data-act="armwatch" data-code="${r.code}" class="${r.armWatch ? 'on' : ''}" ${dis} title="Automatic ARM response: shut the radar down while an anti-radiation missile is closing on it">ARM auto</button>`;
   }
 
+  /** Crew rank badge after a unit's name. */
+  private badge(rank: number): string {
+    return rank ? ` <span class="rank" title="${RANKS[rank].name} crew">${RANKS[rank].badge}</span>` : '';
+  }
+
   private gunState(c: Ciws): string {
     if (!c.site.alive) return '<span class="st dead">DESTROYED</span>';
     if (c.radar.stowed) return '<span class="st emcon">MOVING</span>';
@@ -448,13 +453,13 @@ export class Hud {
       const active = u.activeTargets(w).size;
       const reload = u.launchers.filter((l) => l.reloadAt > 0 && l.site.alive);
       rows.push(`<div class="sys sel-able ${this.unitSel === u.code ? 'focus' : ''}" data-act="unit" data-code="${u.code}">
-        <div class="sys-h"><b>${u.name}</b> ${this.radarState(r.code)}${u.hold ? ' <span class="st emcon">HOLD</span>' : ''}</div>
+        <div class="sys-h"><b>${u.name}</b>${this.badge(u.rank)} ${this.radarState(r.code)}${u.hold ? ' <span class="st emcon">HOLD</span>' : ''}</div>
         <div class="sys-b">Missiles <b>${u.rounds}</b>/${u.maxRounds}${Number.isFinite(u.spares) ? ` +${u.spares}` : ''} · Channels ${active}/${u.channels}${reload.length ? ` · reload ${fmtTime(Math.min(...reload.map((l) => l.reloadAt)) - w.t)}` : ''}
         ${this.holdButton(u.code, u.hold)}${this.radarButtons(r)}</div></div>`);
     }
     if (w.ciws.length) rows.push('<h3>Point defence</h3>');
     for (const c of w.ciws) {
-      rows.push(`<div class="sys sel-able ${this.unitSel === c.code ? 'focus' : ''}" data-act="unit" data-code="${c.code}"><div class="sys-h"><b>${c.name}</b> ${this.gunState(c)}</div>
+      rows.push(`<div class="sys sel-able ${this.unitSel === c.code ? 'focus' : ''}" data-act="unit" data-code="${c.code}"><div class="sys-h"><b>${c.name}</b>${this.badge(c.rank)} ${this.gunState(c)}</div>
         <div class="sys-b">${this.gunAmmo(c)} <button data-act="ciws" data-code="${c.code}" class="${c.auto ? '' : 'on warn'}" ${c.site.alive ? '' : 'disabled'}>${c.auto ? 'Hold fire' : 'Holding'}</button></div></div>`);
     }
     const ewr = w.fielded.filter((f) => (f.unit.type === 'EWR' || f.unit.type === 'GAP') && f.radar);
@@ -582,7 +587,7 @@ export class Hud {
             : `<small class="dim" title="${esc(f.reason)}">${esc(f.reason)}</small>`,
         );
       });
-      return `<h3>${fu.name} ${this.radarState(r.code)} ${close}</h3>
+      return `<h3>${fu.name}${this.badge(fu.rank)} ${this.radarState(r.code)} ${close}</h3>
         <div class="kv">
           <span>Missiles</span><b>${fu.rounds}/${fu.maxRounds}${Number.isFinite(fu.spares) ? ` · ${fu.spares} spare` : ''} · ${ready}/${fu.launchers.length} launchers ready</b>
           <span>Reload</span><b>${reload.length ? `next in ${fmtTime(Math.min(...reload.map((l) => l.reloadAt)) - w.t)}` : 'none pending'}</b>
@@ -594,7 +599,7 @@ export class Hud {
     }
     const c = w.ciws.find((x) => x.code === code);
     if (c) {
-      return `<h3>${c.name} ${close}</h3>
+      return `<h3>${c.name}${this.badge(c.rank)} ${close}</h3>
         <div class="kv">
           <span>${Number.isFinite(c.maxAmmo) ? 'Rounds' : 'Heat'}</span><b>${this.gunAmmo(c).replace(/^\w+ /, '')}</b>
           <span>State</span><b>${!c.site.alive ? 'destroyed' : c.firing || c.lasing ? `firing at ${c.target?.name ?? ''}` : c.target ? `tracking ${c.target.name}` : c.auto ? 'automatic' : 'hold'}</b>

@@ -442,6 +442,7 @@ export class Hud {
       `<span class="chip">Kills <b>${s.kills}</b></span><span class="chip ${s.leakers ? 'bad' : ''}">Leakers <b>${s.leakers}</b></span>` +
         `<span class="chip" title="LR ${s.fired.LR} · MR ${s.fired.MR} · SHORAD ${s.fired.SH} · AAM ${s.fired.AAM} · CIWS rounds ${s.ciwsRounds}">Missiles <b>${fired}</b> ($${s.costM.toFixed(1)}M)</span>` +
         (Number.isFinite(this.w.budgetM) ? `<span class="chip" title="Campaign budget left for support calls (resupply, field repair)">Budget <b>$${Math.round(this.w.budgetM - this.w.supportSpentM)}M</b></span>` : '') +
+        (this.w.weatherId !== 'clear' ? `<span class="chip" title="${esc(this.w.weather.desc)}">${this.w.weather.name}</span>` : '') +
         (s.fratricide || s.civilian ? `<span class="chip bad">Fratricide ${s.fratricide} · Civil ${s.civilian}</span>` : ''),
     );
   }

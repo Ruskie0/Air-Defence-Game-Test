@@ -3,7 +3,8 @@ import { Ciws, GUNS } from './ciws';
 import { MoveOrder, orderMove, stepMoves } from './mobility';
 import { SupportCall, stepSupport } from './support';
 import { Modifiers, modifiers } from '../campaign/upgrades';
-import { Arm, Cruise, Emitter, Entity, Fate, GlideBomb, ReconDrone, Sighting } from './entities';
+import { WEATHER, Weather, WeatherId } from '../campaign/weather';
+import { Arm, Cruise, Drone, Emitter, Entity, Fate, GlideBomb, ReconDrone, Sighting } from './entities';
 import { Fighter } from './fighter';
 import { V3, add, bearingDeg, clone, dist, norm, polar, scale, sub, v3 } from './math';
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, UnitType, rankOf } from './catalog';
@@ -62,6 +63,8 @@ export interface WorldOptions {
   upgrades?: readonly string[];
   /** Money available for support calls during the battle ($M); unlimited in the sandbox. */
   budgetM?: number;
+  /** The day's weather (clear when omitted). */
+  weather?: WeatherId;
 }
 
 /** What a deployed unit became in this world, so the campaign can read back its state after the day. */
@@ -101,6 +104,8 @@ export class World {
   wcs: Wcs = 'TIGHT';
   /** Game-stat multipliers from campaign upgrades. */
   readonly mods: Modifiers;
+  readonly weatherId: WeatherId;
+  readonly weather: Weather;
   /** Support calls budget ($M) and what has been spent from it. */
   readonly budgetM: number;
   supportSpentM = 0;
@@ -154,6 +159,8 @@ export class World {
     this.seed = o.seed ?? MAP_SEED;
     this.rng = new Rng(this.seed);
     this.mods = modifiers(o.upgrades);
+    this.weatherId = o.weather ?? 'clear';
+    this.weather = WEATHER[this.weatherId];
     this.budgetM = o.budgetM ?? Infinity;
     this.terrain = o.terrain ?? new Terrain(MAP_SEED);
     const dep = o.deployment ?? sandboxDeployment(this.terrain);
@@ -165,6 +172,8 @@ export class World {
       s.alive = s.hp > 0;
     }
     for (const u of dep.units) this.field(u);
+    const wx = Math.pow(10, this.weather.radarLossDb / 10);
+    for (const r of this.allRadars()) if (r.spec.freqGHz >= 8) r.wxLoss = wx;
     for (const s of this.sites) {
       s.vuln *= this.mods.damageMult;
       this.startHp.set(s.name, s.hp);
@@ -406,6 +415,11 @@ export class World {
   spawn(e: Entity): void {
     if (this.spawnTag >= 0 && e.pkg < 0) e.pkg = this.spawnTag;
     if (e.side === 'red') this.stats.spawnedKind[World.tally(e)] = (this.stats.spawnedKind[World.tally(e)] ?? 0) + 1;
+    // A headwind slows the attack drones down.
+    if (e instanceof Drone && this.weather.droneSpeed !== 1) {
+      e.spd *= this.weather.droneSpeed;
+      e.cmdSpd *= this.weather.droneSpeed;
+    }
     this.entities.push(e);
     this.byId.set(e.id, e);
   }

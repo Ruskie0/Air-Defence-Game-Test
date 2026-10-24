@@ -8,6 +8,7 @@ import { CampaignUi, loadSaved } from './ui/campaign-ui';
 import { GameControl, Hud } from './ui/hud';
 import { Ppi } from './ui/ppi';
 import { Tutorial } from './ui/tutorial';
+import { WEATHER, WeatherId } from './campaign/weather';
 
 const params = new URLSearchParams(location.search);
 const seed = Number(params.get('seed')) || MAP_SEED;
@@ -81,7 +82,8 @@ function startSandbox(type?: MapType): void {
   endTraining();
   hud.campaign = null;
   terrain = sandboxTerrain(type);
-  const w = new World({ seed, terrain });
+  const wx = params.get('weather');
+  const w = new World({ seed, terrain, weather: wx && wx in WEATHER ? (wx as WeatherId) : undefined });
   w.log(`Map: ${terrain.describe()}`, 'raid');
   show(w);
   hud.setWorld(w);

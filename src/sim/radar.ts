@@ -89,6 +89,8 @@ export class Radar implements Emitter {
   readonly g0: number;
   readonly noiseW: number;
   private readonly kRadar: number;
+  /** Extra two-way loss from the weather (linear, 1 = none). */
+  wxLoss = 1;
   private readonly sll: number;
   private readonly slc: number;
   /** Entity id -> last detection time by this radar (sensor-level firm tracks). */
@@ -129,7 +131,7 @@ export class Radar implements Emitter {
 
   /** Range (m) at which a target of `rcs` gives `snrDb` with no jamming or clutter. */
   rangeFor(rcs: number, snrDb = 13): number {
-    return Math.pow((this.kRadar * rcs) / (this.noiseW * fromDb(snrDb)), 0.25);
+    return Math.pow((this.kRadar * rcs) / (this.wxLoss * this.noiseW * fromDb(snrDb)), 0.25);
   }
 
   /** Two-way-independent receive pattern relative to boresight, floored at the sidelobe level. */
@@ -191,7 +193,7 @@ export class Radar implements Emitter {
     if (!w.terrain.los(this.pos, e.pos)) return false;
     // Phased-array scan loss, two-way.
     const scanLoss = this.spec.scan.kind === 'sector' ? Math.pow(Math.cos(off * DEG), 2.5) : 1;
-    const S = (this.kRadar * scanLoss * e.rcs) / (R * R * R * R);
+    const S = (this.kRadar * scanLoss * e.rcs) / (this.wxLoss * R * R * R * R);
     const J = this.jamming(w, az, el);
     const C = this.clutter(w, e, R);
     let sinr = S / (this.noiseW + J + C);

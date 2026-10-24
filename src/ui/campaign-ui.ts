@@ -8,6 +8,7 @@ import type { Ppi } from './ppi';
 import { UPGRADES, UPGRADE_ORDER, UpgradeId } from '../campaign/upgrades';
 import { objectiveDesc, objectiveName } from '../campaign/objectives';
 import { EVENTS } from '../campaign/events';
+import { DEEP_STRIKES, DeepStrikeId, deepStrike, deepStrikeError } from '../campaign/deepstrike';
 
 const SAVE_KEY = 'air-defence-campaign-v1';
 
@@ -211,6 +212,20 @@ export class CampaignUi {
       : s.eventResult
         ? `<div class="event dim">${esc(s.eventResult)}</div>`
         : '';
+    const strikes = s.deepStrike
+      ? `<div class="event ${s.deepStrike.ok ? '' : 'dim'}">${esc(s.deepStrike.text)}</div>`
+      : (Object.keys(DEEP_STRIKES) as DeepStrikeId[])
+          .map((id) => {
+            const d = DEEP_STRIKES[id];
+            const why = deepStrikeError(c, id);
+            const locked = s.day < d.unlockDay;
+            return `<div class="shop-item ${locked ? 'locked' : ''}">
+              <div class="shop-h"><b>${d.name}</b><span class="mono">${money(d.costM)} · ${Math.round(d.chance * 100)}%</span></div>
+              <div class="dim">${esc(d.desc)}</div>
+              <div class="row">${locked ? `<span class="st emcon">Day ${d.unlockDay}</span>` : `<button data-cui="deepstrike" data-id="${id}" ${why ? 'disabled' : ''} title="${esc(why ?? `${Math.round(d.chance * 100)}% chance. If it works, today's packages of this kind are cut and fewer come for two more days`)}">Strike</button>`}</div>
+            </div>`;
+          })
+          .join('');
     $('plan-left').innerHTML = `
       ${event}
       <h3>Intelligence briefing, day ${s.day}</h3>
@@ -218,6 +233,8 @@ export class CampaignUi {
       <ul class="intel">${intel.map((l) => `<li>${esc(l)}</li>`).join('') || '<li class="dim">Nothing reported.</li>'}</ul>
       <h3>Bonus objectives</h3>
       <ul class="intel">${(s.objectives ?? []).map((o) => `<li><b>${esc(objectiveName(o))}</b> <span class="mono">+${money(o.rewardM)}</span>: ${esc(objectiveDesc(o))}</li>`).join('') || '<li class="dim">None today.</li>'}</ul>
+      <h3>Deep strike <span class="dim">one a day, before the battle</span></h3>
+      <div class="shop">${strikes}</div>
       ${last?.lessons.length ? `<h3>Enemy assessment</h3><ul class="intel">${last.lessons.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
       <h3>Procurement <span class="dim">budget ${money(s.money)}</span></h3>
       <div class="shop">${shop}</div>
@@ -447,6 +464,12 @@ export class CampaignUi {
       case 'event':
         if (!c.chooseEvent(Number(d.i))) return;
         break;
+      case 'deepstrike': {
+        const r = deepStrike(c, d.id as DeepStrikeId);
+        if (!r) return;
+        this.note = r;
+        break;
+      }
       case 'upgrade':
         if (!c.upgrade(d.id as UpgradeId)) return;
         this.note = `${UPGRADES[d.id as UpgradeId].name} bought.`;

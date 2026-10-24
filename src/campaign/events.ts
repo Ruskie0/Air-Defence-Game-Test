@@ -2,6 +2,7 @@ import { CATALOG, newUnit } from '../sim/catalog';
 import { Rng } from '../sim/rng';
 import type { Campaign } from './campaign';
 import { planDay } from './raidgen';
+import { WEATHER } from './weather';
 
 /** Between-day events: a situation with two choices, shown on the planning screen. */
 export type EventId = 'arms' | 'intel' | 'strike' | 'allies' | 'preempt' | 'press';
@@ -96,7 +97,7 @@ export const EVENTS: Record<EventId, EventDef> = {
     ok: (c) => c.s.day >= 3,
     apply: (c, i) => {
       if (i === 1) return 'No strike tonight.';
-      c.s.plan = planDay(c.s.day, c.s.seed + 1, c.s.enemy, c.s.nextPkg, c.layout.rot, c.diff.threat * 0.75);
+      c.s.plan = planDay(c.s.day, c.s.seed + 1, c.s.enemy, c.s.nextPkg, c.layout.rot, c.diff.threat * 0.75, WEATHER[c.s.weather ?? 'clear'].noDrones);
       c.s.nextPkg += c.s.plan.length;
       return 'The strike went in: the enemy has less to throw at us today. Read the new briefing.';
     },

@@ -12,6 +12,7 @@ import { CLASSIC_LAYOUT, MapLayout, MapType, Terrain, legacyLayout, randomLayout
 import { MAP_SEED } from '../sim/world';
 import { World } from '../sim/world';
 import { doctrineOf, pickDoctrine } from './doctrine';
+import { award, battleMedals } from './medals';
 import { EnemyModel, PKG, PkgKind, PlannedPkg, SECTOR_NAMES, newEnemy, planDay, sectorOf, toRaids } from './raidgen';
 
 export const CAMPAIGN_DAYS = 10;
@@ -49,6 +50,8 @@ export interface DayReport {
   lessons: string[];
   /** Crews that went up a rank. */
   promotions?: string[];
+  /** Career medals earned in this battle. */
+  medals?: string[];
   /** Spent on resupply convoys and field repairs during the battle ($M). */
   supportM?: number;
   /** Bonus objectives and whether they were met. */
@@ -590,6 +593,14 @@ export class Campaign {
     if (airbase.hp <= 0) s.over = { won: false, reason: 'The airbase was destroyed. The defence has failed.' };
     else if (s.civilLosses >= CIVIL_LIMIT) s.over = { won: false, reason: `${s.civilLosses} civil airliners shot down. You have been relieved of command.` };
     else if (s.day >= CAMPAIGN_DAYS) s.over = { won: true, reason: `You held the airbase for ${CAMPAIGN_DAYS} days.` };
+    const medals = battleMedals(w);
+    if (s.day >= 3 && report.leakers === 0 && report.kills > 0) medals.push(award('clean') ?? '');
+    if (s.over?.won) {
+      medals.push(award('victory') ?? '');
+      if (s.difficulty === 'hard') medals.push(award('veteran') ?? '');
+      if (s.civilLosses === 0 && s.history.every((r) => !r.fratricide)) medals.push(award('hands') ?? '');
+    }
+    report.medals = medals.filter(Boolean);
     if (!s.over) {
       s.day++;
       s.money += income;

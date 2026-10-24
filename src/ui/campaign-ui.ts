@@ -1,4 +1,5 @@
 import { loadBest } from '../campaign/laststand';
+import { MEDALS, MedalId, earnedMedals } from '../campaign/medals';
 import { CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty } from '../campaign/campaign';
 import type { View3D } from '../render/view3d';
 import { CATALOG, DeployedUnit, RANKS, UnitType, rankOf } from '../sim/catalog';
@@ -88,6 +89,7 @@ export class CampaignUi {
     document.body.dataset.mode = 'menu';
     const saved = loadSaved();
     const best = loadBest();
+    const got = earnedMedals();
     $('menu-body').innerHTML = `
       <h2>AIR DEFENCE</h2>
       <p>Command the integrated air defence of an airbase, its command and reporting centre (CRC) and a power plant. Every radar, missile and gun round is simulated.</p>
@@ -122,6 +124,12 @@ export class CampaignUi {
             <button data-cui="map" data-map="" class="${this.mapPick ? '' : 'on'}"><b>Random</b><small>Any of the five</small></button>
             ${MAP_TYPE_LIST.map((m) => `<button data-cui="map" data-map="${m}" class="${this.mapPick === m ? 'on' : ''}" title="${esc(MAP_TYPES[m].blurb)}"><b>${MAP_TYPES[m].name}</b><small>${esc(MAP_TYPES[m].blurb)}</small></button>`).join('')}
           </div>
+        </div>
+        <div class="big-group">
+          <div class="big-h"><b>Medals ${Object.keys(got).length}/${Object.keys(MEDALS).length}</b><small>Career awards, kept across every campaign and Last Stand run.</small></div>
+          <div class="medals">${(Object.keys(MEDALS) as MedalId[])
+            .map((id) => `<span class="medal ${got[id] ? 'got' : ''}" title="${esc(MEDALS[id].desc)}${got[id] ? ` Earned ${got[id]}.` : ''}">${got[id] ? '★' : '☆'} ${esc(MEDALS[id].name)}</span>`)
+            .join('')}</div>
         </div>
       </div>
       <p class="dim">Press <b>?</b> in the top bar at any time for how the systems work.</p>`;
@@ -397,6 +405,7 @@ export class CampaignUi {
       }
       <h3>Damage</h3>
       <p>${dmg.length ? dmg.map((d) => `${d.name} −${d.lost} (now ${d.hp}%)`).join(', ') : 'No damage to the defended assets.'}</p>
+      ${r.medals?.length ? `<h3>Medals</h3><p class="good">${r.medals.map(esc).join(', ')}</p>` : ''}
       ${r.promotions?.length ? `<h3>Promotions</h3><p class="good">${r.promotions.map(esc).join(', ')}</p>` : ''}
       ${r.losses.length ? `<h3>Equipment lost</h3><p>${r.losses.map(esc).join(', ')}</p>` : ''}
       ${r.lessons.length ? `<h3>Enemy assessment</h3><ul class="intel">${r.lessons.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}

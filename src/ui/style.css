@@ -847,3 +847,23 @@ td.link {
     grid-template-columns: 1fr;
   }
 }
+
+/* Career medals on the main menu. */
+.medals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.medal {
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  color: var(--dim);
+  font-size: 12px;
+  cursor: help;
+}
+.medal.got {
+  color: var(--warn);
+  border-color: var(--warn);
+}

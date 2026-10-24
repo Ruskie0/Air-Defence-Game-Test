@@ -4,6 +4,7 @@ import { MapType, typeForSeed } from '../sim/terrain';
 import type { World } from '../sim/world';
 import { Campaign } from './campaign';
 import { DOCTRINES } from './doctrine';
+import { award, battleMedals } from './medals';
 import { planDay, toRaids } from './raidgen';
 
 /**
@@ -67,6 +68,8 @@ export const WAVE_PAY_M = 25;
 export const WAVE_SPARES = 2;
 /** Seconds after a wave's last package before the next wave comes anyway. */
 export const WAVE_MAX_S = 900;
+/** Extra support budget for calling the next wave in while this one is still in the air. */
+export const EARLY_BONUS_M = 15;
 
 export class LastStand {
   readonly c: Campaign;
@@ -79,6 +82,9 @@ export class LastStand {
   offer: Card[] | null = null;
   over: string | null = null;
   w: World;
+  /** Waves called in early this run. */
+  early = 0;
+  private callNow = false;
 
   constructor(seed: number, mapType: MapType = typeForSeed(seed)) {
     this.c = Campaign.create(seed, 'normal', mapType);
@@ -122,14 +128,34 @@ export class LastStand {
     const raids = w.scenario.raids;
     const last = Math.max(...raids.map((r) => r.t));
     const quiet = w.pendingCount === 0 && !w.entities.some((e) => e.alive && e.side === 'red' && e.munition);
-    if (!raids.every((r) => r.launched) || !((quiet && w.t > last + 90) || w.t > last + WAVE_MAX_S)) return false;
+    if (!raids.every((r) => r.launched) || !(this.callNow || (quiet && w.t > last + 90) || w.t > last + WAVE_MAX_S)) return false;
     this.held = this.wave;
     w.budgetM += WAVE_PAY_M;
+    if (this.callNow) {
+      this.callNow = false;
+      this.early++;
+      w.budgetM += EARLY_BONUS_M;
+      w.log(`Next wave called in early: +$${EARLY_BONUS_M}M`, 'info');
+      if (this.early >= 3) award('bravado', w);
+    }
+    battleMedals(w);
+    if (this.held >= 5) award('wave5', w);
+    if (this.held >= 10) award('wave10', w);
     // The depot sends a little forward after every wave held.
     for (const fu of w.units) if (fu.launchers.some((l) => l.site.alive)) fu.spares = (Number.isFinite(fu.spares) ? fu.spares : 0) + WAVE_SPARES;
     this.saveBest();
     this.offer = this.deal();
     return true;
+  }
+
+  /** Whether the player can call the next wave in now: every package of this one has launched. */
+  get canCallEarly(): boolean {
+    return !this.over && !this.offer && this.w.scenario.raids.every((r) => r.launched);
+  }
+
+  /** Count this wave as held now, for a bonus, while what is left of it is still flying. */
+  callEarly(): void {
+    if (this.canCallEarly) this.callNow = true;
   }
 
   /** Three different reinforcements for the wave just held. */

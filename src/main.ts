@@ -1,3 +1,4 @@
+import { Tempo } from './sim/tempo';
 import './ui/style.css';
 import { CAMPAIGN_DAYS, Campaign } from './campaign/campaign';
 import { View3D } from './render/view3d';
@@ -191,14 +192,7 @@ else if (mode === 'campaign') {
   },
 };
 
-/** Nothing hostile, unknown or pending in the picture and no interceptor in the air: a stretch to skip. */
-function quiet(w: World): boolean {
-  if (w.missiles.length) return false;
-  return !w.tracker.tracks.some((t) => t.confirmed && !t.dropped && t.ident !== 'FRD' && t.ident !== 'NEU');
-}
-
-const QUIET_SPEED = 16;
-let calmSince = Infinity;
+const tempo = new Tempo();
 const MAX_STEPS_PER_FRAME = 64;
 let acc = 0;
 let last = performance.now();
@@ -207,12 +201,12 @@ function frame(now: number): void {
   const real = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (running && !ctl.paused) {
-    // A few quiet seconds in a row before speeding up, so a flickering contact does not toggle it.
-    calmSince = quiet(world) ? Math.min(calmSince, world.t) : Infinity;
-    const ff = !!ctl.skipQuiet && !tutorial && world.t - calmSince > 3;
-    if (ctl.fastForward && !ff) world.log('Contact: back to normal speed', 'alert');
-    ctl.fastForward = ff;
-    acc += real * (ff ? Math.max(ctl.speed, QUIET_SPEED) : ctl.speed);
+    // Auto tempo: fast while the nearest threat is minutes out, back to the chosen speed as it closes.
+    const lv = ctl.skipQuiet && !tutorial ? tempo.update(world) : 1;
+    if ((ctl.tempo ?? 1) >= 8 && lv <= 2) world.log('Contact closing: back to normal speed', 'alert');
+    ctl.tempo = lv;
+    ctl.fastForward = lv > ctl.speed;
+    acc += real * Math.max(ctl.speed, lv);
     let n = 0;
     while (acc >= DT && n < MAX_STEPS_PER_FRAME) {
       world.step(DT);

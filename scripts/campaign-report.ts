@@ -1,5 +1,6 @@
 // Headless campaign run with a simple automatic commander, for balancing the economy and the raids.
 // Usage: npm run campaign -- [seed] [--verbose]
+import { Tempo } from '../src/sim/tempo';
 import { Campaign, Difficulty } from '../src/campaign/campaign';
 import { PKG, SECTOR_NAMES, sectorOf } from '../src/campaign/raidgen';
 import { CATALOG, UnitType } from '../src/sim/catalog';
@@ -102,8 +103,12 @@ while (!c.s.over) {
   const last = Math.max(0, ...w.scenario.raids.map((r) => r.t));
   const scoot = !process.argv.includes('--no-scoot');
   let cb = 0;
+  let realS = 0;
+  const tempo = new Tempo();
   while (!w.scenario.done && w.t < last + 1200) {
     w.step();
+    // Real time a player at 1x would spend on this battle with auto tempo on.
+    realS += 1 / 60 / tempo.update(w);
     // Shoot and scoot: move a located battery out from under the strike once its missiles in the air are
     // done (they need its radar), with time left to get clear. The LR battery takes too long to pack: it stays
     // and fights for itself.
@@ -126,7 +131,7 @@ while (!c.s.over) {
     `\nDay ${day}  budget left after shopping $${Math.round(spent)}M  bought: ${bought.join(', ') || 'nothing'}` +
       `\n  raid: ${plan}` +
       `\n  counter-battery: ${w.exposure.located.map((l) => `${l.unit}@${Math.round(l.t)}s${l.moved ? ' (moved)' : ''}`).join(', ') || 'none'}` +
-      `\n  kills ${r.kills}, leakers ${r.leakers}, missiles ${r.missilesFired} ($${r.missileCostM}M), civil ${r.civilian}, fratricide ${r.fratricide}, ${Math.round(w.t / 60)} min` +
+      `\n  kills ${r.kills}, leakers ${r.leakers}, missiles ${r.missilesFired} ($${r.missileCostM}M), civil ${r.civilian}, fratricide ${r.fratricide}, ${Math.round(w.t / 60)} min (${Math.round(realS / 60)} real at auto tempo)` +
       `\n  damage: ${dmg}${r.losses.length ? `\n  lost: ${r.losses.join(', ')}` : ''}` +
       (r.front?.length ? `\n  front: ${r.front.join(' / ')}` : '') +
       (verbose && r.lessons.length ? `\n  lessons: ${r.lessons.join(' / ')}` : '') +

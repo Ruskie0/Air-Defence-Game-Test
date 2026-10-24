@@ -82,6 +82,8 @@ export abstract class Entity {
   munition = false;
   /** A decoy: looks like the real thing but has no warhead. */
   decoy = false;
+  /** An enemy reconnaissance drone (it photographs our positions). */
+  recon = false;
   warhead: Warhead | null = null;
   target: V3 | null = null;
   targetName = '';
@@ -514,6 +516,76 @@ export class Soj extends Air {
     if (hdist(this.pos, p) < 3000) this.leg = 1 - this.leg;
     this.steer(p.x, p.y, dt);
     this.integrate(w, dt);
+  }
+}
+
+/** A ground position the enemy has seen (unit id, where, what). */
+export interface Sighting {
+  uid: number;
+  x: number;
+  y: number;
+  name: string;
+}
+
+/**
+ * Enemy reconnaissance drone: flies high to a stand-off orbit about 32 km from the airbase, photographs every
+ * unit it can see within 40 km, then flies home. Its pictures only count if it gets away.
+ */
+export class ReconDrone extends Air {
+  readonly kind = 'drone' as const;
+  readonly side = 'red' as const;
+  readonly photos = new Map<number, Sighting>();
+  private readonly orbit: V3;
+  private readonly home: V3;
+  private phase: 'inbound' | 'orbit' | 'egress' = 'inbound';
+  private orbitUntil = 0;
+  private nextPhoto = 0;
+
+  constructor(name: string, start: V3, orbit: V3) {
+    super(name, start, bearingDeg(start, orbit), 70);
+    this.home = clone(start);
+    this.orbit = clone(orbit);
+    this.recon = true;
+    this.rcs = 0.3;
+    this.hitRadius = 4;
+    this.cmdAlt = 9000;
+    this.turnRate = 3;
+  }
+
+  update(w: World, dt: number): void {
+    if (this.phase === 'inbound') {
+      this.steer(this.orbit.x, this.orbit.y, dt);
+      if (hdist(this.pos, this.orbit) < 4000) {
+        this.phase = 'orbit';
+        this.orbitUntil = w.t + 300;
+      }
+    } else if (this.phase === 'orbit') {
+      // Circle the orbit point by steering a little ahead along the tangent.
+      const a = bearingDeg(this.orbit, this.pos) + 25;
+      const p = add(this.orbit, polar(a, 6000));
+      this.steer(p.x, p.y, dt);
+      if (w.t >= this.orbitUntil) this.phase = 'egress';
+    } else {
+      this.steer(this.home.x, this.home.y, dt);
+      if (hdist(this.pos, this.home) < 5000) {
+        w.reconHome(this);
+        return;
+      }
+    }
+    if (this.phase !== 'inbound' && w.t >= this.nextPhoto) {
+      this.nextPhoto = w.t + 5;
+      for (const f of w.fielded) {
+        const site = f.sites[0];
+        if (!site?.alive || hdist(site.pos, this.pos) > 40000 || !w.terrain.los(this.pos, site.pos)) continue;
+        if (!this.photos.has(f.unit.uid)) this.photos.set(f.unit.uid, { uid: f.unit.uid, x: Math.round(site.pos.x), y: Math.round(site.pos.y), name: w.unitName(f) });
+      }
+    }
+    this.integrate(w, dt);
+  }
+
+  /** Photographs so far, as the enemy would get them if the drone escaped now. */
+  get seen(): Sighting[] {
+    return [...this.photos.values()];
   }
 }
 

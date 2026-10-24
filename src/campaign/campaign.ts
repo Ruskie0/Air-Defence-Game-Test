@@ -2,6 +2,8 @@ import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, RANKS, ROUND_COST, 
 import { CAP_RADIUS, DEPLOY_RADIUS, nearestFree, placeError } from '../sim/deploy';
 import { finishMoves } from '../sim/mobility';
 import { UPGRADES, UpgradeId } from './upgrades';
+import { DayObjective, objectiveName, objectiveStatus, pickObjectives } from './objectives';
+import { ReconDrone } from '../sim/entities';
 import { hdist, v3 } from '../sim/math';
 import { CLASSIC_LAYOUT, MapLayout, MapType, Terrain, legacyLayout, randomLayout, typeForSeed } from '../sim/terrain';
 import { MAP_SEED } from '../sim/world';
@@ -43,6 +45,8 @@ export interface DayReport {
   lessons: string[];
   /** Crews that went up a rank. */
   promotions?: string[];
+  /** Bonus objectives and whether they were met. */
+  objectives?: { name: string; rewardM: number; done: boolean }[];
 }
 
 export interface CampaignState {
@@ -65,6 +69,8 @@ export interface CampaignState {
   difficulty?: Difficulty;
   /** Upgrades bought (UpgradeId); absent in old saves. */
   upgrades?: string[];
+  /** Today's bonus objectives. */
+  objectives?: DayObjective[];
 }
 
 /** Where new units go before the player moves them, in order of preference. */
@@ -123,6 +129,8 @@ export class Campaign {
       // Saves from before decoy drones and upgrades.
       s.enemy.kindW.decoys ??= 0.8;
       s.upgrades ??= [];
+      s.enemy.kindW.recon ??= 1;
+      s.objectives ??= pickObjectives(s.plan, s.day, s.seed);
       return new Campaign(s);
     } catch {
       return null;
@@ -352,6 +360,12 @@ export class Campaign {
   replan(): void {
     this.s.plan = planDay(this.s.day, this.s.seed, this.s.enemy, this.s.nextPkg, this.layout.rot, this.diff.threat);
     this.s.nextPkg += this.s.plan.length;
+    this.s.objectives = pickObjectives(this.s.plan, this.s.day, this.s.seed);
+  }
+
+  /** Units an enemy recon drone photographed that are still where it saw them. */
+  spotted(u: DeployedUnit): boolean {
+    return !!this.s.enemy.known?.some((k) => k.uid === u.uid && Math.hypot(k.x - u.x, k.y - u.y) < 400);
   }
 
   /** Intel summary lines for the briefing. */
@@ -361,7 +375,8 @@ export class Campaign {
       .map((p) => {
         const def = PKG[p.kind];
         const when = p.t < 120 ? 'early' : p.t < 500 ? 'mid-raid' : 'late';
-        return `${def.name} from the ${SECTOR_NAMES[sectorOf(p.bearing)]} (${when}): ${def.describe(p.size)}`;
+        const aimed = p.aims ? `, aimed at ${p.aims.length > 1 ? `${p.aims.length} of our positions` : 'one of our positions'} their recon photographed` : '';
+        return `${def.name} from the ${SECTOR_NAMES[sectorOf(p.bearing)]} (${when}): ${def.describe(p.size)}${aimed}`;
       });
     const missed = this.s.plan.filter((p) => !p.reported).length;
     if (missed) lines.push(`Intel coverage is incomplete: expect ${missed === 1 ? 'one package' : 'more packages'} we have not seen.`);
@@ -447,7 +462,7 @@ export class Campaign {
     const lessons: string[] = [];
     const clamp = (x: number): number => Math.min(4, Math.max(0.3, x));
     for (const p of s.plan) {
-      if (p.kind === 'dark' || p.kind === 'decoys') continue;
+      if (p.kind === 'dark' || p.kind === 'decoys' || p.kind === 'recon') continue;
       const hits = w.pkgHits.get(p.id) ?? 0;
       const sec = sectorOf(p.bearing);
       if (hits > 0) {
@@ -458,6 +473,13 @@ export class Campaign {
         s.enemy.kindW[p.kind] = clamp(s.enemy.kindW[p.kind] * 0.92);
         s.enemy.axisW[sec] = clamp(s.enemy.axisW[sec] * 0.9);
       }
+    }
+    // Recon that got home tells tomorrow's strike planners where our units are.
+    for (const e of w.entities) if (e.alive && e instanceof ReconDrone) for (const p of e.seen) w.reconSeen.set(p.uid, p);
+    s.enemy.known = [...w.reconSeen.values()];
+    if (s.plan.some((p) => p.kind === 'recon')) {
+      s.enemy.kindW.recon = clamp((s.enemy.kindW.recon ?? 1) * (s.enemy.known.length ? 1.2 : 0.85));
+      if (s.enemy.known.length) lessons.push(`Enemy recon photographed ${s.enemy.known.length} of our positions. Move those units before tomorrow or expect strikes on them.`);
     }
     // Decoys work if they drew missiles.
     if (s.plan.some((p) => p.kind === 'decoys')) {
@@ -473,7 +495,9 @@ export class Campaign {
     }
 
     s.civilLosses += w.stats.civilian;
-    const income = this.income();
+    const objectives = (s.objectives ?? []).map((o) => ({ name: objectiveName(o), rewardM: o.rewardM, done: objectiveStatus(o, w, true) === 'done' }));
+    const bonus = objectives.reduce((t, o) => t + (o.done ? o.rewardM : 0), 0);
+    const income = this.income() + bonus;
     const report: DayReport = {
       day: s.day,
       kills: w.stats.kills,
@@ -488,6 +512,7 @@ export class Campaign {
       losses,
       lessons,
       promotions,
+      objectives,
     };
     s.history.push(report);
 

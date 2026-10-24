@@ -80,7 +80,9 @@ export function autoEngage(w: World): void {
   }
   // Commit CAP on hostile aircraft and jammers well forward of the SAM belt.
   for (const tr of w.tracker.tracks) {
-    if (!tr.confirmed || tr.dropped || tr.ident !== 'HOS' || (tr.cls !== 'FW' && tr.cls !== 'JAM')) continue;
+    // High drones are recon platforms, worth a fighter too.
+    const highDrone = tr.cls === 'UAV' && tr.pos.z > 5000;
+    if (!tr.confirmed || tr.dropped || tr.ident !== 'HOS' || (tr.cls !== 'FW' && tr.cls !== 'JAM' && !highDrone)) continue;
     if (Math.hypot(tr.pos.x, tr.pos.y) < 25000) continue;
     if (w.fighters.some((f) => f.state === 'intercept' && f.targetTrackId === tr.id)) continue;
     const free = w.fighters

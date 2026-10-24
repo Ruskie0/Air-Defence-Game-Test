@@ -268,8 +268,8 @@ export class Tracker {
     else if (tr.hits >= 6 && w.t - tr.born > 2.5 && (lo > 1300 || (alt > 22000 && lo > 600))) cls = 'TBM';
     else if (tr.hits >= 6 && w.t - tr.born > 2.5 && lo > 520) cls = 'MSL';
     else if (hi > 520) cls = tr.cls === 'TBM' || tr.cls === 'MSL' ? tr.cls : 'UNK';
-    // Nothing with wings flies below ~75 m/s: slower than that and low is a drone.
-    else if (spd < 75 && hi < 140 && alt < 6000) cls = 'UAV';
+    // Nothing with wings flies below ~75 m/s: slower than that is a drone, low (attack) or high (recon).
+    else if (spd < 75 && hi < 140) cls = 'UAV';
     else if (agl < 350 && spd > 150 && tr.velSigma < 80 && tr.rcsDb < -6) cls = 'CM';
     else if (tr.iffM3 >= 2 && alt > 6000 && lo > 150 && hi < 320) cls = 'CIV';
     else if (lo > 75 && tr.velSigma < 60) cls = 'FW';

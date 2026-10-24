@@ -1,8 +1,9 @@
 import { Rng } from '../sim/rng';
 import type { Raid } from '../sim/scenario';
-import { spawnBombers, spawnCruise, spawnDarkAirliner, spawnDecoyDrones, spawnDrones, spawnSead, spawnSoj, spawnTbm } from '../sim/threats';
+import type { Sighting } from '../sim/entities';
+import { type Target, spawnBombers, spawnCruise, spawnDarkAirliner, spawnDecoyDrones, spawnDrones, spawnRecon, spawnSead, spawnSoj, spawnTbm } from '../sim/threats';
 
-export type PkgKind = 'drones' | 'decoys' | 'cruise' | 'sead' | 'soj' | 'bomber' | 'tbm' | 'dark';
+export type PkgKind = 'drones' | 'decoys' | 'recon' | 'cruise' | 'sead' | 'soj' | 'bomber' | 'tbm' | 'dark';
 
 /** One enemy package in a day's raid plan. */
 export interface PlannedPkg {
@@ -15,6 +16,8 @@ export interface PlannedPkg {
   t: number;
   /** Whether intel reported this package in the briefing. */
   reported: boolean;
+  /** Aimed at positions an enemy recon drone photographed, instead of the usual targets. */
+  aims?: Sighting[];
 }
 
 /** What the enemy has learned: which kinds of attack and which approach sectors have worked. */
@@ -22,6 +25,8 @@ export interface EnemyModel {
   kindW: Record<PkgKind, number>;
   /** Weight per 45° approach sector, index = round(bearing / 45) % 8. */
   axisW: number[];
+  /** Our positions its recon drones photographed yesterday: today's strikes go for them. */
+  known?: Sighting[];
 }
 
 interface PkgDef {
@@ -32,7 +37,7 @@ interface PkgDef {
   size: (day: number, rng: Rng) => number;
   /** Approach sectors this kind may use. */
   sectors: number[];
-  spawn: (w: Parameters<Raid['spawn']>[0], bearing: number, size: number) => void;
+  spawn: (w: Parameters<Raid['spawn']>[0], bearing: number, size: number, aims?: Target[]) => void;
   describe: (size: number) => string;
 }
 
@@ -40,7 +45,7 @@ export const PKG: Record<PkgKind, PkgDef> = {
   drones: {
     name: 'Drone swarm', cost: (n) => 1 + n * 0.9, minDay: 1, sectors: [0, 1, 2, 3, 4, 5, 6, 7],
     size: (d, r) => Math.min(14, 4 + d + r.int(0, 2)),
-    spawn: (w, b, n) => spawnDrones(w, n, b, 50000),
+    spawn: (w, b, n, aims) => spawnDrones(w, n, b, 50000, aims),
     describe: (n) => `${n} one-way attack drones, low and slow`,
   },
   decoys: {
@@ -49,10 +54,16 @@ export const PKG: Record<PkgKind, PkgDef> = {
     spawn: (w, b, n) => spawnDecoyDrones(w, n, b, 50000),
     describe: (n) => `${n} drones that our intel thinks are mostly unarmed decoys, sent to drain our missiles`,
   },
+  recon: {
+    name: 'Recon drone', cost: () => 3, minDay: 2, sectors: [0, 1, 7, 2, 6],
+    size: (d) => (d >= 6 ? 2 : 1),
+    spawn: (w, b, n) => spawnRecon(w, n, b),
+    describe: (n) => `${n > 1 ? `${n} high-flying reconnaissance drones` : 'a high-flying reconnaissance drone'} orbiting about 32 km out to photograph our positions. If it gets home, tomorrow's strikes will go for what it saw`,
+  },
   cruise: {
     name: 'Cruise missiles', cost: (n) => 2 + n * 2, minDay: 1, sectors: [0, 2, 3, 4, 5, 6],
     size: (d, r) => Math.min(8, 2 + Math.floor(d / 2) + r.int(0, 1)),
-    spawn: (w, b, n) => spawnCruise(w, n, b, 130000),
+    spawn: (w, b, n, aims) => spawnCruise(w, n, b, 130000, aims),
     describe: (n) => `${n} terrain-following cruise missiles`,
   },
   sead: {
@@ -76,7 +87,7 @@ export const PKG: Record<PkgKind, PkgDef> = {
   tbm: {
     name: 'Ballistic missiles', cost: (n) => 4 + n * 4, minDay: 5, sectors: [7, 0, 1],
     size: (d, r) => Math.min(6, 2 + Math.floor((d - 5) / 2) + r.int(0, 1)),
-    spawn: (w, b, n) => spawnTbm(w, n, b),
+    spawn: (w, b, n, aims) => spawnTbm(w, n, b, aims),
     describe: (n) => `${n} short-range ballistic missiles`,
   },
   dark: {
@@ -95,7 +106,7 @@ export function newEnemy(rot = 0): EnemyModel {
   const rel = [1.3, 1, 1, 0.8, 0.8, 0.7, 0.9, 1];
   const k = sectorOf(rot);
   return {
-    kindW: { drones: 1.4, decoys: 0.8, cruise: 1, sead: 1, soj: 0.8, bomber: 0.9, tbm: 1, dark: 0.5 },
+    kindW: { drones: 1.4, decoys: 0.8, recon: 1, cruise: 1, sead: 1, soj: 0.8, bomber: 0.9, tbm: 1, dark: 0.5 },
     axisW: rel.map((_x, a) => rel[(a - k + 8) % 8]),
   };
 }
@@ -120,13 +131,21 @@ export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: n
     // Weighted pick of a kind, then of an approach sector that kind can use.
     // At most two decoy packages a day: they are there to thin out a real attack, not to be the attack.
     const decoys = out.filter((p) => p.kind === 'decoys').length;
-    const kind = pick(rng, affordable, (k) => (k === 'decoys' && decoys >= 2 ? 0 : enemy.kindW[k]));
+    const recon = out.some((p) => p.kind === 'recon');
+    const kind = pick(rng, affordable, (k) => ((k === 'decoys' && decoys >= 2) || (k === 'recon' && recon) ? 0 : enemy.kindW[k]));
     const def = PKG[kind];
     const sector = (pick(rng, def.sectors, (s) => enemy.axisW[(s + k) % 8]) + k) % 8;
     const bearing = (sector * 45 + rng.range(-18, 18) + 360) % 360;
     const size = def.size(day, rng);
     budget -= def.cost(size);
     out.push({ id: firstId + out.length, kind, bearing, size, t: 0, reported: false });
+  }
+  // Strike what yesterday's recon saw, radars first.
+  const known = [...(enemy.known ?? [])].sort((a, b) => Number(/radar|SAM/.test(b.name)) - Number(/radar|SAM/.test(a.name)));
+  if (known.length) {
+    for (const p of out) {
+      if ((p.kind === 'cruise' || p.kind === 'tbm' || p.kind === 'drones') && rng.chance(0.65)) p.aims = known.slice(0, Math.max(1, p.size));
+    }
   }
   if (day >= PKG.dark.minDay && rng.chance(0.45)) {
     out.push({ id: firstId + out.length, kind: 'dark', bearing: 270, size: 1, t: 0, reported: false });
@@ -161,12 +180,12 @@ export function toRaids(plan: PlannedPkg[]): Raid[] {
     const def = PKG[p.kind];
     return {
       name: `${def.name} from the ${SECTOR_NAMES[sectorOf(p.bearing)]}`,
-      desc: def.describe(p.size),
+      desc: def.describe(p.size) + (p.aims ? ', aimed at our positions their recon photographed' : ''),
       t: p.t,
       launched: false,
       pkg: p.id,
       unreported: !p.reported,
-      spawn: (w) => def.spawn(w, p.bearing, p.size),
+      spawn: (w) => def.spawn(w, p.bearing, p.size, p.aims),
     };
   });
 }

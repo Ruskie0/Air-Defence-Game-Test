@@ -9,6 +9,7 @@ import type { Radar } from '../sim/radar';
 import type { Site } from '../sim/sites';
 import type { Ciws } from '../sim/ciws';
 import { CATALOG, RANKS } from '../sim/catalog';
+import { DayObjective, objectiveDesc, objectiveName, objectiveStatus } from '../campaign/objectives';
 import { MOBILITY, moveError, moveStatus } from '../sim/mobility';
 import { CLASS_NAME, IDENT_COLOR, IDENT_NAME, fmtTime } from './colors';
 import type { Ppi } from './ppi';
@@ -29,7 +30,7 @@ const esc = (s: string): string => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', 
 export class Hud {
   private w: World;
   /** Campaign mode hides the sandbox spawn panel and offers to end the day once the raids are over. */
-  campaign: { day: number; days: number; onEndDay: () => void } | null = null;
+  campaign: { day: number; days: number; objectives: DayObjective[]; onEndDay: () => void } | null = null;
   private readonly view: View3D;
   private readonly ppi: Ppi;
   private readonly ctl: GameControl;
@@ -447,7 +448,16 @@ export class Hud {
 
   private updateSystems(): void {
     const w = this.w;
-    const rows: string[] = ['<h3>Fire units</h3>'];
+    const rows: string[] = [];
+    if (this.campaign?.objectives.length) {
+      rows.push('<h3>Objectives</h3>');
+      for (const o of this.campaign.objectives) {
+        const st = objectiveStatus(o, w, w.scenario.done);
+        const mark = st === 'done' ? '<span class="st ok">DONE</span>' : st === 'failed' ? '<span class="st dead">FAILED</span>' : '<span class="st">OPEN</span>';
+        rows.push(`<div class="sys" title="${esc(objectiveDesc(o))}"><div class="sys-h"><b>${esc(objectiveName(o))}</b> ${mark}<span class="dim" style="margin-left:auto">+$${o.rewardM}M</span></div><div class="sys-b dim">${esc(objectiveDesc(o))}</div></div>`);
+      }
+    }
+    rows.push('<h3>Fire units</h3>');
     for (const u of w.units) {
       const r = u.radar!;
       const active = u.activeTargets(w).size;

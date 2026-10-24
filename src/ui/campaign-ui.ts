@@ -6,6 +6,7 @@ import { MAP_TYPES, MAP_TYPE_LIST, MapType } from '../sim/terrain';
 import type { World } from '../sim/world';
 import type { Ppi } from './ppi';
 import { UPGRADES, UPGRADE_ORDER, UpgradeId } from '../campaign/upgrades';
+import { objectiveDesc, objectiveName } from '../campaign/objectives';
 
 const SAVE_KEY = 'air-defence-campaign-v1';
 
@@ -196,6 +197,8 @@ export class CampaignUi {
       <h3>Intelligence briefing, day ${s.day}</h3>
       <p class="dim">${esc(this.mapLine())}</p>
       <ul class="intel">${intel.map((l) => `<li>${esc(l)}</li>`).join('') || '<li class="dim">Nothing reported.</li>'}</ul>
+      <h3>Bonus objectives</h3>
+      <ul class="intel">${(s.objectives ?? []).map((o) => `<li><b>${esc(objectiveName(o))}</b> <span class="mono">+${money(o.rewardM)}</span>: ${esc(objectiveDesc(o))}</li>`).join('') || '<li class="dim">None today.</li>'}</ul>
       ${last?.lessons.length ? `<h3>Enemy assessment</h3><ul class="intel">${last.lessons.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
       <h3>Procurement <span class="dim">budget ${money(s.money)}</span></h3>
       <div class="shop">${shop}</div>
@@ -228,6 +231,7 @@ export class CampaignUi {
           const next = RANKS[rank + 1];
           rows.push(`Crew <b>${RANKS[rank].name} ${RANKS[rank].badge}</b> · ${u.xp ?? 0} kills${next ? `, ${next.xp - (u.xp ?? 0)} to ${next.name}` : ''}`);
         }
+        if (c.spotted(u)) rows.push(`<span class="bad">Photographed by enemy recon: strikes may be aimed here. Move it to dodge them.</span>`);
         if (info.sector) rows.push(`Sector facing <b>${Math.round(u.facing).toString().padStart(3, '0')}°</b> (±60°)`);
         const reload = c.reloadCost(u);
         const actions = [
@@ -340,6 +344,13 @@ export class CampaignUi {
         ${r.civilian ? `<span class="bad">Civil airliners shot down</span><b class="bad">${r.civilian}</b>` : ''}
         ${r.fratricide ? `<span class="bad">Friendly aircraft shot down</span><b class="bad">${r.fratricide}</b>` : ''}
       </div>
+      ${
+        r.objectives?.length
+          ? `<h3>Bonus objectives</h3><ul class="intel">${r.objectives
+              .map((o) => `<li class="${o.done ? 'good' : 'dim'}">${o.done ? '✓' : '✗'} ${esc(o.name)} ${o.done ? `+${money(o.rewardM)}` : ''}</li>`)
+              .join('')}</ul>`
+          : ''
+      }
       <h3>Damage</h3>
       <p>${dmg.length ? dmg.map((d) => `${d.name} −${d.lost} (now ${d.hp}%)`).join(', ') : 'No damage to the defended assets.'}</p>
       ${r.promotions?.length ? `<h3>Promotions</h3><p class="good">${r.promotions.map(esc).join(', ')}</p>` : ''}
@@ -349,7 +360,7 @@ export class CampaignUi {
         over
           ? `<p>Final score <b>${c.score()}</b> over ${c.s.history.length} days.</p>
              <div class="menu-opts row"><button data-cui="new" class="go">New campaign</button><button data-cui="menu">Main menu</button></div>`
-          : `<p>Budget for tomorrow: <b>${money(c.s.money)}</b> (income ${money(r.income)} from the assets still working).</p>
+          : `<p>Budget for tomorrow: <b>${money(c.s.money)}</b> (income ${money(r.income)}: the assets still working${r.objectives?.some((o) => o.done) ? ' plus objective bonuses' : ''}).</p>
              <div class="row"><button data-cui="plan" class="go">Plan day ${c.s.day} ▶</button><button data-cui="menu">Save and quit</button></div>`
       }`;
     $('debrief').classList.remove('hidden');

@@ -2,7 +2,7 @@ import { DT } from './constants';
 import { Ciws, GUNS } from './ciws';
 import { MoveOrder, orderMove, stepMoves } from './mobility';
 import { Modifiers, modifiers } from '../campaign/upgrades';
-import { Arm, Cruise, Emitter, Entity, Fate } from './entities';
+import { Arm, Cruise, Emitter, Entity, Fate, ReconDrone, Sighting } from './entities';
 import { Fighter } from './fighter';
 import { V3, add, bearingDeg, clone, dist, norm, scale, sub, v3 } from './math';
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, UnitType, rankOf } from './catalog';
@@ -43,6 +43,9 @@ export interface Stats {
   killsBy: Record<string, number>;
   /** Decoy drones shot down by missiles (missiles the enemy tricked us into spending). */
   decoyMissiles: number;
+  /** Red entities spawned and shot down, by kind (recon drones count as 'recon'). */
+  spawnedKind: Record<string, number>;
+  killedKind: Record<string, number>;
 }
 
 export interface WorldOptions {
@@ -110,7 +113,13 @@ export class World {
     civilian: 0,
     killsBy: {},
     decoyMissiles: 0,
+    spawnedKind: {},
+    killedKind: {},
   };
+  /** Our positions enemy recon drones got home with, by unit id. */
+  readonly reconSeen = new Map<number, Sighting>();
+  /** Every site's health when the battle started (for the day's objectives). */
+  readonly startHp = new Map<string, number>();
   /** Hits on defended sites per campaign raid package. */
   readonly pkgHits = new Map<number, number>();
   /** Seconds each radar spent radiating (by radar code). */
@@ -146,7 +155,10 @@ export class World {
       s.alive = s.hp > 0;
     }
     for (const u of dep.units) this.field(u);
-    for (const s of this.sites) s.vuln *= this.mods.damageMult;
+    for (const s of this.sites) {
+      s.vuln *= this.mods.damageMult;
+      this.startHp.set(s.name, s.hp);
+    }
     this.scenario = new Scenario(o.raids, this.terrain.layout.rot);
     if (o.civil ?? true) this.scenario.start(this);
   }
@@ -324,7 +336,19 @@ export class World {
     return `${prefix}-${String(n).padStart(2, '0')}`;
   }
 
+  /** Display name of a fielded unit. */
+  unitName(f: Fielded): string {
+    return f.fu?.name ?? f.ciws?.name ?? f.radar?.name ?? f.sites[0]?.name ?? CATALOG[f.unit.type].name;
+  }
+
   // ---------------------------------------------------------------- events
+
+  /** A recon drone made it home: the enemy now knows what it photographed. */
+  reconHome(d: ReconDrone): void {
+    for (const p of d.seen) this.reconSeen.set(p.uid, p);
+    if (d.seen.length) this.log(`${d.name} got away with pictures of ${d.seen.length} of our positions`, 'alert');
+    this.retire(d);
+  }
 
   log(msg: string, level: LogLevel = 'info'): void {
     this.logSeq++;
@@ -336,8 +360,14 @@ export class World {
     this.effects.push({ id: this.nextEffect++, pos: clone(pos), t0: this.t, kind });
   }
 
+  /** Kind used for objective counts: recon drones are told apart from attack drones. */
+  static tally(e: Entity): string {
+    return e.recon ? 'recon' : e.kind;
+  }
+
   spawn(e: Entity): void {
     if (this.spawnTag >= 0 && e.pkg < 0) e.pkg = this.spawnTag;
+    if (e.side === 'red') this.stats.spawnedKind[World.tally(e)] = (this.stats.spawnedKind[World.tally(e)] ?? 0) + 1;
     this.entities.push(e);
     this.byId.set(e.id, e);
   }
@@ -399,6 +429,7 @@ export class World {
     if (e.decoy && how === 'missile') this.stats.decoyMissiles++;
     if (e.side === 'red') {
       this.stats.kills++;
+      this.stats.killedKind[World.tally(e)] = (this.stats.killedKind[World.tally(e)] ?? 0) + 1;
       this.stats.killsBy[shooter] = (this.stats.killsBy[shooter] ?? 0) + 1;
     }
     if (e.side === 'blue') {

@@ -1,12 +1,13 @@
 import { V3, add, clone, polar, v3 } from './math';
-import { Airliner, Bomber, Cruise, Drone, Sead, Soj, Tbm } from './entities';
+import { Airliner, Bomber, Cruise, Drone, ReconDrone, Sead, Soj, Tbm } from './entities';
 import type { World } from './world';
 
-export type ThreatType = 'drones' | 'decoys' | 'cruise' | 'bomber' | 'sead' | 'soj' | 'tbm' | 'airliner' | 'airliner-dark';
+export type ThreatType = 'drones' | 'decoys' | 'recon' | 'cruise' | 'bomber' | 'sead' | 'soj' | 'tbm' | 'airliner' | 'airliner-dark';
 
 export const THREAT_LABELS: Record<ThreatType, string> = {
   drones: 'Drone swarm (6)',
   decoys: 'Decoy drones (10)',
+  recon: 'Recon drone',
   cruise: 'Cruise missiles (4)',
   bomber: 'Strike bomber (4 ALCM)',
   sead: 'SEAD pair (ARMs)',
@@ -28,10 +29,25 @@ export function strikeTargets(w: World): Aim[] {
     .map((s) => ({ pos: clone(s.pos), name: s.name }));
 }
 
-function targetsByName(w: World, names: string[]): Aim[] {
+/** A target by site name, or a fixed map position (such as one an enemy recon drone photographed). */
+export type Target = string | { x: number; y: number; name: string };
+
+function targetsByName(w: World, names: Target[]): Aim[] {
   const all = strikeTargets(w);
-  const picked = names.map((n) => all.find((a) => a.name === n)).filter((a): a is Aim => !!a);
+  const picked = names
+    .map((n) => (typeof n === 'string' ? all.find((a) => a.name === n) : { pos: v3(n.x, n.y, w.terrain.groundAt(n.x, n.y)), name: n.name }))
+    .filter((a): a is Aim => !!a);
   return picked.length ? picked : all;
+}
+
+/** Recon drones: high, slow, orbiting 32 km out on their bearing and photographing our units. */
+export function spawnRecon(w: World, n: number, bearing: number): void {
+  for (let i = 0; i < n; i++) {
+    const b = bearing + (i - (n - 1) / 2) * 25;
+    const start = polar(b, 85000);
+    start.z = 9000;
+    w.spawn(new ReconDrone(w.nextName('UAV'), start, polar(b, 32000)));
+  }
 }
 
 /**
@@ -48,7 +64,7 @@ export function spawnDecoyDrones(w: World, n: number, bearing: number, rangeM: n
   }
 }
 
-export function spawnDrones(w: World, n: number, bearing: number, rangeM: number, targets?: string[]): void {
+export function spawnDrones(w: World, n: number, bearing: number, rangeM: number, targets?: Target[]): void {
   const aims = targets ? targetsByName(w, targets) : targetsByName(w, ['Airbase', 'Power plant', 'CRC']);
   for (let i = 0; i < n; i++) {
     const lateral = (i - (n - 1) / 2) * 900 + w.rng.gauss() * 300;
@@ -63,7 +79,7 @@ export function spawnDrones(w: World, n: number, bearing: number, rangeM: number
   }
 }
 
-export function spawnCruise(w: World, n: number, bearing: number, rangeM: number, targets?: string[]): void {
+export function spawnCruise(w: World, n: number, bearing: number, rangeM: number, targets?: Target[]): void {
   const aims = targets ? targetsByName(w, targets) : targetsByName(w, ['Airbase', 'CRC', 'LR radar', 'MR radar']);
   const t = w.terrain;
   // From the mountain side they come down the passes; elsewhere straight in, low over the plain or the sea.
@@ -108,7 +124,7 @@ export function spawnSoj(w: World, bearing: number, rangeM: number): void {
   w.spawn(new Soj(w.nextName('SOJ'), polar(bearing, rangeM, 9500), bearing));
 }
 
-export function spawnTbm(w: World, n: number, bearing: number, targets?: string[]): void {
+export function spawnTbm(w: World, n: number, bearing: number, targets?: Target[]): void {
   const aims = targets ? targetsByName(w, targets) : targetsByName(w, ['Airbase', 'LR radar', 'CRC']);
   for (let i = 0; i < n; i++) {
     const aim = aims[i % aims.length];
@@ -145,6 +161,8 @@ export function spawnThreat(w: World, type: ThreatType, bearing: number): void {
       return spawnDrones(w, 6, bearing, 45000);
     case 'decoys':
       return spawnDecoyDrones(w, 10, bearing, 45000);
+    case 'recon':
+      return spawnRecon(w, 1, bearing);
     case 'cruise':
       return spawnCruise(w, 4, bearing, 120000);
     case 'bomber':

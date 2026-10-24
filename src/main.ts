@@ -52,7 +52,7 @@ const cui = new CampaignUi({
   },
   startBattle(w: World, c: Campaign) {
     w.scenario.doneMsg = 'All reported packages are in and the airspace is clear. End the day when you are ready.';
-    hud.campaign = { day: c.s.day, days: CAMPAIGN_DAYS, onEndDay: () => {
+    hud.campaign = { day: c.s.day, days: CAMPAIGN_DAYS, objectives: c.s.objectives ?? [], onEndDay: () => {
         running = false;
         cui.endDay(world);
       } };

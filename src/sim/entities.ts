@@ -479,7 +479,7 @@ export class Striker extends Air {
         }
         break;
       case 'egress':
-        this.steer(this.home.x, this.home.y, dt);
+        this.steer(this.home.x * 2, this.home.y * 2, dt);
         if (Math.hypot(this.pos.x, this.pos.y) > 150000) w.retire(this);
         break;
     }

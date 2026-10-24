@@ -14,8 +14,9 @@ import { MAP_SEED } from '../sim/world';
 import { World } from '../sim/world';
 import { doctrineOf, pickDoctrine } from './doctrine';
 import { award, battleMedals } from './medals';
-import { EnemyModel, PKG, PkgKind, PlannedPkg, SECTOR_NAMES, newEnemy, planDay, sectorOf, toRaids } from './raidgen';
+import { EnemyModel, PKG, PkgKind, PlannedPkg, SECTOR_NAMES, assignBases, newEnemy, planDay, refundBases, sectorOf, sortiesOf, toRaids } from './raidgen';
 import { ASSAULT_HOLD, FrontState, OFFENSIVE_COST_M, TAKEN_HP, TOWN_THREAT_CUT, assaultSpot, deployZones, frontTown, newFront, nextObjective, townIncome, townsHeld } from './front';
+import { type Asset, type EnemyBase, TALLY_ASSET, assetCount, avail, draw, fallBack, makeTheatre, overrun, reinforce } from '../sim/theatre';
 import { Rng } from '../sim/rng';
 import { DeployZone, inZones } from '../sim/deploy';
 
@@ -64,6 +65,8 @@ export interface DayReport {
   supportM?: number;
   /** Bonus objectives and whether they were met. */
   objectives?: { name: string; rewardM: number; done: boolean }[];
+  /** The enemy's side of the day: aircraft it lost, installations found, overrun or moved. */
+  enemy?: string[];
 }
 
 export interface CampaignState {
@@ -101,6 +104,10 @@ export interface CampaignState {
   front?: FrontState;
   /** Refill launchers and top up spares every morning. */
   autoRestock?: boolean;
+  /** The enemy's installations and what each has left. Absent only in saves from before the theatre (built on load). */
+  theatre?: EnemyBase[];
+  /** Enemy aircraft we have shot down, and stock our deep strikes and offensives destroyed, over the campaign. */
+  enemyLost?: Partial<Record<Asset, number>>;
 }
 
 /** Where new units go before the player moves them, in order of preference. */
@@ -147,6 +154,8 @@ export class Campaign {
       autoRestock: true,
     });
     c.s.front = newFront(c.terrain, seed);
+    c.s.theatre = makeTheatre(c.terrain, seed, c.s.front.towns, c.diff.threat);
+    c.s.enemyLost = {};
     // Starting order of battle: one MR battery, a SHORAD unit and a CIWS on the airbase.
     c.add('MR');
     c.add('SH');
@@ -168,6 +177,8 @@ export class Campaign {
       s.objectives ??= pickObjectives(s.plan, s.day, s.seed);
       const c = new Campaign(s);
       s.front ??= newFront(c.terrain, s.mapSeed ?? s.seed);
+      s.theatre ??= makeTheatre(c.terrain, s.mapSeed ?? s.seed, s.front.towns, c.diff.threat);
+      s.enemyLost ??= {};
       return c;
     } catch {
       return null;
@@ -194,6 +205,18 @@ export class Campaign {
   get terrain(): Terrain {
     if (!this.map) this.map = this.s.mapSeed === undefined ? new Terrain(MAP_SEED) : new Terrain(this.s.mapSeed, this.layout);
     return this.map;
+  }
+
+  /** The enemy's installations. */
+  get theatre(): EnemyBase[] {
+    return (this.s.theatre ??= makeTheatre(this.terrain, this.s.mapSeed ?? this.s.seed, this.s.front?.towns ?? [], this.diff.threat));
+  }
+
+  /** Swap today's raid plan for a new one: munitions the old one had drawn go back to their bases. */
+  replacePlan(plan: PlannedPkg[]): void {
+    const counters = this.s.plan.filter((p) => p.counter);
+    refundBases(this.s.plan.filter((p) => !p.counter), this.theatre);
+    this.s.plan = [...assignBases(plan, this.theatre, sortiesOf(counters)), ...counters].sort((a, b) => a.t - b.t);
   }
 
   get units(): DeployedUnit[] {
@@ -396,8 +419,9 @@ export class Campaign {
     if (day >= 2) kinds.push(['cruise', Math.min(5, 2 + Math.floor(day / 4))]);
     if (day >= 3) kinds.push(['helo', day >= 6 ? 3 : 2]);
     if (day >= 4) kinds.push(['strike', day >= 8 ? 3 : 2]);
+    const counters: PlannedPkg[] = [];
     kinds.forEach(([kind, size], i) => {
-      this.s.plan.push({
+      counters.push({
         id: this.s.nextPkg++,
         kind,
         bearing: (this.layout.rot + rng.range(-30, 30) + 360) % 360,
@@ -409,6 +433,9 @@ export class Campaign {
         counter: true,
       });
     });
+    // The counter-attack comes from what the enemy has left after today's raids, nearest the assault force first.
+    for (const p of counters) p.origin ??= at;
+    this.s.plan.push(...assignBases(counters, this.theatre, sortiesOf(this.s.plan)));
     this.s.plan.sort((a, b) => a.t - b.t);
     return true;
   }
@@ -419,6 +446,7 @@ export class Campaign {
     if (!f || f.offensive === null) return false;
     f.offensive = null;
     this.s.money += OFFENSIVE_COST_M;
+    refundBases(this.s.plan.filter((p) => p.counter), this.theatre);
     this.s.plan = this.s.plan.filter((p) => !p.counter);
     return true;
   }
@@ -499,8 +527,10 @@ export class Campaign {
     this.s.weather = rollWeather(this.s.seed, this.s.day);
     // Every town we hold beyond the first leaves the enemy less room to launch from.
     const cut = 1 - TOWN_THREAT_CUT * Math.max(0, townsHeld(this.s.front) - 1);
-    this.s.plan = planDay(this.s.day, this.s.seed, this.s.enemy, this.s.nextPkg, this.layout.rot, this.diff.threat * cut, WEATHER[this.s.weather].noDrones);
-    this.s.nextPkg += this.s.plan.length;
+    const plan = planDay(this.s.day, this.s.seed, this.s.enemy, this.s.nextPkg, this.layout.rot, this.diff.threat * cut, WEATHER[this.s.weather].noDrones);
+    this.s.nextPkg += plan.length;
+    // Every package flies from a real installation, and only as big as what it has ready.
+    this.s.plan = assignBases(plan, this.theatre);
     const f = this.s.front;
     if (f) {
       f.offensive = null;
@@ -567,7 +597,9 @@ export class Campaign {
         const def = PKG[p.kind];
         const when = p.t < 120 ? 'early' : p.t < 500 ? 'mid-raid' : 'late';
         const aimed = p.aims ? `, aimed at ${p.aims.length > 1 ? `${p.aims.length} of our positions` : 'one of our positions'} their recon photographed` : '';
-        return `${def.name} from the ${SECTOR_NAMES[sectorOf(p.bearing)]} (${when}): ${def.describe(p.size)}${aimed}`;
+        const base = this.theatre.find((b) => b.id === p.base);
+        const src = base?.known ? `, launching from the ${base.name.toLowerCase()}` : '';
+        return `${def.name} from the ${SECTOR_NAMES[sectorOf(p.bearing)]} (${when}): ${def.describe(p.size)}${aimed}${src}`;
       }));
     const counter = this.s.plan.filter((p) => p.counter);
     if (counter.length) lines.push(`Counter-attack on the assault force: ${counter.map((p) => `${PKG[p.kind].name.toLowerCase()} (${p.size})`).join(', ')}`);
@@ -591,6 +623,7 @@ export class Campaign {
       zones: this.zones,
       seed: this.s.seed * 31 + this.s.day,
       terrain: this.terrain,
+      theatre: JSON.parse(JSON.stringify(this.theatre)) as EnemyBase[],
       deployment: dep,
       raids: withRaids ? toRaids(this.s.plan) : [],
       civil: withRaids,
@@ -667,6 +700,28 @@ export class Campaign {
     }
     s.deployment.units = kept;
 
+    // The enemy's side: its installations as the battle left them (launches gave some away, counter-battery
+    // strikes drew on their stock), less every aircraft we shot down, which is gone for good.
+    const enemyLines: string[] = [];
+    const knownBefore = new Set(this.theatre.filter((b) => b.known).map((b) => b.id));
+    const th = w.theatre;
+    const downed: Partial<Record<Asset, number>> = {};
+    for (const [key, n] of w.redAirLost) {
+      const [pkg, tally] = key.split('|');
+      const a = TALLY_ASSET[tally];
+      if (!a) continue;
+      const id = s.plan.find((p) => p.id === Number(pkg))?.base;
+      const b = th.find((x) => x.id === id) ?? th.find((x) => avail(x, a) > 0);
+      if (b) draw(b, a, n);
+      downed[a] = (downed[a] ?? 0) + n;
+    }
+    const lost = (s.enemyLost ??= {});
+    for (const [a, n] of Object.entries(downed) as [Asset, number][]) lost[a] = (lost[a] ?? 0) + n;
+    if (Object.keys(downed).length) enemyLines.push(`Shot down: ${(Object.entries(downed) as [Asset, number][]).map(([a, n]) => assetCount(a, n)).join(', ')}. The enemy will not get them back.`);
+    const found = th.filter((b) => b.known && !knownBefore.has(b.id));
+    if (found.length) enemyLines.push(`Located by their launches: ${found.map((b) => b.name.toLowerCase()).join(', ')}. They are on the map and open to a deep strike.`);
+    s.theatre = th;
+
     // The front line: towns knocked flat fall, a surviving assault force takes its town.
     const frontLines: string[] = [];
     const f = s.front;
@@ -691,6 +746,14 @@ export class Campaign {
           tn.ours = true;
           tn.hp = TAKEN_HP;
           frontLines.push(`The assault force held (${hp}%) and took ${tn.name}: +$${tn.incomeM}M a day, and units can now deploy round it.`);
+          const before = th.map((b) => ({ ...b.stock }));
+          enemyLines.push(...overrun(th, tn.name, f.towns.find((x) => !x.ours)));
+          th.forEach((b, i) => {
+            for (const [a, n] of Object.entries(before[i]) as [Asset, number][]) {
+              const gone = Math.floor(n - (b.stock[a] ?? 0));
+              if (gone > 0) lost[a] = (lost[a] ?? 0) + gone;
+            }
+          });
         } else {
           frontLines.push(`The offensive on ${tn.name} failed: the assault force was ${hp > 0 ? `down to ${hp}%` : 'destroyed'}.`);
         }
@@ -705,6 +768,8 @@ export class Campaign {
         this.place(this.terrain, u, p.x, p.y);
         frontLines.push(`${CATALOG[u.type].name} pulled back inside our lines.`);
       }
+      // Enemy launch teams too close to the ground we now hold move further back.
+      enemyLines.push(...fallBack(this.terrain, th, zones));
     }
 
     // Enemy learning: packages that hit something are repeated, from the same direction.
@@ -765,6 +830,7 @@ export class Campaign {
       promotions,
       objectives,
       supportM: Math.round(w.supportSpentM * 10) / 10,
+      enemy: enemyLines,
     };
     s.history.push(report);
 
@@ -784,6 +850,8 @@ export class Campaign {
     if (!s.over) {
       s.day++;
       s.money += income;
+      // Overnight the enemy's installations get their reinforcements.
+      reinforce(this.theatre, this.diff.threat);
       this.replan();
       if (s.autoRestock) report.restockM = this.restock();
     }

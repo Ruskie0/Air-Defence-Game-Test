@@ -97,8 +97,9 @@ export const EVENTS: Record<EventId, EventDef> = {
     ok: (c) => c.s.day >= 3,
     apply: (c, i) => {
       if (i === 1) return 'No strike tonight.';
-      c.s.plan = planDay(c.s.day, c.s.seed + 1, c.s.enemy, c.s.nextPkg, c.layout.rot, c.diff.threat * 0.75, WEATHER[c.s.weather ?? 'clear'].noDrones);
-      c.s.nextPkg += c.s.plan.length;
+      const plan = planDay(c.s.day, c.s.seed + 1, c.s.enemy, c.s.nextPkg, c.layout.rot, c.diff.threat * 0.75, WEATHER[c.s.weather ?? 'clear'].noDrones);
+      c.s.nextPkg += plan.length;
+      c.replacePlan(plan);
       return 'The strike went in: the enemy has less to throw at us today. Read the new briefing.';
     },
   },

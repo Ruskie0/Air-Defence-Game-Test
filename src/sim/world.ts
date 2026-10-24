@@ -163,7 +163,7 @@ export class World {
   spawnTag = -1;
   /** Everything that died or left in the last 20 s, newest last (for wrecks and kill feeds). */
   deaths: Entity[] = [];
-  /** Enemy aircraft shot down this battle, by kind (the campaign takes them off their bases' strength). */
+  /** Enemy aircraft shot down this battle, keyed "package|kind" (the campaign takes them off their bases' strength). */
   readonly redAirLost = new Map<string, number>();
   /** Track id remaps from fusion merges, so the UI can follow a selected track. */
   readonly remapped = new Map<number, number>();
@@ -498,13 +498,24 @@ export class World {
     this.pending.push({ t: this.t + delay, e });
   }
 
+  /** An enemy installation has given itself away by launching: it goes on our map. */
+  revealBase(b: EnemyBase): void {
+    if (b.known || b.lost) return;
+    b.known = true;
+    this.layoutSeq++;
+    this.log(`Launches detected from the ${b.name.toLowerCase()}: it is on the map now, and a deep strike can find it`, 'info');
+  }
+
   /** Record how an entity died or left, once. */
   setFate(e: Entity, how: Fate['how'], by: string, extra: Partial<Fate> = {}): void {
     if (e.fate) return;
     e.fate = { how, by, t: this.t, pos: clone(e.pos), vel: clone(e.vel), air: how === 'missile' || how === 'gun' || how === 'laser', ...extra };
     this.deaths.push(e);
     // Enemy aircraft shot down are lost to their base for good.
-    if (e.side === 'red' && !e.munition && e.fate.air) this.redAirLost.set(e.kind, (this.redAirLost.get(e.kind) ?? 0) + 1);
+    if (e.side === 'red' && !e.munition && e.fate.air) {
+      const key = `${e.pkg}|${World.tally(e)}`;
+      this.redAirLost.set(key, (this.redAirLost.get(key) ?? 0) + 1);
+    }
   }
 
   /** An entity leaves the battle without being destroyed (egress, landing, end of flight). */

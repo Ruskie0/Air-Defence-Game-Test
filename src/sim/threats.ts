@@ -1,7 +1,7 @@
 import { V3, add, bearingDeg, clone, hdist, polar, v3, wrap180 } from './math';
 import { Airliner, Bomber, Cruise, Drone, Helo, ReconDrone, Sead, Soj, Striker, Tbm } from './entities';
 import type { World } from './world';
-import type { Asset, BaseKind, EnemyBase } from './theatre';
+import { type Asset, type EnemyBase, HOSTS } from './theatre';
 
 export type ThreatType = 'drones' | 'decoys' | 'recon' | 'cruise' | 'bomber' | 'strike' | 'helo' | 'sead' | 'soj' | 'tbm' | 'airliner' | 'airliner-dark';
 
@@ -50,11 +50,6 @@ function targetsByName(w: World, names: Target[]): Aim[] {
  * kept for the scripted tutorial only.
  */
 export type LaunchFrom = { x: number; y: number } | 'range' | undefined;
-
-const HOSTS: Record<Asset, BaseKind[]> = {
-  strike: ['airfield'], sead: ['airfield'], recon: ['airfield'], helo: ['farp'], drone: ['drones'],
-  cruise: ['glcm'], tbm: ['tbm'], bomber: ['rear'], soj: ['rear'],
-};
 
 /** The installation (of those that launch `a`) whose bearing from the airbase is closest to `bearing`. */
 export function launchBase(w: World, a: Asset, bearing: number): EnemyBase | null {

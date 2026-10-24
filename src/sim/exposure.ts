@@ -133,6 +133,7 @@ export class Exposure {
       return;
     }
     this.strikesLeft--;
+    w.revealBase(base);
     const from = v3(base.x, base.y, w.terrain.groundAt(base.x, base.y));
     const d = hdist(from, aim);
     let weapon: string;

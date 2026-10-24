@@ -230,7 +230,11 @@ export function toRaids(plan: PlannedPkg[]): Raid[] {
       launched: false,
       pkg: p.id,
       unreported: !p.reported,
-      spawn: (w) => def.spawn(w, p.bearing, p.size, aims, p.origin, p.from),
+      spawn: (w) => {
+        const b = p.base ? w.theatre.find((x) => x.id === p.base) : undefined;
+        if (b) w.revealBase(b);
+        def.spawn(w, p.bearing, p.size, aims, p.origin, b ? { x: b.x, y: b.y } : p.from);
+      },
     };
   });
 }
@@ -240,8 +244,30 @@ export function toRaids(plan: PlannedPkg[]): Raid[] {
  * Munitions are drawn from stock now; each aircraft flies one sortie a day. A package the enemy cannot fill
  * goes in smaller or not at all. Counter-attacks launch from the base nearest to what they attack.
  */
-export function assignBases(plan: PlannedPkg[], bases: EnemyBase[]): PlannedPkg[] {
-  const sorties = new Map<string, number>();
+/** Munitions a package drew from its base, as stock units (decoys are half a drone each). */
+const drawn = (p: PlannedPkg): number => p.size * (p.kind === 'decoys' ? 0.5 : 1);
+
+/** Put back the munitions packages drew when they are called off before launch (aircraft were never drawn). */
+export function refundBases(pkgs: PlannedPkg[], bases: EnemyBase[]): void {
+  for (const p of pkgs) {
+    const a = PKG[p.kind].asset;
+    const b = p.base ? bases.find((x) => x.id === p.base) : undefined;
+    if (!a || !b || b.lost || AIRCRAFT.includes(a)) continue;
+    b.stock[a] = (b.stock[a] ?? 0) + drawn(p);
+  }
+}
+
+/** Aircraft already flying today's sorties from each base ("base:asset" -> count), so a later plan does not reuse them. */
+export function sortiesOf(plan: PlannedPkg[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const p of plan) {
+    const a = PKG[p.kind].asset;
+    if (a && p.base && AIRCRAFT.includes(a)) m.set(`${p.base}:${a}`, (m.get(`${p.base}:${a}`) ?? 0) + p.size);
+  }
+  return m;
+}
+
+export function assignBases(plan: PlannedPkg[], bases: EnemyBase[], sorties = new Map<string, number>()): PlannedPkg[] {
   const out: PlannedPkg[] = [];
   for (const p of plan) {
     const a = PKG[p.kind].asset;

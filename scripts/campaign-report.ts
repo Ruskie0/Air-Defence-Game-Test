@@ -4,7 +4,8 @@ import { Tempo } from '../src/sim/tempo';
 import { Campaign, Difficulty } from '../src/campaign/campaign';
 import { PKG, SECTOR_NAMES, sectorOf } from '../src/campaign/raidgen';
 import { CATALOG, UnitType } from '../src/sim/catalog';
-import { DeepStrikeId, deepStrike, deepStrikeError } from '../src/campaign/deepstrike';
+import { DeepStrikeId, deepStrike, deepStrikeError, strikeTargets } from '../src/campaign/deepstrike';
+import { stockText } from '../src/sim/theatre';
 import { assaultSpot } from '../src/campaign/front';
 import { nearestFree } from '../src/sim/deploy';
 
@@ -66,12 +67,16 @@ function shop(): string[] {
   const saving = c.unlocked('LR') && count('LR') < 1;
   // One deep strike a day at the biggest threat in today's plan, when there is money to spare.
   if (!saving && c.s.money > 70 && !process.argv.includes('--no-strikes')) {
-    const has = (k: string): number => c.s.plan.filter((p) => p.kind === k).reduce((n, p) => n + p.size, 0);
-    const order: [DeepStrikeId, number][] = [['tbm', has('tbm') * 3], ['airfield', has('strike') + has('sead') + has('bomber') * 3], ['drones', has('drones') / 3]];
-    const best = order.filter(([id, v]) => v > 2 && !deepStrikeError(c, id)).sort((a, b) => b[1] - a[1])[0];
+    // Value of a located installation: what it holds, weighted by how much each kind hurts.
+    const weight: Record<string, number> = { tbm: 3, cruise: 1, strike: 2, sead: 2, recon: 1, helo: 1.5, drone: 0.3 };
+    const value = (id: DeepStrikeId): number => {
+      const b = c.theatre.find((x) => x.id === id)!;
+      return Object.entries(b.stock).reduce((t, [a, n]) => t + Math.floor(n ?? 0) * (weight[a] ?? 1), 0);
+    };
+    const best = strikeTargets(c).map((b) => b.id).filter((id) => !deepStrikeError(c, id) && value(id) > 6).sort((a, b) => value(b) - value(a))[0];
     if (best) {
-      const r = deepStrike(c, best[0]);
-      if (r) bought.push(`deep strike ${best[0]} (${c.s.deepStrike?.ok ? 'hit' : 'failed'})`);
+      const r = deepStrike(c, best);
+      if (r) bought.push(`deep strike ${best} (${c.s.deepStrike?.ok ? 'hit' : 'failed'})`);
     }
   }
   // Keep a SHORAD unit and a gun with the front town, unless they go forward with an offensive below.
@@ -135,6 +140,8 @@ while (!c.s.over) {
       `\n  damage: ${dmg}${r.losses.length ? `\n  lost: ${r.losses.join(', ')}` : ''}` +
       (r.front?.length ? `\n  front: ${r.front.join(' / ')}` : '') +
       (verbose && r.lessons.length ? `\n  lessons: ${r.lessons.join(' / ')}` : '') +
+      (r.enemy?.length ? `\n  enemy: ${r.enemy.join(' / ')}` : '') +
+      (verbose ? `\n  theatre: ${c.theatre.map((b) => `${b.id}${b.known ? '*' : ''}${b.lost ? ' LOST' : ''} [${stockText(b)}]`).join('; ')}` : '') +
       `\n  income $${r.income}M`,
   );
 }

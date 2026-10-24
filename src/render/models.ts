@@ -40,6 +40,13 @@ class Kit {
     return this;
   }
 
+  /** A finished Kit model, vertex colours and all, placed and turned about Y. */
+  place(g: THREE.BufferGeometry, x: number, y: number, z: number, ry = 0): this {
+    this.q.setFromEuler(this.e.set(0, ry, 0));
+    this.parts.push(g.clone().applyMatrix4(this.m.compose(new THREE.Vector3(x, y, z), this.q, new THREE.Vector3(1, 1, 1))));
+    return this;
+  }
+
   /** Body of revolution along Z: profile points are [z, radius], tail to nose. */
   lathe(profile: Pt[], color: number, segs = 14, x = 0, y = 0, sx = 1, sy = 1): this {
     const g = new THREE.LatheGeometry(
@@ -390,8 +397,21 @@ function convoy(): THREE.BufferGeometry {
   return k.build().translate(0, -2, 0);
 }
 
+/** The assault column on the road: tanks leading, fighting vehicles behind, at 20 m intervals. */
+function column(): THREE.BufferGeometry {
+  const k = new Kit();
+  for (let i = 0; i < 8; i++) {
+    // Ground models face -Z; entities face +Z, so turn each vehicle round.
+    const g = groundGeometry(i < 3 || i === 6 ? 'tank' : 'ifv');
+    k.place(g, ((i * 37) % 5) * 0.3 - 0.6, 0, 70 - i * 20, Math.PI + (((i * 53) % 7) - 3) * 0.015);
+  }
+  // The sim carries the column 2 m above the road.
+  return k.build().translate(0, -2, 0);
+}
+
 const AIR: Record<string, () => THREE.BufferGeometry> = {
   convoy,
+  column,
   helo,
   atgm,
   strike,
@@ -459,6 +479,7 @@ export function interceptorModel(code: string): THREE.Mesh {
 /** Overall length of each air model in metres, so View3D can keep every kind a readable size on screen. */
 export const MODEL_LEN: Record<string, number> = {
   convoy: 60,
+  column: 150,
   fighter: 16,
   sead: 17,
   strike: 21,

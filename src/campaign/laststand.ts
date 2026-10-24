@@ -1,6 +1,7 @@
 import { CATALOG, UnitType } from '../sim/catalog';
 import { Rng } from '../sim/rng';
 import { MapType, typeForSeed } from '../sim/terrain';
+import { Exposure } from '../sim/exposure';
 import type { World } from '../sim/world';
 import { Campaign } from './campaign';
 import { DOCTRINES } from './doctrine';
@@ -59,7 +60,14 @@ export function loadBest(): number {
 }
 
 /** Waves between the first and the last get harder by more than a campaign day does. */
-const waveScale = (n: number): number => 1 + 0.04 * Math.max(0, n - 4);
+const waveScale = (n: number): number => 1 + 0.06 * Math.max(0, n - 3);
+/**
+ * The enemy studies the ground between waves: a battery still standing where it stood when the last wave
+ * began starts the next one this exposed. From wave 3; grows with the waves.
+ */
+export const studied = (wave: number): number => (wave < 3 ? 0 : Math.min(80, 30 + 5 * wave));
+/** Counter-battery strikes come closer together as the waves go on (s between them). */
+const cbCooldown = (wave: number): number => Math.max(50, 120 - 7 * wave);
 /** Waves run faster than a campaign day: packages come half as far apart. */
 const PACE = 0.5;
 export const START_BUDGET_M = 60;
@@ -85,6 +93,8 @@ export class LastStand {
   /** Waves called in early this run. */
   early = 0;
   private callNow = false;
+  /** Where each battery stood when the last wave began. */
+  private stood = new Map<number, { x: number; y: number }>();
 
   constructor(seed: number, mapType: MapType = typeForSeed(seed)) {
     this.c = Campaign.create(seed, 'normal', mapType);
@@ -117,7 +127,22 @@ export class LastStand {
     w.scenario.doneMsg = `Wave ${this.wave} held.`;
     w.qraUsed = false;
     w.exposure.rearm(this.wave);
+    w.exposure.strikesLeft = 2 + Math.floor(this.wave / 2);
+    w.exposure.cooldownS = cbCooldown(this.wave);
     w.log(`Wave ${this.wave}: ${plan.length} packages inbound`, 'raid');
+    // Batteries that have not moved since the last wave began start this one already half found.
+    const heat = studied(this.wave);
+    const stale: string[] = [];
+    for (const f of w.fielded) {
+      if (!Exposure.tracked(f) || !f.sites[0]?.alive) continue;
+      const was = this.stood.get(f.unit.uid);
+      if (heat && was && !f.move && Math.hypot(f.unit.x - was.x, f.unit.y - was.y) < 500 && (f.heat ?? 0) < heat) {
+        f.heat = heat;
+        stale.push(w.unitName(f));
+      }
+      this.stood.set(f.unit.uid, { x: f.unit.x, y: f.unit.y });
+    }
+    if (stale.length) w.log(`The enemy has had a wave to study the ground: ${stale.join(', ')} start${stale.length === 1 ? 's' : ''} this wave ${heat}% exposed. Move them.`, 'alert');
   }
 
   /** Called every frame: notices the end of a wave or of the stand. Returns true when something changed. */

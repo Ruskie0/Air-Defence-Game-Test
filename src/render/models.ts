@@ -138,6 +138,38 @@ function fighter(): THREE.BufferGeometry {
   return k.build();
 }
 
+/** Enemy air superiority fighter (22 m): twin engines in nacelles, twin fins, long tail sting, blue-grey camouflage. */
+function redfighter(): THREE.BufferGeometry {
+  const c = 0x7f93a6;
+  const d = 0x5f7286;
+  const k = new Kit();
+  k.lathe([[-8, 0], [-7.6, 0.45], [-3, 0.8], [2, 0.85], [6, 0.7], [9, 0.45], [10.6, 0.2], [11, 0]], c, 14, 0, 0.15, 1, 0.9);
+  for (const x of [-1.2, 1.2]) {
+    k.box(1.4, 1.1, 8.6, d, x, -0.45, -3.4);
+    k.tube(0.6, 0.55, 1.1, NOZZLE, x, -0.45, -8.2);
+  }
+  k.lathe([[-10.6, 0], [-10.2, 0.35], [-8.2, 0.4], [-7.8, 0]], c, 8, 0, 0.15);
+  k.ellipsoid(0.5, 0.48, 1.8, GLASS, 0, 0.75, 5.6);
+  // Blended wing with leading-edge root extensions.
+  k.plate(sym([[0.5, 7.5], [2.2, 2.4], [7.4, -2.6], [7.4, -3.6], [2.2, -4.4], [0.5, -4.4]]), 0.16, c);
+  k.plate(sym([[1.6, -5.4], [4.6, -7.6], [4.6, -8.6], [1.6, -8.3]]), 0.1, c, -0.4);
+  for (const x of [-2.1, 2.1]) k.fin([[-4.3, 0.4], [-7.3, 3.7], [-8.4, 3.7], [-8.2, 0.4]], 0.12, d, x);
+  // Air-to-air missiles under the wings and on the tips.
+  for (const x of [-7.4, 7.4]) k.tube(0.09, 0.09, 3.0, 0xdedede, x, 0, -2.6, 6);
+  for (const x of [-4.6, -3.2, 3.2, 4.6]) k.tube(0.11, 0.11, 3.8, 0xdedede, x, -0.35, -1.0, 6);
+  return k.build();
+}
+
+/** Air-launched radar decoy (2.8 m): slim body, pop-out wings, a small jet. */
+function decoy(): THREE.BufferGeometry {
+  const c = 0x9a9e8f;
+  const k = new Kit();
+  k.lathe([[-1.4, 0], [-1.4, 0.15], [1.1, 0.16], [1.35, 0.1], [1.45, 0]], c, 10);
+  k.plate(sym([[0.1, 0.3], [0.9, -0.1], [0.9, -0.3], [0.1, -0.2]]), 0.03, c, 0.12);
+  k.cross([[-1.0, 0.15], [-1.35, 0.42], [-1.45, 0.42], [-1.45, 0.15]], 0.02, c, Math.PI / 4);
+  return k.build();
+}
+
 function sead(): THREE.BufferGeometry {
   const c = 0x7c898c;
   const k = new Kit();
@@ -471,6 +503,8 @@ const AIR: Record<string, () => THREE.BufferGeometry> = {
   bomb,
   recon,
   fighter,
+  redfighter,
+  decoy,
   sead,
   bomber,
   soj,
@@ -537,6 +571,8 @@ export const MODEL_LEN: Record<string, number> = {
   convoy: 60,
   column: 150,
   fighter: 16,
+  redfighter: 22,
+  decoy: 2.9,
   sead: 17,
   strike: 21,
   bomber: 42,
@@ -568,6 +604,7 @@ export const WRECK_SIZE: Record<string, number> = {
   cruise: 1,
   tbm: 1.2,
   fighter: 1.6,
+  redfighter: 1.7,
   sead: 1.8,
   soj: 2.2,
   bomber: 2.6,

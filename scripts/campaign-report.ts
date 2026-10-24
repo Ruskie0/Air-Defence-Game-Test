@@ -9,6 +9,7 @@ import { stockText } from '../src/sim/theatre';
 import { assaultSpot } from '../src/campaign/front';
 import { nearestFree } from '../src/sim/deploy';
 import { hhmm } from '../src/campaign/clock';
+import { scrambleQra } from '../src/sim/support';
 
 const seed = Number(process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 1);
 const verbose = process.argv.includes('--verbose');
@@ -121,12 +122,26 @@ while (!c.s.over) {
   let realS = 0;
   const tempo = new Tempo();
   let escorted = process.argv.includes('--no-escort');
+  const sweep = !process.argv.includes('--no-sweep');
+  const sent = new Set<unknown>();
   while (!w.scenario.done && w.t < last + 3600) {
     w.step();
+    // Sweep the SAM sites we know about first thing: one fighter each, the one nearest the assault force first.
+    if (sweep && w.t > 20 && w.t % 5 < 1 / 60) {
+      const targets = w.enemyAd.targets().filter((a) => !sent.has(a.base.id));
+      if (targets.length && w.column?.alive && !w.fighters.length && !w.qraUsed) scrambleQra(w);
+      for (const fg of w.fighters) {
+        const a = targets.find((x) => !sent.has(x.base.id));
+        if (!a || sent.has(fg) || fg.sweepError(w, a.base.id)) continue;
+        sent.add(fg);
+        sent.add(a.base.id);
+        fg.sweep(w, a.base.id);
+      }
+    }
     // Fighters escort the assault column while it is on the road.
     if (!escorted && w.column?.alive && w.t > 10) {
       escorted = true;
-      for (const f of w.fighters) f.escortColumn(w);
+      for (const f of w.fighters) if (f.state !== 'sweep') f.escortColumn(w);
     }
     // Real time a player at 1x would spend on this battle with auto tempo on.
     realS += 1 / 60 / tempo.update(w);
@@ -153,6 +168,7 @@ while (!c.s.over) {
   console.log(
     `\nDay ${day} ${hhmm(at)} ${slot?.type ?? ''}  budget left after shopping $${Math.round(spent)}M  bought: ${bought.join(', ') || 'nothing'}` +
       `\n  raid: ${plan}` +
+      `\n  enemy SAM: ${w.enemyAd.sites.map((a) => `${a.base.name}${a.site.alive ? '' : ' (destroyed)'}${a.base.known ? '' : ' (unknown)'}`).join(', ') || 'none'}; ${w.logEntries.filter((e) => e.msg.includes('by an enemy SAM')).length} fighters downed` +
       `\n  counter-battery: ${w.exposure.located.map((l) => `${l.unit}@${Math.round(l.t)}s${l.moved ? ' (moved)' : ''}`).join(', ') || 'none'}` +
       `\n  kills ${r.kills}, leakers ${r.leakers}, missiles ${r.missilesFired} ($${r.missileCostM}M), civil ${r.civilian}, fratricide ${r.fratricide}, ${Math.round(w.t / 60)} min (${Math.round(realS / 60)} real at auto tempo)` +
       `\n  damage: ${dmg}${r.losses.length ? `\n  lost: ${r.losses.join(', ')}` : ''}` +

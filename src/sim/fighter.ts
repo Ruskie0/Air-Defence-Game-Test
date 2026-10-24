@@ -1,11 +1,12 @@
 import { V3, add, addScaled, angleBetween, clamp, clone, dist, dot, hdist, norm, polar, sub, v3 } from './math';
 import { Air } from './entities';
+import { ENEMY_AD } from './enemyad';
 import { AAM_MSL, Interceptor } from './missile';
 import { AI_RADAR, Radar } from './radar';
 import { wcsAllows } from './tewa';
 import type { World } from './world';
 
-export type CapState = 'station' | 'intercept' | 'rtb' | 'ground';
+export type CapState = 'station' | 'intercept' | 'sweep' | 'rtb' | 'ground';
 
 /** Friendly fighter on combat air patrol, datalinked to the fused picture, armed with active radar AAMs. */
 export class Fighter extends Air {
@@ -28,6 +29,11 @@ export class Fighter extends Air {
   private nextEscortLook = 0;
   /** The CAP station to go back to after an escort. */
   private home: V3 | null = null;
+  /** Stand-off weapons for a sweep of an enemy-held town: one load per sortie. */
+  standoff = 1;
+  /** The enemy-held town being swept, and until when the fighter is popped up after releasing. */
+  sweepId: string | null = null;
+  private popUntil = 0;
   private leg = 0;
 
   constructor(name: string, code: string, base: V3, station: V3, start: V3) {
@@ -80,6 +86,31 @@ export class Fighter extends Air {
     } else w.log(`${this.name} released from escort`, 'info');
   }
 
+  /** Sweep an enemy SAM site: run in low, pop up to release stand-off weapons at it, go home. */
+  sweep(w: World, id: string): void {
+    const why = this.sweepError(w, id);
+    if (why) {
+      w.log(`${this.name}: ${why}`, 'info');
+      return;
+    }
+    this.state = 'sweep';
+    this.sweepId = id;
+    this.targetTrackId = null;
+    w.log(`${this.name} sweeping the ${w.enemyAd.sites.find((a) => a.base.id === id)?.base.name}: running in low`, 'engage');
+  }
+
+  sweepError(w: World, id: string): string | null {
+    if (!this.alive || !this.airborne) return 'not airborne';
+    if (this.standoff <= 0) return 'no stand-off weapons left this sortie';
+    if (!w.enemyAd.targets().some((a) => a.base.id === id)) return 'that site is gone or not located';
+    return null;
+  }
+
+  /** Low enough to stay under an enemy SAM radar's horizon until it pops up. */
+  get low(): boolean {
+    return this.state === 'sweep' && this.tfAgl !== null && this.tfAgl < 300;
+  }
+
   rtb(w: World): void {
     if (!this.airborne) return;
     this.state = 'rtb';
@@ -120,6 +151,7 @@ export class Fighter extends Air {
       if (w.t >= this.groundUntil) {
         this.airborne = true;
         this.missiles = 4;
+        this.standoff = 1;
         this.fuel = this.maxFuel;
         this.pos = v3(this.base.x, this.base.y, this.base.z + 300);
         this.spd = 160;
@@ -136,6 +168,7 @@ export class Fighter extends Air {
     }
     if (this.aam && !this.aam.alive) this.aam = null;
     if (this.escort) this.stepEscort(w);
+    if (this.state !== 'sweep') this.tfAgl = null;
 
     switch (this.state) {
       case 'station': {
@@ -177,6 +210,39 @@ export class Fighter extends Air {
           w.log(`${this.name} Fox 3 on ${tr.label} at ${(R / 1000).toFixed(0)} km`, 'engage');
         }
         if (this.missiles === 0 && !this.aam) this.rtb(w);
+        break;
+      }
+      case 'sweep': {
+        const ad = w.enemyAd;
+        const tgts = ad.sites.filter((a) => a.base.id === this.sweepId && a.site.alive);
+        if (w.t < this.popUntil) {
+          // Popped up to release, then turns for home.
+          this.tfAgl = 1500;
+          this.cmdSpd = 300;
+          this.steer(this.base.x, this.base.y, dt);
+          break;
+        }
+        if (this.popUntil > 0) {
+          this.popUntil = 0;
+          this.sweepId = null;
+          this.rtb(w);
+          break;
+        }
+        if (!tgts.length) {
+          this.sweepId = null;
+          this.toStation(w);
+          break;
+        }
+        const aim = tgts[0].site.pos;
+        this.steer(aim.x, aim.y, dt);
+        this.tfAgl = 150;
+        this.cmdSpd = 300;
+        if (hdist(this.pos, aim) < ENEMY_AD.sweepReleaseM) {
+          ad.release(w, this, this.sweepId!);
+          this.standoff--;
+          this.popUntil = w.t + 15;
+          w.log(`${this.name} pops up and releases on the ${tgts[0].base.name}`, 'engage');
+        }
         break;
       }
       case 'rtb': {

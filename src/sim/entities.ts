@@ -20,7 +20,7 @@ import type { World } from './world';
 import type { Site } from './sites';
 
 export type Side = 'blue' | 'red' | 'neutral';
-export type Kind = 'drone' | 'cruise' | 'bomber' | 'strike' | 'bomb' | 'helo' | 'atgm' | 'convoy' | 'column' | 'sead' | 'soj' | 'tbm' | 'arm' | 'airliner' | 'fighter';
+export type Kind = 'drone' | 'cruise' | 'bomber' | 'strike' | 'bomb' | 'helo' | 'atgm' | 'convoy' | 'column' | 'sead' | 'soj' | 'tbm' | 'arm' | 'airliner' | 'fighter' | 'rsam';
 
 export interface Warhead {
   lethalR: number;

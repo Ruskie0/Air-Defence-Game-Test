@@ -1,4 +1,5 @@
 import { Cruise, Drone } from './entities';
+import { ENEMY_AD } from './enemyad';
 import { add, hdist, polar, v3 } from './math';
 import { type Asset, type EnemyBase, basesWith, draw } from './theatre';
 import { tbmFrom, tbmFlightS } from './threats';
@@ -83,10 +84,12 @@ export class Exposure {
       let heat = f.heat ?? 0;
       const n = f.fu?.launched ?? 0;
       const before = this.fired.get(f) ?? 0;
-      if (n > before) heat += (n - before) * (EXPOSURE.launch[type] ?? 0) * w.mods.exposureMult;
+      // An enemy SAM site's radar watching the spot pins launches and emissions down faster.
+      const seen = w.enemyAd.watched(w, f.sites[0].pos) ? ENEMY_AD.exposureMult : 1;
+      if (n > before) heat += (n - before) * (EXPOSURE.launch[type] ?? 0) * w.mods.exposureMult * seen;
       this.fired.set(f, n);
       if (f.move) heat = 0;
-      else if (f.radar?.isEmitting()) heat += (EXPOSURE.radiate[type] ?? 0) * dt * w.mods.exposureMult;
+      else if (f.radar?.isEmitting()) heat += (EXPOSURE.radiate[type] ?? 0) * dt * w.mods.exposureMult * seen;
       else heat -= EXPOSURE.decay * dt;
       f.heat = Math.min(EXPOSURE.threshold, Math.max(0, heat));
       if (f.heat >= EXPOSURE.threshold && this.canStrike(w, f)) this.locate(w, f);

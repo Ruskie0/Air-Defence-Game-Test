@@ -1,6 +1,6 @@
 import { DEG, G } from './constants';
-import { V3, add, addScaled, clamp, clone, cross, dirAzEl, dist, dot, len, len2, norm, scale, sub, v3, wrap180 } from './math';
-import type { Entity } from './entities';
+import { V3, add, addScaled, clamp, clone, cross, dirAzEl, dist, dot, len, norm, scale, sub, v3, wrap180 } from './math';
+import type { Entity, Kind } from './entities';
 import type { Radar } from './radar';
 import type { Site } from './sites';
 import type { World } from './world';
@@ -13,22 +13,73 @@ export interface Round {
   tracer: boolean;
 }
 
-const MUZZLE = 1100;
-/** Quadratic drag coefficient per metre: v(s) = v0 * exp(-K * s). */
+/** Quadratic drag coefficient per metre for the visual rounds: v(s) = v0 * exp(-K * s). */
 const K = 1.9e-4;
-const ROF = 75; // rounds per second (4500 rpm)
 const DISPERSION = 2.2e-3; // rad, 1 sigma
-const SLEW = 115; // deg/s
 
-/** Close-in weapon system: own search/track radar, lead-computing gun with per-round ballistics. */
+export type GunKind = 'ciws' | 'gun35' | 'laser';
+
+/**
+ * Game stats of a point-defence weapon. Kill chances are balance numbers, not a model of real weapons:
+ * every second the weapon is on a target at close range it kills it with probability 1 - exp(-rate),
+ * falling off towards the edge of its range.
+ */
+export interface GunSpec {
+  kind: GunKind;
+  /** Name prefix of fielded units (CIWS 1, Skyburst 2, ...). */
+  label: string;
+  /** Furthest intercept it will fire at (m). */
+  rangeM: number;
+  /** Rounds per magazine (Infinity for the laser). */
+  ammo: number;
+  reloadS: number;
+  /** Visual rounds per second (0: no rounds, the laser). */
+  rof: number;
+  muzzle: number;
+  slew: number;
+  /** Kill rate per second of fire, by target kind. Kinds not listed are not engaged. */
+  killRate: Partial<Record<Kind, number>>;
+  /** Laser: seconds of continuous fire before it must cool down, and how long that takes. */
+  heatS?: number;
+  coolS?: number;
+}
+
+export const GUNS: Record<GunKind, GunSpec> = {
+  ciws: {
+    kind: 'ciws', label: 'CIWS', rangeM: 2500, ammo: 1550, reloadS: 90, rof: 75, muzzle: 1100, slew: 115,
+    killRate: { drone: 1.6, cruise: 1.4, arm: 1.0, sead: 0.5, bomber: 0.3, fighter: 0.5 },
+  },
+  gun35: {
+    kind: 'gun35', label: 'Skyburst', rangeM: 4500, ammo: 240, reloadS: 45, rof: 18, muzzle: 1050, slew: 80,
+    killRate: { drone: 1.3, cruise: 0.9, arm: 0.45, sead: 0.6, bomber: 0.4, fighter: 0.6 },
+  },
+  laser: {
+    kind: 'laser', label: 'Laser', rangeM: 3500, ammo: Infinity, reloadS: 0, rof: 0, muzzle: 0, slew: 60,
+    killRate: { drone: 0.45, cruise: 0.12 }, heatS: 12, coolS: 8,
+  },
+};
+
+/** How much of its close-range kill rate a weapon keeps at range R (full inside half range, 35% at max). */
+const falloff = (R: number, max: number): number => (R < 0.5 * max ? 1 : 1 - (0.65 * (R - 0.5 * max)) / (0.5 * max));
+
+/**
+ * Point-defence weapon (CIWS gun, 35 mm airburst gun or laser) with its own search/track radar. It picks the
+ * most urgent target inside its envelope, slews onto it and rolls a kill chance every step it fires.
+ */
 export class Ciws {
   readonly code: string;
   readonly name: string;
   readonly site: Site;
   readonly radar: Radar;
-  ammo = 1550;
-  readonly maxAmmo = 1550;
+  readonly spec: GunSpec;
+  ammo: number;
+  readonly maxAmmo: number;
   reloadUntil = 0;
+  /** Laser only: seconds of fire built up towards overheating, and when it is cool again (0 if not cooling). */
+  heat = 0;
+  coolUntil = 0;
+  /** Laser only: the beam is on the target this step. */
+  lasing = false;
   auto = true;
   aimAz = 0;
   aimEl = 15;
@@ -40,11 +91,19 @@ export class Ciws {
   private nextSelect = 0;
   private burst = 0;
 
-  constructor(code: string, name: string, site: Site, radar: Radar) {
+  constructor(code: string, name: string, site: Site, radar: Radar, spec: GunSpec = GUNS.ciws) {
     this.code = code;
     this.name = name;
     this.site = site;
     this.radar = radar;
+    this.spec = spec;
+    this.ammo = spec.ammo;
+    this.maxAmmo = spec.ammo;
+  }
+
+  /** Can this weapon engage that kind of target at all? */
+  engages(kind: Kind): boolean {
+    return (this.spec.killRate[kind] ?? 0) > 0;
   }
 
   get gun(): V3 {
@@ -58,13 +117,12 @@ export class Ciws {
     for (const [id, t] of this.radar.firm) {
       if (w.t - t > 1.5) continue;
       const e = w.entityById(id);
-      if (!e || !e.alive || !e.airborne || e.side !== 'red') continue;
-      if (e.speed > 1300) continue; // ballistic re-entry vehicles are outside the fire-control envelope
+      if (!e || !e.alive || !e.airborne || e.side !== 'red' || !this.engages(e.kind)) continue;
       const r = sub(e.pos, gun);
       const R = len(r);
-      if (R > 4500) continue;
+      if (R > this.spec.rangeM * 1.8) continue;
       const closing = -dot(r, e.vel) / Math.max(R, 1);
-      if (closing < 10 && R > 1200) continue;
+      if (closing < 10 && R > this.spec.rangeM * 0.5) continue;
       const tgo = R / Math.max(closing, 10);
       if (tgo < bestTgo) {
         bestTgo = tgo;
@@ -82,7 +140,14 @@ export class Ciws {
   update(w: World, dt: number): void {
     this.updateRounds(w, dt);
     this.firing = false;
+    this.lasing = false;
     if (!this.site.alive) return;
+    const spec = this.spec;
+    if (spec.heatS && this.coolUntil > 0 && w.t >= this.coolUntil) {
+      this.coolUntil = 0;
+      this.heat = 0;
+    }
+    if (spec.heatS && this.coolUntil === 0) this.heat = Math.max(0, this.heat - dt * 0.5);
     if (this.ammo === 0 && w.t >= this.reloadUntil) {
       this.ammo = this.maxAmmo;
       w.log(`${this.name} reloaded`, 'info');
@@ -112,27 +177,40 @@ export class Ciws {
       this.est.pos = addScaled(pred, res, 0.25);
       this.est.vel = addScaled(this.est.vel, res, 0.03 / dt);
     }
-    // Lead: solve time of flight with drag, then add gravity drop.
-    let tof = R / MUZZLE;
+    // Lead the target by the time of flight (a laser points straight at it).
+    let tof = spec.muzzle ? R / spec.muzzle : 0;
     let p = this.est.pos;
-    for (let i = 0; i < 6; i++) {
-      p = addScaled(this.est.pos, this.est.vel, tof);
-      const d = dist(gun, p);
-      const arg = K * d;
-      tof = arg < 0.95 ? (Math.exp(arg) - 1) / (K * MUZZLE) : 99;
+    if (spec.muzzle) {
+      for (let i = 0; i < 6; i++) {
+        p = addScaled(this.est.pos, this.est.vel, tof);
+        const arg = K * dist(gun, p);
+        tof = arg < 0.95 ? (Math.exp(arg) - 1) / (K * spec.muzzle) : 99;
+      }
     }
     const aim = sub(p, gun);
     aim.z += 0.5 * G * tof * tof;
     const wantAz = (Math.atan2(aim.x, aim.y) / DEG + 360) % 360;
     const wantEl = Math.atan2(aim.z, Math.hypot(aim.x, aim.y)) / DEG;
-    const m = SLEW * dt;
+    const m = spec.slew * dt;
     this.aimAz = (this.aimAz + clamp(wrap180(wantAz - this.aimAz), -m, m) + 360) % 360;
     this.aimEl = this.aimEl + clamp(wantEl - this.aimEl, -m, m);
     const err = Math.hypot(wrap180(wantAz - this.aimAz) * Math.cos(this.aimEl * DEG), wantEl - this.aimEl);
     const interceptR = dist(gun, p);
-    if (err < 0.6 && interceptR < 2300 && tof < 4 && this.ammo > 0 && this.aimEl > -2) {
+    const canFire = err < 0.6 && interceptR < spec.rangeM && tof < 4 && this.ammo > 0 && this.aimEl > -2 && this.coolUntil === 0;
+    if (canFire && spec.kind === 'laser') {
+      this.lasing = true;
+      this.heat += dt * 1.5;
+      if (this.heat >= spec.heatS!) {
+        this.coolUntil = w.t + spec.coolS!;
+        w.log(`${this.name} overheated, cooling down`, 'info');
+      }
+      this.roll(w, tgt, R, dt);
+      return;
+    }
+    if (canFire) {
       this.firing = true;
-      this.acc += ROF * dt;
+      this.roll(w, tgt, R, dt);
+      this.acc += spec.rof * dt;
       const dir = dirAzEl(this.aimAz, this.aimEl);
       const u = norm(cross(dir, v3(0, 0, 1)));
       const vv = cross(u, dir);
@@ -142,10 +220,10 @@ export class Ciws {
         this.burst++;
         w.stats.ciwsRounds++;
         const d = add(dir, add(scale(u, w.rng.gauss() * DISPERSION), scale(vv, w.rng.gauss() * DISPERSION)));
-        this.rounds.push({ pos: clone(gun), vel: scale(norm(d), MUZZLE), t0: w.t, alive: true, tracer: this.burst % 4 === 0 });
+        this.rounds.push({ pos: clone(gun), vel: scale(norm(d), spec.muzzle), t0: w.t, alive: true, tracer: this.burst % 4 === 0 });
       }
       if (this.ammo === 0) {
-        this.reloadUntil = w.t + 90;
+        this.reloadUntil = w.t + spec.reloadS;
         w.log(`${this.name} Winchester, reloading`, 'alert');
       }
     } else {
@@ -153,38 +231,21 @@ export class Ciws {
     }
   }
 
+  /** One step of fire on the target: a kill chance from the weapon's rate for its kind and the range. */
+  private roll(w: World, tgt: Entity, R: number, dt: number): void {
+    const rate = (this.spec.killRate[tgt.kind] ?? 0) * falloff(R, this.spec.rangeM) * w.pdBonus;
+    if (w.rng.chance(1 - Math.exp(-rate * dt))) w.killEntity(tgt, this.name, this.name, this.spec.kind === 'laser' ? 'laser' : 'gun');
+  }
+
+  /** The rounds in flight are for show: kills are decided by roll(). */
   private updateRounds(w: World, dt: number): void {
     if (!this.rounds.length) return;
-    const gun = this.gun;
-    const cands = w.entities.filter((e) => e.alive && e.airborne && e.side !== 'blue' && dist(e.pos, gun) < 4500);
     for (const r of this.rounds) {
-      if (!r.alive) continue;
-      const prev = r.pos;
       const sp = len(r.vel);
       r.vel = scale(r.vel, 1 - K * sp * dt);
       r.vel.z -= G * dt;
       r.pos = addScaled(r.pos, r.vel, dt);
-      for (const e of cands) {
-        if (!e.alive) continue;
-        // Closest approach of round and target over this step, in the target's frame.
-        const r0 = sub(sub(e.pos, scale(e.vel, dt)), prev);
-        const vr = sub(e.vel, r.vel);
-        const v2 = len2(vr);
-        const tca = v2 > 1 ? clamp(-dot(r0, vr) / v2, 0, dt) : 0;
-        const miss = len(addScaled(r0, vr, tca));
-        if (miss < e.hitRadius) {
-          r.alive = false;
-          const pk = e.kind === 'drone' ? 0.5 : e.kind === 'cruise' ? 0.35 : e.kind === 'arm' ? 0.3 : 0.12;
-          if (w.rng.chance(pk)) w.killEntity(e, this.name, this.name, 'gun');
-          break;
-        }
-      }
-      if (!r.alive) continue;
-      if (w.t - r.t0 > 4.5) {
-        r.alive = false; // self-destruct tracer
-      } else if (r.pos.z < w.terrain.groundAt(r.pos.x, r.pos.y)) {
-        r.alive = false;
-      }
+      if (w.t - r.t0 > 4.5 || r.pos.z < w.terrain.groundAt(r.pos.x, r.pos.y)) r.alive = false;
     }
     for (let i = this.rounds.length - 1; i >= 0; i--) if (!this.rounds[i].alive) this.rounds.splice(i, 1);
   }

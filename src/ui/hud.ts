@@ -527,7 +527,7 @@ export class Hud {
           <span>State</span><b>${!c.site.alive ? 'destroyed' : c.firing ? `firing at ${c.target?.name ?? ''}` : c.target ? `tracking ${c.target.name}` : c.auto ? 'automatic' : 'hold'}</b>
         </div>
         <div class="row"><button data-act="ciws" data-code="${c.code}" ${c.site.alive ? '' : 'disabled'}>${c.auto ? 'Hold fire' : 'Automatic'}</button></div>
-        <div class="dim">The gun engages anything inbound inside about 2 km on its own; it cannot be pointed at a track.</div>`;
+        <div class="dim">${c.spec.kind === 'laser' ? 'The laser burns down drones (and, slowly, cruise missiles) inside 3.5 km. It never runs out of ammunition but overheats after long bursts.' : `The gun engages anything inbound inside about ${(c.spec.rangeM / 1000).toFixed(1)} km on its own; it cannot be pointed at a track.`}</div>`;
     }
     if (code.startsWith('F')) {
       const i = Number(code.slice(1));

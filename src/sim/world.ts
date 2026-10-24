@@ -84,6 +84,8 @@ export class World {
   readonly tracker = new Tracker();
   readonly scenario: Scenario;
   wcs: Wcs = 'TIGHT';
+  /** Multiplier on point-defence kill rates (campaign upgrades). */
+  pdBonus = 1;
   readonly logEntries: LogEntry[] = [];
   /** Total log entries ever written (the list itself is capped). */
   logSeq = 0;

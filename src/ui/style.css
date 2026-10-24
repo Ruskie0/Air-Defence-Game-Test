@@ -486,7 +486,8 @@ body[data-mode='menu'] :is(#left, #right, #log, #ppi-wrap, #plan-left, #plan-rig
 body[data-mode='plan'] :is(#left, #right, #log, #speed, #wcs),
 body[data-mode='debrief'] :is(#plan-left, #plan-right),
 body[data-mode='battle'] :is(#plan-left, #plan-right),
-body[data-mode='sandbox'] :is(#plan-left, #plan-right) {
+body[data-mode='sandbox'] :is(#plan-left, #plan-right),
+body[data-mode='training'] :is(#plan-left, #plan-right, #spawn) {
   display: none;
 }
 body:not([data-mode='menu']) #menu {
@@ -752,3 +753,44 @@ td.link {
 }
 .rank{color:#ffd84d;font-size:10px;letter-spacing:-1px}
 .event{border:1px solid var(--warn);border-radius:6px;padding:4px 10px 8px;margin:6px 0;background:#3d34171f}.event h3{color:var(--warn)}.event p{margin:4px 0}.event button{text-align:left;flex:1}
+
+/* ---------------------------------------------------------------- training coach */
+#coach {
+  left: 336px;
+  bottom: 146px;
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 12px;
+  z-index: 6;
+  border-color: var(--accent);
+  box-shadow: 0 0 18px rgba(120, 255, 170, 0.15);
+}
+#coach .coach-h {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+}
+#coach .coach-h .ok {
+  color: var(--accent);
+  font-weight: bold;
+}
+#coach p {
+  margin: 6px 0 8px;
+  line-height: 1.45;
+}
+#coach .coach-b {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+#coach button.skip {
+  color: var(--dim);
+}
+@media (max-width: 980px) {
+  #coach {
+    left: 16px;
+    bottom: auto;
+    top: 52px;
+  }
+}

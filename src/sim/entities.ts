@@ -410,7 +410,8 @@ export class Bomber extends Air {
         }
       }
     } else {
-      this.steer(this.home.x, this.home.y, dt);
+      // Head out past the start point and off the map.
+      this.steer(this.home.x * 2, this.home.y * 2, dt);
       if (Math.hypot(this.pos.x, this.pos.y) > 210000) this.alive = false;
     }
     this.integrate(w, dt);
@@ -588,7 +589,8 @@ export class Sead extends Air {
         }
       }
     } else {
-      this.steer(this.home.x, this.home.y, dt);
+      // Head out past the start point and off the map.
+      this.steer(this.home.x * 2, this.home.y * 2, dt);
       if (Math.hypot(this.pos.x, this.pos.y) > 210000) this.alive = false;
     }
     this.integrate(w, dt);

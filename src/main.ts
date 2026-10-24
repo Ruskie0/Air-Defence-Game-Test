@@ -1,6 +1,5 @@
 import './ui/style.css';
-import type { Campaign } from './campaign/campaign';
-import { CAMPAIGN_DAYS } from './campaign/campaign';
+import { CAMPAIGN_DAYS, Campaign } from './campaign/campaign';
 import { View3D } from './render/view3d';
 import { DT } from './sim/constants';
 import { MAP_TYPE_LIST, MapType, Terrain, typeForSeed } from './sim/terrain';
@@ -8,6 +7,7 @@ import { MAP_SEED, World } from './sim/world';
 import { CampaignUi, loadSaved } from './ui/campaign-ui';
 import { GameControl, Hud } from './ui/hud';
 import { Ppi } from './ui/ppi';
+import { Tutorial } from './ui/tutorial';
 
 const params = new URLSearchParams(location.search);
 const seed = Number(params.get('seed')) || MAP_SEED;
@@ -32,6 +32,8 @@ const backdrop = (): World => new World({ seed, terrain, raids: [], civil: false
 let world = backdrop();
 /** Only a battle (sandbox or campaign day) runs the simulation; the menu and planning just render. */
 let running = false;
+/** The training mission's coach, while one is running. */
+let tutorial: Tutorial | null = null;
 const view = new View3D(document.getElementById('view')!, world);
 const ppi = new Ppi(document.getElementById('ppi') as HTMLCanvasElement, world);
 const ctl: GameControl = { speed: Number(params.get('speed')) || 1, paused: false };
@@ -65,15 +67,18 @@ const cui = new CampaignUi({
     view.setView('defended');
   },
   toMenu() {
+    endTraining();
     running = false;
     hud.campaign = null;
     show(backdrop());
     cui.showMenu();
   },
   startSandbox,
+  startTraining,
 });
 
 function startSandbox(type?: MapType): void {
+  endTraining();
   hud.campaign = null;
   terrain = sandboxTerrain(type);
   const w = new World({ seed, terrain });
@@ -85,9 +90,40 @@ function startSandbox(type?: MapType): void {
   view.setView('defended');
 }
 
+/** The guided training battle: the campaign's starting units plus an early warning radar, on a fixed map. */
+function startTraining(): void {
+  endTraining();
+  hud.campaign = null;
+  const c = Campaign.create(424242, 'normal', 'coastal');
+  c.buy('EWR');
+  const w = c.makeWorld(false);
+  show(w);
+  hud.setWorld(w);
+  ctl.paused = false;
+  ctl.speed = 1;
+  running = true;
+  document.body.dataset.mode = 'training';
+  view.setView('defended');
+  tutorial = new Tutorial(w, hud, ctl, (to) => {
+    tutorial = null;
+    running = false;
+    if (to === 'campaign') cui.newCampaign();
+    else {
+      show(backdrop());
+      cui.showMenu();
+    }
+  });
+}
+
+function endTraining(): void {
+  tutorial?.close();
+  tutorial = null;
+}
+
 // ?mode=sandbox skips the menu (automated playtests use it); ?mode=campaign starts or continues one.
 const mode = params.get('mode');
 if (mode === 'sandbox') startSandbox();
+else if (mode === 'training') startTraining();
 else if (mode === 'campaign') {
   const saved = params.has('seed') ? null : loadSaved();
   if (saved) cui.continueCampaign(saved);
@@ -126,6 +162,7 @@ function frame(now: number): void {
   view.render();
   ppi.draw();
   if (running) hud.update();
+  tutorial?.update();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

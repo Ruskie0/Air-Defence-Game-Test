@@ -29,6 +29,7 @@ export interface CampaignHost {
   toMenu(): void;
   /** Start the sandbox on a new map (of this type, or a random one). */
   startSandbox(type?: MapType): void;
+  startTraining(): void;
 }
 
 /** Saved campaign in this browser, if any. Storage can be unavailable, so every access is guarded. */
@@ -87,6 +88,10 @@ export class CampaignUi {
       <h2>AIR DEFENCE</h2>
       <p>Command the integrated air defence of an airbase, its command and reporting centre (CRC) and a power plant. Every radar, missile and gun round is simulated.</p>
       <div class="menu-opts">
+        <button data-cui="training" class="big ${saved ? '' : 'go'}">
+          <b>Training</b>
+          <small>New here? A short guided battle: tracks, weapons control, firing by hand and dealing with radar-hunting SEAD. About ten minutes.</small>
+        </button>
         <div class="big-group">
           <div class="big-h"><b>New campaign</b>
           <small>${CAMPAIGN_DAYS} days on a new random map. Earn a budget from what still stands, buy and deploy units, and face an enemy that learns from what worked.${saved ? ' Replaces the saved campaign.' : ''}</small></div>
@@ -402,6 +407,9 @@ export class CampaignUi {
       }
       case 'sandbox':
         this.host.startSandbox(this.mapPick);
+        return;
+      case 'training':
+        this.host.startTraining();
         return;
       case 'map':
         this.mapPick = (d.map || undefined) as MapType | undefined;

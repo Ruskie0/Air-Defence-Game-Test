@@ -1,6 +1,7 @@
 import { loadBest } from '../campaign/laststand';
 import { MEDALS, MedalId, earnedMedals } from '../campaign/medals';
 import { CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty } from '../campaign/campaign';
+import { DELIVERY_H, PULSES, REPAIR_PER_H, hhmm, stamp } from '../campaign/clock';
 import type { View3D } from '../render/view3d';
 import { CATALOG, DeployedUnit, RANKS, UnitType, rankOf } from '../sim/catalog';
 import { bearingDeg, v3 } from '../sim/math';
@@ -190,7 +191,7 @@ export class CampaignUi {
     const s = c.s;
     const last = s.history[s.history.length - 1];
     $('raid').innerHTML = `<span class="lbl">DAY</span><b>${s.day}</b><span class="dim">/${CAMPAIGN_DAYS}</span> <span class="lbl" style="margin-left:10px">PLANNING</span><span class="dim">${c.diff.name}</span>`;
-    $('clock').innerHTML = '';
+    $('clock').innerHTML = `<b>${hhmm(c.clock)}</b> <span class="rate paused">CLOCK STOPPED</span>`;
     $('score').innerHTML = `<span class="chip">Budget <b>${money(s.money)}</b></span>`;
 
     const shop = SHOP_ORDER.map((t) => {
@@ -200,7 +201,7 @@ export class CampaignUi {
       return `<div class="shop-item ${locked ? 'locked' : ''}">
         <div class="shop-h"><b>${info.name}</b><span class="mono">${money(info.costM)}</span></div>
         <div class="dim">${esc(info.role)}</div>
-        <div class="row">${locked ? `<span class="st emcon">Day ${info.unlockDay}</span>` : `<button data-cui="buy" data-type="${t}" ${why ? 'disabled' : ''} title="${esc(why ?? 'Buy and place on the map')}">Buy</button>`}</div>
+        <div class="row">${locked ? `<span class="st emcon">Day ${info.unlockDay}</span>` : `<button data-cui="buy" data-type="${t}" ${why ? 'disabled' : ''} title="${esc(why ?? (c.started ? `Buy and place on the map. It reaches the depot ${DELIVERY_H[t]} h after ordering and sits out raids until then` : 'Buy and place on the map'))}">Buy</button>${c.started ? ` <span class="dim">arrives in ${DELIVERY_H[t]} h</span>` : ''}`}</div>
       </div>`;
     }).join('');
 
@@ -239,20 +240,20 @@ export class CampaignUi {
             return `<div class="shop-item ${locked ? 'locked' : ''}">
               <div class="shop-h"><b>${esc(b.name)}</b><span class="mono">${money(d.costM)} · ${Math.round(d.chance * 100)}%</span></div>
               <div class="dim">${esc(d.desc)} Holds ${esc(stockText(b))}.</div>
-              <div class="row">${locked ? `<span class="st emcon">Day ${d.unlockDay}</span>` : `<button data-cui="deepstrike" data-id="${b.id}" ${why ? 'disabled' : ''} title="${esc(why ?? `${Math.round(d.chance * 100)}% chance. If it works, half of what it holds is destroyed for good, and today's packages from it are cut`)}">Strike</button>`}</div>
+              <div class="row">${locked ? `<span class="st emcon">Day ${d.unlockDay}</span>` : `<button data-cui="deepstrike" data-id="${b.id}" ${why ? 'disabled' : ''} title="${esc(why ?? `${Math.round(d.chance * 100)}% chance. If it works, half of what it holds is destroyed for good, and the next raid's packages from it are cut`)}">Strike</button>`}</div>
             </div>`;
           })
           .join('') || '<div class="dim">No enemy installation is located yet. Bases show up once they launch something.</div>';
     $('plan-left').innerHTML = `
       ${event}
       ${this.frontPanel()}
-      <h3>Intelligence briefing, day ${s.day}</h3>
+      <h3>Intelligence briefing, ${esc(stamp(c.clock))}</h3>
       <p class="dim">${esc(this.mapLine())}</p>
       <ul class="intel">${intel.map((l) => `<li>${esc(l)}</li>`).join('') || '<li class="dim">Nothing reported.</li>'}</ul>
       ${this.enemyPanel()}
       <h3>Bonus objectives</h3>
-      <ul class="intel">${(s.objectives ?? []).map((o) => `<li><b>${esc(objectiveName(o))}</b> <span class="mono">+${money(o.rewardM)}</span>: ${esc(objectiveDesc(o))}</li>`).join('') || '<li class="dim">None today.</li>'}</ul>
-      <h3>Deep strike <span class="dim">one a day, before the battle</span></h3>
+      <ul class="intel">${(s.objectives ?? []).map((o) => `<li><b>${esc(objectiveName(o))}</b> <span class="mono">+${money(o.rewardM)}</span>: ${esc(objectiveDesc(o))}</li>`).join('') || '<li class="dim">None for this raid.</li>'}</ul>
+      <h3>Deep strike <span class="dim">one a day, between raids</span></h3>
       <div class="shop">${strikes}</div>
       ${last?.lessons.length ? `<h3>Enemy assessment</h3><ul class="intel">${last.lessons.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
       <h3>Procurement <span class="dim">budget ${money(s.money)}</span></h3>
@@ -273,8 +274,10 @@ export class CampaignUi {
       .map((a) => {
         const cost = c.repairCost(a.name);
         const col = a.hp > 60 ? '#5ee07a' : a.hp > 25 ? '#ffd84d' : '#ff4d4d';
-        return `<div class="asset"><span>${a.name}</span><span class="bar"><i style="width:${a.hp}%;background:${col}"></i></span>
-          ${cost > 0 ? `<button data-cui="repair" data-name="${a.name}" ${s.money > 0 ? '' : 'disabled'} title="Full repair ${money(cost)}; a partial repair uses what you have">Repair ${money(Math.min(cost, s.money))}</button>` : '<span class="dim">intact</span>'}</div>`;
+        const done = c.repairDone(a.name);
+        const working = done !== null ? ` <span class="dim" title="Repair crews restore ${REPAIR_PER_H} points an hour">+${Math.round(c.repairing(a.name))} by ${hhmm(done)}</span>` : '';
+        return `<div class="asset"><span>${a.name}${working}</span><span class="bar"><i style="width:${a.hp}%;background:${col}"></i></span>
+          ${cost > 0 ? `<button data-cui="repair" data-name="${a.name}" ${s.money > 0 ? '' : 'disabled'} title="Full repair ${money(cost)}; a partial repair uses what you have.${c.started ? ` The crews restore ${REPAIR_PER_H} points an hour.` : ''}">Repair ${money(Math.min(cost, s.money))}</button>` : '<span class="dim">intact</span>'}</div>`;
       })
       .join('');
 
@@ -295,7 +298,8 @@ export class CampaignUi {
           const next = RANKS[rank + 1];
           rows.push(`Crew <b>${RANKS[rank].name} ${RANKS[rank].badge}</b> · ${u.xp ?? 0} kills${next ? `, ${next.xp - (u.xp ?? 0)} to ${next.name}` : ''}`);
         }
-        if (c.spotted(u)) rows.push(`<span class="bad">Photographed by enemy recon: strikes may be aimed here. Move it to dodge them.</span>`);
+        if (u.arrives !== undefined) rows.push(`<span class="warn">On its way: reaches the depot about ${hhmm(u.arrives)}. It sits out raids until then; place it now and it deploys where you put it.</span>`);
+        if (c.spotted(u)) rows.push(`<span class="bad">The enemy has a fix on this position (recon photographs or its launches). Strikes may be aimed here: move it to dodge them.</span>`);
         if (info.sector) rows.push(`Sector facing <b>${Math.round(u.facing).toString().padStart(3, '0')}°</b> (±60°)`);
         const reload = c.reloadCost(u);
         const actions = [
@@ -305,7 +309,7 @@ export class CampaignUi {
           u.launchers.length ? btn('spares', '+4 spares', c.sparesCost(u), 'Spare missiles reload the launchers during the day') : '',
           btn('launcher', '+Launcher', c.launcherCost(u), 'One more loaded launcher'),
           btn('aircraft', 'Replace fighter', c.replaceAircraftCost(u)),
-          u.loan ? '<span class="st ok">On loan today</span>' : `<button data-cui="sell" data-uid="${u.uid}" class="${this.confirmSell === u.uid ? 'warn' : ''}" title="Scrap for a fifth of the price">${this.confirmSell === u.uid ? `Confirm +${money(info.costM * 0.2)}` : 'Sell'}</button>`,
+          u.loan ? '<span class="st ok">On loan until 06:00</span>' : `<button data-cui="sell" data-uid="${u.uid}" class="${this.confirmSell === u.uid ? 'warn' : ''}" title="Scrap for a fifth of the price">${this.confirmSell === u.uid ? `Confirm +${money(info.costM * 0.2)}` : 'Sell'}</button>`,
         ].join('');
         return `<div class="sys ${this.focus === u.uid ? 'focus' : ''}" data-cui="focus" data-uid="${u.uid}">
           <div class="sys-h"><b>${this.label(u)}</b> <span class="dim">${this.where(u)}</span></div>
@@ -315,7 +319,7 @@ export class CampaignUi {
       .join('');
 
     $('plan-right').innerHTML = `
-      <h3>Defended assets <span class="dim">income tomorrow ${money(c.income())}</span></h3>
+      <h3>Defended assets <span class="dim">income at 06:00 ${money(c.income())}</span></h3>
       <div class="assets">${assets}${towns}</div>
       <h3>Order of battle <span class="dim">${c.units.length} units</span></h3>
       <div class="row restock">${
@@ -325,7 +329,17 @@ export class CampaignUi {
       }<label title="Restock automatically at the start of every day"><input type="checkbox" data-cui="autorestock" ${s.autoRestock ? 'checked' : ''}> every morning</label></div>
       ${this.note ? `<div class="order">${esc(this.note)}</div>` : ''}
       <div class="oob">${units || '<div class="dim">No units. Buy some from the procurement list.</div>'}</div>
-      <div class="plan-go"><button data-cui="start" class="go big-go">Start day ${s.day} ▶</button></div>`;
+      <div class="plan-go">${this.goButtons()}</div>`;
+  }
+
+  /** The clock controls: on to the next raid, or wait an hour first (orders arrive, repairs go on, units can move). */
+  private goButtons(): string {
+    const c = this.c!;
+    const warn = c.s.warn;
+    const when = warn ? ` <small>expected about ${hhmm(warn.at)}</small>` : '';
+    const waiting = c.started && (c.units.some((u) => u.arrives !== undefined) || c.s.deployment.assets.some((a) => c.repairing(a.name) > 0));
+    return `<button data-cui="start" class="go big-go" title="The clock runs on to the enemy's next operation and the battle starts">Advance to the next raid ▶${when}</button>
+      ${c.started ? `<button data-cui="wait" title="Let an hour pass, to let orders arrive and repairs go on before you reposition. Intel's timings can be out: the enemy may come during the hour">Wait 1 hour${waiting ? '' : ' <small class="dim">nothing pending</small>'}</button>` : ''}`;
   }
 
   /** The enemy's installations as far as intel knows them, with what each has left, and what it has lost. */
@@ -363,17 +377,17 @@ export class CampaignUi {
       .map((t, i) => {
         const km = (Math.hypot(t.x, t.y) / 1000).toFixed(0);
         const cls = t.ours ? 'good' : i === f.offensive ? 'warn' : 'dim';
-        const st = t.ours ? `ours, ${t.hp}%` : i === f.offensive ? 'offensive today' : i === next ? 'next objective' : 'enemy held';
+        const st = t.ours ? `ours, ${t.hp}%` : i === f.offensive ? 'offensive on' : i === next ? 'next objective' : 'enemy held';
         return `<li class="${cls}"><b>${esc(t.name)}</b> ${km} km · ${st} · +${money(t.incomeM)}/day${t.airfield ? ' · <b>take it to win</b>' : ''}</li>`;
       })
       .join('');
     const why = c.offensiveError();
     const action =
       f.offensive !== null
-        ? `<p class="warn">The assault force moves up to ${esc(f.towns[f.offensive].name)} today. Keep it above ${ASSAULT_HOLD}% until the day ends. Cover it: units may stand within ${TOWN_ZONE_M / 1000} km of a town we hold.</p>
+        ? `<p class="warn">The assault force moves up to ${esc(f.towns[f.offensive].name)} during the next raid. Keep it above ${ASSAULT_HOLD}% until the raid ends. Cover it: units may stand within ${TOWN_ZONE_M / 1000} km of a town we hold.</p>
            <div class="row"><button data-cui="offensive-cancel" title="Call it off for the money back">Call off the offensive</button></div>`
         : next >= 0
-          ? `<div class="row"><button data-cui="offensive" class="go" ${why ? 'disabled' : ''} title="${esc(why ?? `The enemy will counter-attack the assault force with drones, missiles, helicopters and jets. Hold it above ${ASSAULT_HOLD}% all day to take the town.`)}">Attack ${esc(f.towns[next].name)} ${money(OFFENSIVE_COST_M)}</button>${why ? ` <span class="dim">${esc(why)}</span>` : ''}</div>`
+          ? `<div class="row"><button data-cui="offensive" class="go" ${why ? 'disabled' : ''} title="${esc(why ?? `The enemy will counter-attack the assault force with drones, missiles, helicopters and jets. It goes in with the next raid: hold it above ${ASSAULT_HOLD}% until the raid ends to take the town. One offensive a day.`)}">Attack ${esc(f.towns[next].name)} ${money(OFFENSIVE_COST_M)}</button>${why ? ` <span class="dim">${esc(why)}</span>` : ''}</div>`
           : '<p class="good">Every town on the road is ours.</p>';
     return `<h3>The front</h3>
       <p class="dim">Towns we hold pay every day, let units deploy round them, and each one past the first cuts the enemy's raids by ${Math.round(TOWN_THREAT_CUT * 100)}%. Raids also go for our front town: one knocked flat falls.</p>
@@ -434,7 +448,7 @@ export class CampaignUi {
 
   // ------------------------------------------------------------- the day
 
-  /** Called by the battle HUD's End day button. */
+  /** Called by the battle HUD's End raid button. */
   endDay(w: World): void {
     const c = this.c;
     if (!c) return;
@@ -449,7 +463,7 @@ export class CampaignUi {
     document.body.dataset.mode = 'debrief';
     const dmg = r.damage.filter((d) => d.lost > 0);
     $('debrief-body').innerHTML = `
-      <h2>${over ? (over.won ? 'Campaign won' : 'Campaign lost') : `Day ${r.day} debrief`}</h2>
+      <h2>${over ? (over.won ? `Campaign won${c.s.grade ? `: ${c.s.grade}` : ''}` : 'Campaign lost') : `${r.at !== undefined ? `${esc(stamp(r.at))}, ${r.pulse ? esc(PULSES[r.pulse].name.toLowerCase()) : 'raid'}` : `Day ${r.day}`} debrief`}</h2>
       ${over ? `<p class="${over.won ? 'good' : 'bad'}"><b>${esc(over.reason)}</b></p>` : ''}
       <div class="kv">
         <span>Threats destroyed</span><b>${r.kills}</b>
@@ -484,10 +498,13 @@ export class CampaignUi {
       ${r.lessons.length ? `<h3>Enemy assessment</h3><ul class="intel">${r.lessons.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
       ${
         over
-          ? `<p>Final score <b>${c.score()}</b> over ${c.s.history.length} days.</p>
+          ? `<p>Final score <b>${c.score()}</b> over ${c.s.history.length} raids.</p>
              <div class="menu-opts row"><button data-cui="new" class="go">New campaign</button><button data-cui="menu">Main menu</button></div>`
-          : `<p>Budget for tomorrow: <b>${money(c.s.money)}</b> (income ${money(r.income)}: the assets still working and the towns we hold${r.objectives?.some((o) => o.done) ? ', plus objective bonuses' : ''}${r.restockM ? `; ${money(r.restockM)} already spent restocking the batteries` : ''}).</p>
+          : r.income
+            ? `<p>That was the day's last operation. At 06:00 the income came in: <b>${money(r.income)}</b> from the assets still working and the towns we hold${r.bonusM ? `, after ${money(r.bonusM)} of objective bonuses` : ''}${r.restockM ? `; ${money(r.restockM)} already spent restocking the batteries` : ''}. Budget now <b>${money(c.s.money)}</b>.</p>
              <div class="row"><button data-cui="plan" class="go">Plan day ${c.s.day} ▶</button><button data-cui="menu">Save and quit</button></div>`
+            : `<p>Budget now <b>${money(c.s.money)}</b>${r.bonusM ? ` (objective bonuses ${money(r.bonusM)} paid)` : ''}. The day's income comes at 06:00. The clock is stopped at ${hhmm(c.clock)} while you plan for the next operation.</p>
+             <div class="row"><button data-cui="plan" class="go">Plan for the next raid ▶</button><button data-cui="menu">Save and quit</button></div>`
       }`;
     $('debrief').classList.remove('hidden');
   }
@@ -628,8 +645,22 @@ export class CampaignUi {
         this.stopPlacing();
         this.focus = null;
         store(c);
-        this.host.startBattle(c.makeWorld(), c);
+        this.host.startBattle(c.startPulse(), c);
         return;
+      case 'wait': {
+        const before = c.clock;
+        const r = c.wait(60);
+        if (r.raid) {
+          // Intel had the timing wrong: the raid is on before the hour was up.
+          this.stopPlacing();
+          this.focus = null;
+          store(c);
+          this.host.startBattle(c.startPulse(), c);
+          return;
+        }
+        this.note = `${hhmm(before)} to ${hhmm(c.clock)}: ${r.news.join(' ') || 'quiet.'}`;
+        break;
+      }
       default:
         return;
     }

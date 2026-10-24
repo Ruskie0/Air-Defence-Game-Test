@@ -79,7 +79,7 @@ export const PKG: Record<PkgKind, PkgDef> = {
     size: (d) => (d >= 6 ? 2 : 1),
     asset: 'recon',
     spawn: (w, b, n, _a, _o, f) => spawnRecon(w, n, b, f),
-    describe: (n) => `${n > 1 ? `${n} high-flying reconnaissance drones` : 'a high-flying reconnaissance drone'} orbiting about 32 km out to photograph our positions. If it gets home, tomorrow's strikes will go for what it saw`,
+    describe: (n) => `${n > 1 ? `${n} high-flying reconnaissance drones` : 'a high-flying reconnaissance drone'} orbiting about 32 km out to photograph our positions. If it gets home, the next strikes will go for what it saw`,
   },
   cruise: {
     name: 'Cruise missiles', cost: (n) => 2 + n * 2, minDay: 1, sectors: [0, 2, 3, 4, 5, 6],

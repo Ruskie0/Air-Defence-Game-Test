@@ -64,7 +64,7 @@ export const EVENTS: Record<EventId, EventDef> = {
     apply: (c, i) => {
       if (i === 0) return 'The workers are back at their posts.';
       c.s.incomePenalty = 30;
-      return 'The plant runs on a skeleton crew: income tomorrow is $30M lower.';
+      return 'The plant runs on a skeleton crew: the income at 06:00 is $30M lower.';
     },
   },
   allies: {

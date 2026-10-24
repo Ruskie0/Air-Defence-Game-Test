@@ -317,13 +317,13 @@ export class Campaign {
     return out;
   }
 
-  /** Wait in the lull, to let orders arrive or repairs finish. True if the enemy came first: the raid is on. */
-  wait(min: number): boolean {
+  /** Wait in the lull, to let orders arrive or repairs finish: what happened meanwhile, and whether the enemy came first (the raid is on). */
+  wait(min: number): { raid: boolean; news: string[] } {
     const p = this.pulse;
-    if (!p) return false;
+    if (!p) return { raid: false, news: [] };
     const t = Math.min(this.clock + min, p.at);
-    this.advanceTo(t);
-    return t >= p.at;
+    const news = this.advanceTo(t);
+    return { raid: t >= p.at, news };
   }
 
   /** The clock runs on to the next raid, and the battle starts. */

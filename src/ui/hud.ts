@@ -11,6 +11,7 @@ import type { Site } from '../sim/sites';
 import type { Ciws } from '../sim/ciws';
 import { CATALOG, RANKS } from '../sim/catalog';
 import { DayObjective, objectiveDesc, objectiveName, objectiveStatus } from '../campaign/objectives';
+import { hhmm } from '../campaign/clock';
 import { MOBILITY, moveError, moveStatus } from '../sim/mobility';
 import { Exposure } from '../sim/exposure';
 import { ENEMY_AD } from '../sim/enemyad';
@@ -43,7 +44,7 @@ const esc = (s: string): string => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', 
 export class Hud {
   private w: World;
   /** Campaign mode hides the sandbox spawn panel and offers to end the day once the raids are over. */
-  campaign: { day: number; days: number; objectives: DayObjective[]; onEndDay: () => void } | null = null;
+  campaign: { day: number; days: number; objectives: DayObjective[]; onEndDay: () => void; clock0?: number } | null = null;
   /** Last Stand: the wave counter and best score in the top bar. */
   stand: { wave: number; best: number; canCallEarly: boolean; callEarly: () => void } | null = null;
   private readonly view: View3D;
@@ -433,7 +434,8 @@ export class Hud {
     // Rate tag: the time compression actually running, so a glance at the clock says how fast the battle moves.
     const rate = this.ctl.paused ? 0 : Math.max(this.ctl.speed, this.ctl.fastForward ? (this.ctl.tempo ?? 1) : 1);
     const tag = rate === 0 ? '<span class="rate paused">PAUSED</span>' : rate > 1 ? `<span class="rate${this.ctl.fastForward ? ' auto' : ''}">▸▸ ${rate}×</span>` : '';
-    this.set('clock', `<span class="lbl">T+</span>${fmtTime(w.t)}${tag}`);
+    const wall = this.campaign?.clock0 !== undefined ? `<b>${hhmm(this.campaign.clock0 + w.t / 60)}</b> ` : '';
+    this.set('clock', `${wall}<span class="lbl">T+</span>${fmtTime(w.t)}${tag}`);
     this.set(
       'speed',
       `<button data-act="pause" class="${this.ctl.paused ? 'on warn' : ''}">${this.ctl.paused ? '▶' : '❚❚'}</button>` +
@@ -472,7 +474,7 @@ export class Hud {
         day +
           `<span class="lbl">RAIDS</span> all ${total} launched${clear ? ', airspace clear' : ''}` +
           (this.stand?.canCallEarly ? `<button data-act="nextwave" class="go" title="Count this wave as held now for +$${EARLY_BONUS_M}M, while what is left of it is still in the air">Next wave now</button>` : '') +
-          (this.campaign ? `<button data-act="endday" class="${clear ? 'go' : ''}" title="${clear ? 'Go to the debrief' : 'Threats are still inbound: ending now counts them as leakers'}">End day</button>` : ''),
+          (this.campaign ? `<button data-act="endday" class="${clear ? 'go' : ''}" title="${clear ? 'Go to the debrief' : 'Threats are still inbound: ending now counts them as leakers'}">End raid</button>` : ''),
       );
       return;
     }
@@ -605,7 +607,7 @@ export class Hud {
       const eta = col && aSite.alive && col.state !== 'arrived' ? ` · start line in about ${fmtTime(col.eta(w))}` : '';
       rows.push(`<h3>Assault${col ? ` on ${esc(col.objective)}` : ''}</h3><div class="sys assault"><div class="sys-h"><b>Assault force</b> ${st} <button data-act="flyto" data-x="${Math.round(aSite.pos.x)}" data-y="${Math.round(aSite.pos.y)}" title="Fly the camera to the assault force">Fly to</button></div>
         <div class="sys-b">Road <span class="heat" style="width:80px"><i style="width:${pct}%;background:#78ffaa"></i></span> ${pct}%${eta}</div>
-        <div class="sys-b">Health <span class="heat" style="width:80px"><i style="width:${hp}%;background:${hp >= 40 ? '#ffd84d' : '#ff4d4d'}"></i></span> ${hp}% <span class="dim">(must end the day above 40%)</span></div></div>`);
+        <div class="sys-b">Health <span class="heat" style="width:80px"><i style="width:${hp}%;background:${hp >= 40 ? '#ffd84d' : '#ff4d4d'}"></i></span> ${hp}% <span class="dim">(must end the raid above 40%)</span></div></div>`);
     }
     if (this.campaign?.objectives.length) {
       rows.push('<h3>Objectives</h3>');

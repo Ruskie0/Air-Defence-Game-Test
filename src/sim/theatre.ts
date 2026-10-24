@@ -6,7 +6,7 @@ import type { Terrain } from './terrain';
  * enemy weapon starts at one of them and flies the whole way in, nothing appears near our units, and what
  * we shoot down stays lost. Game-level numbers, not a real order of battle.
  */
-export type Asset = 'strike' | 'sead' | 'recon' | 'helo' | 'drone' | 'cruise' | 'tbm' | 'bomber' | 'soj' | 'sam';
+export type Asset = 'strike' | 'sead' | 'recon' | 'helo' | 'drone' | 'cruise' | 'tbm' | 'bomber' | 'soj' | 'sam' | 'awacs' | 'tanker';
 export type BaseKind = 'airfield' | 'farp' | 'drones' | 'tbm' | 'glcm' | 'rear' | 'sam';
 
 export interface EnemyBase {
@@ -28,18 +28,19 @@ export interface EnemyBase {
 }
 
 /** Aircraft come back from a sortie unless shot down; munitions are used up when launched. */
-export const AIRCRAFT: Asset[] = ['strike', 'sead', 'recon', 'helo', 'bomber', 'soj'];
+export const AIRCRAFT: Asset[] = ['strike', 'sead', 'recon', 'helo', 'bomber', 'soj', 'awacs', 'tanker'];
 
 /** Which kinds of installation launch each asset. */
 export const HOSTS: Record<Asset, BaseKind[]> = {
   strike: ['airfield'], sead: ['airfield'], recon: ['airfield'], helo: ['farp'], drone: ['drones'],
-  cruise: ['glcm'], tbm: ['tbm'], bomber: ['rear'], soj: ['rear'], sam: ['sam'],
+  cruise: ['glcm'], tbm: ['tbm'], bomber: ['rear'], soj: ['rear'], sam: ['sam'], awacs: ['rear'], tanker: ['rear'],
 };
 
 const ASSET_NAMES: Record<Asset, [string, string]> = {
   strike: ['strike jet', 'strike jets'], sead: ['SEAD fighter', 'SEAD fighters'], recon: ['recon drone', 'recon drones'],
   helo: ['attack helicopter', 'attack helicopters'], drone: ['attack drone', 'attack drones'], cruise: ['cruise missile', 'cruise missiles'],
   tbm: ['ballistic missile', 'ballistic missiles'], bomber: ['bomber', 'bombers'], soj: ['stand-off jammer', 'stand-off jammers'], sam: ['SAM missile', 'SAM missiles'],
+  awacs: ['AWACS', 'AWACS'], tanker: ['tanker', 'tankers'],
 };
 
 /** "3 strike jets", "1 bomber". */
@@ -50,7 +51,7 @@ export const stockText = (b: EnemyBase): string =>
   (Object.keys(b.stock) as Asset[]).map((a) => assetCount(a, avail(b, a))).join(', ') || 'nothing';
 
 /** Which kind of enemy entity (World.tally) is which asset, for aircraft shot down. */
-export const TALLY_ASSET: Record<string, Asset> = { strike: 'strike', sead: 'sead', recon: 'recon', helo: 'helo', bomber: 'bomber', soj: 'soj' };
+export const TALLY_ASSET: Record<string, Asset> = { strike: 'strike', sead: 'sead', recon: 'recon', helo: 'helo', bomber: 'bomber', soj: 'soj', awacs: 'awacs', tanker: 'tanker' };
 
 interface BaseDef {
   name: string;
@@ -69,7 +70,7 @@ export const BASE_DEFS: Record<BaseKind, BaseDef> = {
   tbm: { name: 'Ballistic missile launch area', stock: { tbm: 8 }, daily: { tbm: 1.5 }, known: false },
   glcm: { name: 'Cruise missile battery', stock: { cruise: 24 }, daily: { cruise: 6 }, known: false },
   sam: { name: 'SAM site', stock: { sam: 6 }, daily: { sam: 2 }, known: true },
-  rear: { name: 'Rear air base (beyond the map)', stock: { bomber: 3, soj: 2 }, daily: { bomber: 0.4, soj: 0.3 }, known: true },
+  rear: { name: 'Rear air base (beyond the map)', stock: { bomber: 3, soj: 2, awacs: 1, tanker: 1 }, daily: { bomber: 0.4, soj: 0.3, awacs: 0.25, tanker: 0.25 }, known: true },
 };
 
 /** Stocks never grow past this multiple of the starting stock. */
@@ -143,7 +144,7 @@ export function makeTheatre(t: Terrain, seed: number, towns: TheatreTown[] = [],
   add('glcm', landNear(t, rng.range(-15000, 15000), rng.range(105000, 120000)));
   // The rear air base is off the map: its aircraft enter along a corridor at the map edge.
   const edge = t.toWorld(rng.range(-25000, 25000), t.half - 2000);
-  const rear = { bomber: Math.round(3 * threat), soj: Math.round(2 * threat) };
+  const rear = { bomber: Math.round(3 * threat), soj: Math.round(2 * threat), awacs: 1, tanker: 1 };
   out.push({ id: 'rear1', kind: 'rear', name: BASE_DEFS.rear.name, x: Math.round(edge.x), y: Math.round(edge.y), stock: rear, start: { ...rear }, known: true });
   return out;
 }

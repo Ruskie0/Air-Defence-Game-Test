@@ -13,6 +13,7 @@ import { DEFAULT_ZONES, DeployZone, sandboxDeployment } from './deploy';
 import { AssaultOutcome, Column } from './column';
 import { EnemyAd } from './enemyad';
 import { Exposure } from './exposure';
+import { RedSupport } from './redair';
 import { Interceptor, LR_MSL, MR_MSL, MissileSpec, SH_MSL } from './missile';
 import { CIWS_RADAR, EW_RADAR, LR_RADAR, MR_RADAR, Radar, RadarSpec, Report, SH_RADAR } from './radar';
 import { Rng } from './rng';
@@ -131,6 +132,8 @@ export class World {
   readonly exposure: Exposure;
   /** The theatre's SAM sites in this battle (kept apart from our own sites). */
   readonly enemyAd: EnemyAd;
+  /** The enemy's AWACS and tanker, and what they give it while they fly. */
+  readonly redSupport = new RedSupport();
   /** The offensive's assault column driving to its start line, if there is one. */
   column: Column | null = null;
   /** What has happened to the assault force so far ('arrived' or 'destroyed'), or null. */
@@ -239,6 +242,7 @@ export class World {
       this.startHp.set(s.name, s.hp);
     }
     if (this.column) this.spawn(this.column);
+    this.redSupport.launch(this, o.counterBattery ?? 0);
     this.scenario = new Scenario(o.raids, this.terrain.layout.rot);
     if (o.civil ?? true) this.scenario.start(this);
   }
@@ -545,6 +549,7 @@ export class World {
     if (e.side === 'red' && !e.munition && e.fate.air) {
       const key = `${e.pkg}|${World.tally(e)}`;
       this.redAirLost.set(key, (this.redAirLost.get(key) ?? 0) + 1);
+      this.redSupport.lost(this, e.kind);
     }
   }
 

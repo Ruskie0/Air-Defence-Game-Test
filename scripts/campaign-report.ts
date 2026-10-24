@@ -113,6 +113,7 @@ while (!c.s.over) {
   const tempo = new Tempo();
   let escorted = process.argv.includes('--no-escort');
   const sweep = !process.argv.includes('--no-sweep');
+  const hunt = !process.argv.includes('--no-hunt');
   const sent = new Set<unknown>();
   while (!w.scenario.done && w.t < last + 3600) {
     w.step();
@@ -127,6 +128,11 @@ while (!c.s.over) {
         sent.add(a.base.id);
         fg.sweep(w, a.base.id);
       }
+    }
+    // One fighter goes after the enemy AWACS once it is up and the fighter is on CAP.
+    if (hunt && w.t % 5 < 1 / 60 && w.redSupport.awacsUp && !w.fighters.some((f) => f.state === 'hunt')) {
+      const fg = w.fighters.find((f) => f.state === 'station' && !f.huntError(w, 'awacs'));
+      if (fg) fg.hunt(w, 'awacs');
     }
     // Fighters escort the assault column while it is on the road.
     if (!escorted && w.column?.alive && w.t > 10) {
@@ -158,7 +164,7 @@ while (!c.s.over) {
   console.log(
     `\nDay ${day}  budget left after shopping $${Math.round(spent)}M  bought: ${bought.join(', ') || 'nothing'}` +
       `\n  raid: ${plan}` +
-      `\n  enemy SAM: ${w.enemyAd.sites.map((a) => `${a.base.name}${a.site.alive ? '' : ' (destroyed)'}${a.base.known ? '' : ' (unknown)'}`).join(', ') || 'none'}; ${w.logEntries.filter((e) => e.msg.includes('by an enemy SAM')).length} fighters downed` +
+      `\n  enemy SAM: ${w.enemyAd.sites.map((a) => `${a.base.name}${a.site.alive ? '' : ' (destroyed)'}${a.base.known ? '' : ' (unknown)'}`).join(', ') || 'none'}; ${w.logEntries.filter((e) => e.msg.includes('by an enemy SAM')).length} fighters downed; AWACS ${w.deaths.some((e) => e.kind === 'awacs') ? 'shot down' : w.entities.some((e) => e.kind === 'awacs') ? 'flew' : 'none'}, tanker ${w.deaths.some((e) => e.kind === 'tanker') ? 'shot down' : w.entities.some((e) => e.kind === 'tanker') ? 'flew' : 'none'}` +
       `\n  counter-battery: ${w.exposure.located.map((l) => `${l.unit}@${Math.round(l.t)}s${l.moved ? ' (moved)' : ''}`).join(', ') || 'none'}` +
       `\n  kills ${r.kills}, leakers ${r.leakers}, missiles ${r.missilesFired} ($${r.missileCostM}M), civil ${r.civilian}, fratricide ${r.fratricide}, ${Math.round(w.t / 60)} min (${Math.round(realS / 60)} real at auto tempo)` +
       `\n  damage: ${dmg}${r.losses.length ? `\n  lost: ${r.losses.join(', ')}` : ''}` +

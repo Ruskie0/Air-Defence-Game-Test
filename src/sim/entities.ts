@@ -20,7 +20,7 @@ import type { World } from './world';
 import type { Site } from './sites';
 
 export type Side = 'blue' | 'red' | 'neutral';
-export type Kind = 'drone' | 'cruise' | 'bomber' | 'strike' | 'bomb' | 'helo' | 'atgm' | 'convoy' | 'column' | 'sead' | 'soj' | 'tbm' | 'arm' | 'airliner' | 'fighter' | 'rsam';
+export type Kind = 'drone' | 'cruise' | 'bomber' | 'strike' | 'bomb' | 'helo' | 'atgm' | 'convoy' | 'column' | 'sead' | 'soj' | 'tbm' | 'arm' | 'airliner' | 'fighter' | 'rsam' | 'awacs' | 'tanker';
 
 export interface Warhead {
   lethalR: number;
@@ -719,7 +719,7 @@ export class Sead extends Air {
         if (d > 95000) this.steer(0, 0, dt);
         else this.steer(this.pos.x * 2, this.pos.y * 2, dt);
         this.quiet += dt;
-        if (this.quiet > 150) {
+        if (this.quiet > 150 * w.redSupport.stationMult) {
           this.egress = true;
           w.log(`${this.name} found no emitters, egressing`, 'info');
         }
@@ -768,7 +768,7 @@ export class Soj extends Air {
       const p = this.legs[this.leg];
       if (hdist(this.pos, p) < 3000) {
         this.leg = 1 - this.leg;
-        if (this.stationUntil === Infinity) this.stationUntil = w.t + this.onStation;
+        if (this.stationUntil === Infinity) this.stationUntil = w.t + this.onStation * w.redSupport.stationMult;
       }
       this.steer(p.x, p.y, dt);
     }

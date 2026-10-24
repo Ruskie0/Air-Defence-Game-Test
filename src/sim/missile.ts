@@ -266,6 +266,8 @@ export class Interceptor {
     let pk = this.spec.pk * Math.exp(-((miss / this.spec.lethalR) ** 2));
     if (tgt.kind === 'tbm') pk *= 0.9;
     pk *= tgt.cmPk;
+    // Enemy AWACS up: its aircraft get warned of the shot in time to defend against it.
+    if (tgt.side === 'red' && !tgt.munition) pk *= w.redSupport.warnPk;
     const kill = w.rng.chance(pk);
     w.onMissileDetonation(this, tgt, miss, kill);
   }

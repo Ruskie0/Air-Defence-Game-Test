@@ -40,7 +40,7 @@ export interface Emitter {
   name: string;
   pos: V3;
   /** What the emission looks like to an ESM receiver. A decoy copies the LR radar's signature. */
-  signature: 'LR' | 'MR' | 'SH' | 'CIWS' | 'EW';
+  signature: 'LR' | 'MR' | 'SH' | 'CIWS' | 'EW' | 'JAM';
   alive: boolean;
   isEmitting(): boolean;
 }
@@ -540,13 +540,15 @@ export class Sead extends Air {
   }
 
   private esm(w: World): void {
-    const rank = { LR: 0, MR: 1, EW: 1, SH: 2, CIWS: 3 };
+    const rank = { LR: 0, MR: 1, EW: 1, JAM: 1, SH: 2, CIWS: 3 };
+    // Inside our EW jammer's reach the ESM receiver is swamped: it only finds radars close by, and the jammer itself.
+    const blinded = w.ewJammed(this.pos);
     let best: Emitter | null = null;
     let score = Infinity;
     for (const e of w.emitters()) {
       if (!e.alive || !e.isEmitting()) continue;
       const d = dist(e.pos, this.pos);
-      if (d > 190000 || !w.terrain.los(this.pos, e.pos)) continue;
+      if (d > (blinded && e.signature !== 'JAM' ? 30000 : 190000) || !w.terrain.los(this.pos, e.pos)) continue;
       const s = rank[e.signature] * 1e6 + d;
       if (s < score) {
         score = s;
@@ -674,7 +676,8 @@ export class ReconDrone extends Air {
         return;
       }
     }
-    if (this.phase !== 'inbound' && w.t >= this.nextPhoto) {
+    // Our EW jammer swamps its imaging radar and downlink: no pictures inside its reach.
+    if (this.phase !== 'inbound' && w.t >= this.nextPhoto && !w.ewJammed(this.pos)) {
       this.nextPhoto = w.t + 5;
       for (const f of w.fielded) {
         const site = f.sites[0];

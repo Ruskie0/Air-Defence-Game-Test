@@ -68,5 +68,6 @@ export function sandboxDeployment(t?: Terrain): Deployment {
   add(6, 'GNSS', 0, 2500);
   add(7, 'DECOY', 4800, 8600);
   add(8, 'CAP', 0, 50000);
+  add(9, 'JAM', -4500, 1500);
   return { units, assets: DEFENDED_ASSETS.map((a) => ({ name: a.name, hp: 100 })) };
 }

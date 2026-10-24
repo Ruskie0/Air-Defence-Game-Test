@@ -93,6 +93,7 @@ const DEFAULT_SPOTS: Record<UnitType, [number, number][]> = {
   GAP: [[0, 14000], [-12000, 8000], [12000, 8000]],
   GNSS: [[0, 2500], [5000, -6000]],
   DECOY: [[4800, 8600], [-6500, 4500]],
+  JAM: [[-4500, 1500], [3500, -4500]],
   CAP: [[0, 50000], [35000, 25000], [-35000, 25000]],
 };
 
@@ -494,6 +495,8 @@ export class Campaign {
       if (f.radar) u.armWatch = f.radar.armWatch;
       if (f.fu) u.holdFire = f.fu.hold;
       if (f.ciws) u.holdFire = !f.ciws.auto;
+      const em = w.gnss.find((j) => j.site === f.sites[0]) ?? w.decoys.find((d) => d.site === f.sites[0]) ?? w.ewj.find((j) => j.site === f.sites[0]);
+      if (em) u.on = em.on;
       kept.push(u);
     }
     s.deployment.units = kept;

@@ -11,7 +11,7 @@ import { EVENTS } from '../campaign/events';
 
 const SAVE_KEY = 'air-defence-campaign-v1';
 
-const SHOP_ORDER: UnitType[] = ['MR', 'SH', 'CIWS', 'GUN', 'LASER', 'EWR', 'GAP', 'GNSS', 'DECOY', 'CAP', 'LR'];
+const SHOP_ORDER: UnitType[] = ['MR', 'SH', 'CIWS', 'GUN', 'LASER', 'EWR', 'GAP', 'GNSS', 'DECOY', 'JAM', 'CAP', 'LR'];
 
 const $ = (id: string): HTMLElement => document.getElementById(id)!;
 const esc = (s: string): string => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);

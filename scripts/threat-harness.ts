@@ -1,7 +1,7 @@
 // Kill and leaker counts per threat type against the sandbox defence, from many short fresh battles.
 // Each case spawns one package from each of eight bearings (repeated `reps` times with new seeds) into a
 // world with no scripted raids, runs it until no red munition is left, and reads every threat's fate.
-// Usage: npm run harness -- [--only=arm,cruise] [--reps=N] [--seed=S] [--map=classic|mountain|...] [--extra=GUN,LASER] [--drop=MR,SH]
+// Usage: npm run harness -- [--only=arm,cruise] [--reps=N] [--seed=S] [--map=classic|mountain|...] [--extra=GUN,LASER] [--drop=MR,SH] [--jam=1]
 // --extra adds units of those types (in a ring 1.5 km round the airbase) to the sandbox defence.
 import { World } from '../src/sim/world';
 import type { Entity, Kind } from '../src/sim/entities';
@@ -65,6 +65,7 @@ for (const c of CASES) {
       const w = new World({ seed: seed0 + r * 101 + b, terrain, deployment: structuredClone(deployment), raids: [], civil: false });
       if (c.wcs) w.wcs = c.wcs;
       for (const j of w.gnss) j.on = true;
+      for (const j of w.ewj) j.on = arg('jam') === '1';
       spawnThreat(w, c.threat, (b + terrain.layout.rot) % 360);
       const seen = new Map<number, Entity>();
       const t1 = w.t;

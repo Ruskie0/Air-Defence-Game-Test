@@ -189,6 +189,7 @@ export class Ppi {
       else zone(r.pos.x, r.pos.y, 10, 'rgba(247,220,111,0.5)');
     }
     for (const j of w.gnss) if (j.active) zone(j.site.pos.x, j.site.pos.y, j.rangeM / 1000, 'rgba(255,140,66,0.5)');
+    for (const j of w.ewj) if (j.isEmitting()) zone(j.pos.x, j.pos.y, j.rangeM / 1000, 'rgba(200,120,255,0.45)');
 
     // Rotating radar sweeps.
     for (const r of w.radars) {

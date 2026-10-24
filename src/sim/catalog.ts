@@ -1,6 +1,6 @@
 import { AAM_MSL, LR_MSL, MR_MSL, MissileSpec, SH_MSL } from './missile';
 
-export type UnitType = 'LR' | 'MR' | 'SH' | 'CIWS' | 'GUN' | 'LASER' | 'EWR' | 'GAP' | 'GNSS' | 'DECOY' | 'CAP';
+export type UnitType = 'LR' | 'MR' | 'SH' | 'CIWS' | 'GUN' | 'LASER' | 'EWR' | 'GAP' | 'GNSS' | 'DECOY' | 'JAM' | 'CAP';
 
 /** One launcher of a SAM battery, at an absolute map position. */
 export interface DeployedLauncher {
@@ -29,6 +29,8 @@ export interface DeployedUnit {
   armWatch?: boolean;
   /** Starts the day on hold fire (no automatic engagements). */
   holdFire?: boolean;
+  /** Jammers and decoys: switched on (kept between days). */
+  on?: boolean;
   /** Kills over the whole campaign: the crew's experience. */
   xp?: number;
   /** On loan for one day (an event): leaves after the battle. */
@@ -137,6 +139,11 @@ export const CATALOG: Record<UnitType, UnitInfo> = {
     role: 'Radiates like an LR radar. Anti-radiation missiles that lose their target re-acquire it.',
     rangeKm: 1,
   },
+  JAM: {
+    type: 'JAM', name: 'EW jammer', costM: 40, unlockDay: 3,
+    role: 'Noise-jams enemy aircraft within 90 km: SEAD fighters can only find radars close by, strike jets release their bombs off target, recon drones take no pictures. It radiates, so SEAD will come for it: keep a gun near it.',
+    rangeKm: 90,
+  },
   CAP: {
     type: 'CAP', name: 'Fighter pair (CAP)', costM: 170, unlockDay: 2, missile: AAM_MSL,
     role: 'Two fighters with airborne radar and 4 AAMs each. Place the patrol station; they intercept aircraft and jammers forward of the SAMs.',
@@ -178,5 +185,6 @@ export function newUnit(uid: number, type: UnitType, x: number, y: number, facin
   const n = info.launchers ?? 0;
   const launchers = launcherOffsets(type, n, facing).map(([dx, dy]) => ({ x: x + dx, y: y + dy, rounds: info.perLauncher!, max: info.perLauncher! }));
   const armWatch = type === 'LR' || type === 'MR' || type === 'EWR';
-  return { uid, type, x, y, facing, launchers, spares: 0, aircraft: type === 'CAP' ? 2 : 0, armWatch };
+  const on = type === 'GNSS' || type === 'DECOY' || type === 'JAM' ? true : undefined;
+  return { uid, type, x, y, facing, launchers, spares: 0, aircraft: type === 'CAP' ? 2 : 0, armWatch, on };
 }

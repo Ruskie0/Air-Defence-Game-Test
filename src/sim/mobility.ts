@@ -17,6 +17,7 @@ export const MOBILITY: Record<UnitType, { packS: number; speed: number; setupS: 
   EWR: { packS: 120, speed: 10, setupS: 150 },
   GAP: { packS: 40, speed: 14, setupS: 40 },
   GNSS: { packS: 15, speed: 16, setupS: 15 },
+  JAM: { packS: 30, speed: 14, setupS: 30 },
   DECOY: { packS: 10, speed: 16, setupS: 10 },
   CAP: { packS: 0, speed: 0, setupS: 0 },
 };
@@ -57,6 +58,7 @@ function stow(w: World, f: Fielded, on: boolean): void {
   const main = f.sites[0];
   for (const g of w.gnss) if (g.site === main) g.stowed = on;
   for (const d of w.decoys) if (d.site === main) d.stowed = on;
+  for (const j of w.ewj) if (j.site === main) j.stowed = on;
 }
 
 /** Why the unit cannot be sent to (x, y), or null if it can. */

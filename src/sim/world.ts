@@ -5,14 +5,14 @@ import { SupportCall, stepSupport } from './support';
 import { Modifiers, modifiers } from '../campaign/upgrades';
 import { Arm, Cruise, Emitter, Entity, Fate, GlideBomb, ReconDrone, Sighting } from './entities';
 import { Fighter } from './fighter';
-import { V3, add, bearingDeg, clone, dist, norm, scale, sub, v3 } from './math';
+import { V3, add, bearingDeg, clone, dist, norm, polar, scale, sub, v3 } from './math';
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, UnitType, rankOf } from './catalog';
 import { sandboxDeployment } from './deploy';
 import { Interceptor, LR_MSL, MR_MSL, MissileSpec, SH_MSL } from './missile';
 import { CIWS_RADAR, EW_RADAR, LR_RADAR, MR_RADAR, Radar, RadarSpec, Report, SH_RADAR } from './radar';
 import { Rng } from './rng';
 import { Raid, Scenario } from './scenario';
-import { Decoy, FireUnit, GnssJammer, Launcher, Site, SiteKind } from './sites';
+import { Decoy, EwJammer, FireUnit, GnssJammer, Launcher, Site, SiteKind } from './sites';
 import { Terrain } from './terrain';
 import { Wcs, autoEngage } from './tewa';
 import { Ident, Track, Tracker } from './tracker';
@@ -94,6 +94,7 @@ export class World {
   readonly fighters: Fighter[] = [];
   readonly gnss: GnssJammer[] = [];
   readonly decoys: Decoy[] = [];
+  readonly ewj: EwJammer[] = [];
   readonly fielded: Fielded[] = [];
   readonly tracker = new Tracker();
   readonly scenario: Scenario;
@@ -275,12 +276,23 @@ export class World {
       }
       case 'GNSS': {
         const id = this.ident('GNSS', 'GJ', 'GNSS jammer');
-        this.gnss.push(new GnssJammer(site(id.name, 'gnss', u.x, u.y, 15, 8)));
+        const j = new GnssJammer(site(id.name, 'gnss', u.x, u.y, 15, 8));
+        j.on = !!u.on;
+        this.gnss.push(j);
         break;
       }
       case 'DECOY': {
         const id = this.ident('DECOY', 'DC', 'Radar decoy');
-        this.decoys.push(new Decoy(site(id.name, 'decoy', u.x, u.y, 8, 10)));
+        const dc = new Decoy(site(id.name, 'decoy', u.x, u.y, 8, 10));
+        dc.on = !!u.on;
+        this.decoys.push(dc);
+        break;
+      }
+      case 'JAM': {
+        const id = this.ident('JAM', 'EJ', 'EW jammer');
+        const j = new EwJammer(site(id.name, 'jammer', u.x, u.y, 10, 8));
+        j.on = !!u.on;
+        this.ewj.push(j);
         break;
       }
       case 'CAP': {
@@ -320,7 +332,21 @@ export class World {
   }
 
   emitters(): Emitter[] {
-    return [...this.radars, ...this.decoys];
+    return [...this.radars, ...this.decoys, ...this.ewj];
+  }
+
+  /** Is a point inside the reach (and line of sight) of one of our EW jammers that is on? */
+  ewJammed(p: V3): boolean {
+    return this.ewj.some((j) => j.isEmitting() && dist(p, j.pos) < j.rangeM && this.terrain.los(j.pos, p));
+  }
+
+  /** A weapon released under our jamming lands some way off its aim point. */
+  private spoilAim(from: Entity, target: V3): V3 {
+    if (!this.ewJammed(from.pos)) return target;
+    this.log(`${from.name} targeting jammed: weapon released off aim`, 'info');
+    const off = add(target, polar(this.rng.range(0, 360), this.rng.range(150, 400)));
+    off.z = this.terrain.groundAt(off.x, off.y);
+    return off;
   }
 
   jammers(): Entity[] {
@@ -457,7 +483,7 @@ export class World {
     const loc = this.terrain.toLocal(from.pos.x, from.pos.y);
     const overMountains = this.terrain.mountainSide(bearingDeg(v3(), from.pos)) && loc.v > this.terrain.layout.mtnFrom + 10000 && Math.abs(loc.u) < 60000;
     const route = overMountains ? this.terrain.passRoute(loc.u < this.terrain.passU(0, loc.v) / 2 + this.terrain.passU(1, loc.v) / 2 ? 0 : 1, loc.v) : [];
-    const cm = new Cruise(this.nextName('ALCM'), start, route, target, name);
+    const cm = new Cruise(this.nextName('ALCM'), start, route, this.spoilAim(from, target), name);
     cm.hdg = (from as unknown as { hdg: number }).hdg ?? 180;
     cm.pkg = from.pkg;
     this.spawn(cm);
@@ -466,7 +492,7 @@ export class World {
 
   /** A strike fighter releases a glide bomb at `target` (after `delay` s, for a stick of bombs). */
   launchBomb(from: Entity, target: V3, name: string, delay = 0): void {
-    const b = new GlideBomb(this.nextName('GB'), from.pos, from.vel, target, name, this.t + delay);
+    const b = new GlideBomb(this.nextName('GB'), from.pos, from.vel, this.spoilAim(from, target), name, this.t + delay);
     b.pkg = from.pkg;
     if (delay > 0) this.spawnLater(b, delay);
     else this.spawn(b);

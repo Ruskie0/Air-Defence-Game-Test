@@ -5,7 +5,7 @@ import type { Radar } from './radar';
 import type { Track } from './tracker';
 import type { World } from './world';
 
-export type SiteKind = 'asset' | 'radar' | 'launcher' | 'ciws' | 'gnss' | 'decoy';
+export type SiteKind = 'asset' | 'radar' | 'launcher' | 'ciws' | 'gnss' | 'decoy' | 'jammer';
 
 /** A ground object that can be damaged: a defended asset or a piece of air defence equipment. */
 export class Site {
@@ -45,6 +45,38 @@ export class Decoy implements Emitter {
   readonly name: string;
   readonly signature = 'LR' as const;
   readonly site: Site;
+  on = false;
+  /** Packed up for a move. */
+  stowed = false;
+
+  constructor(site: Site) {
+    this.site = site;
+    this.name = site.name;
+  }
+
+  get pos(): V3 {
+    return this.site.pos;
+  }
+
+  get alive(): boolean {
+    return this.site.alive;
+  }
+
+  isEmitting(): boolean {
+    return this.site.alive && this.on && !this.stowed;
+  }
+}
+
+/**
+ * Our EW jammer truck: noise-jams enemy aircraft sensors within 90 km (line of sight). SEAD fighters there can
+ * only find radars close by, strike aircraft release their weapons less accurately and recon drones take no
+ * pictures. It is loud, so SEAD can home on it.
+ */
+export class EwJammer implements Emitter {
+  readonly name: string;
+  readonly signature = 'JAM' as const;
+  readonly site: Site;
+  readonly rangeM = 90000;
   on = false;
   /** Packed up for a move. */
   stowed = false;

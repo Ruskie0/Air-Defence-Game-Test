@@ -296,6 +296,12 @@ export class Hud {
         w.log(`${dc.name} ${dc.on ? 'radiating' : 'off'}`, 'info');
         break;
       }
+      case 'ewj': {
+        const j = w.ewj[Number(d.i)];
+        j.on = !j.on;
+        w.log(`${j.name} ${j.on ? 'jamming' : 'off'}`, 'info');
+        break;
+      }
       case 'endday':
         this.campaign?.onEndDay();
         break;
@@ -516,7 +522,7 @@ export class Hud {
           <div class="sys-b dim">${f.unit.type === 'EWR' ? 'L-band, 250 km' : 'Low-level, 25 km'} ${this.radarButtons(r)}</div></div>`);
       }
     }
-    if (w.gnss.length || w.decoys.length) rows.push('<h3>Electronic warfare</h3>');
+    if (w.gnss.length || w.decoys.length || w.ewj.length) rows.push('<h3>Electronic warfare</h3>');
     w.gnss.forEach((j, i) => {
       rows.push(`<div class="sys"><div class="sys-h"><b>${j.site.name}</b> ${j.site.alive ? (j.on ? '<span class="st jam">ON</span>' : '<span class="st">OFF</span>') : '<span class="st dead">DESTROYED</span>'}
         <button data-act="gnss" data-i="${i}" ${j.site.alive ? '' : 'disabled'}>${j.on ? 'Off' : 'On'}</button></div><div class="sys-b dim">30 km, drags GNSS-guided drones off target</div></div>`);
@@ -524,6 +530,10 @@ export class Hud {
     w.decoys.forEach((dc, i) => {
       rows.push(`<div class="sys"><div class="sys-h"><b>${dc.name}</b> ${dc.alive ? (dc.on ? '<span class="st jam">RADIATE</span>' : '<span class="st">OFF</span>') : '<span class="st dead">DESTROYED</span>'}
         <button data-act="decoy" data-i="${i}" ${dc.alive ? '' : 'disabled'}>${dc.on ? 'Off' : 'On'}</button></div><div class="sys-b dim">Mimics the LR radar for ARM seekers</div></div>`);
+    });
+    w.ewj.forEach((j, i) => {
+      rows.push(`<div class="sys"><div class="sys-h"><b>${j.name}</b> ${j.alive ? (j.isEmitting() ? '<span class="st jam">JAMMING</span>' : '<span class="st">OFF</span>') : '<span class="st dead">DESTROYED</span>'}
+        <button data-act="ewj" data-i="${i}" ${j.alive ? '' : 'disabled'} title="Jamming blinds enemy SEAD, spoils bomb and missile aiming and stops recon pictures within 90 km, but SEAD can home on it">${j.on ? 'Off' : 'On'}</button></div><div class="sys-b dim">90 km: blinds SEAD and recon, spoils weapon aiming. Draws ARMs.</div></div>`);
     });
     if (w.fighters.length) rows.push('<h3>Combat air patrol</h3>');
     w.fighters.forEach((f, i) => {

@@ -47,7 +47,7 @@ export interface GunSpec {
 export const GUNS: Record<GunKind, GunSpec> = {
   ciws: {
     kind: 'ciws', label: 'CIWS', rangeM: 2500, ammo: 1550, reloadS: 90, rof: 75, muzzle: 1100, slew: 115,
-    killRate: { drone: 1.6, cruise: 1.4, arm: 1.0, tbm: 0.8, sead: 0.5, bomber: 0.3, fighter: 0.5, strike: 0.5, bomb: 1.2, helo: 0.9, atgm: 1.1 },
+    killRate: { drone: 1.4, cruise: 1.2, arm: 0.8, tbm: 0.6, sead: 0.5, bomber: 0.3, fighter: 0.5, strike: 0.5, bomb: 1.0, helo: 0.9, atgm: 1.0 },
   },
   gun35: {
     kind: 'gun35', label: 'Skyburst', rangeM: 4500, ammo: 240, reloadS: 45, rof: 18, muzzle: 1050, slew: 80,

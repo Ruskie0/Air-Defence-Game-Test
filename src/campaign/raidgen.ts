@@ -155,16 +155,31 @@ export function newEnemy(rot = 0, doctrine?: DoctrineId): EnemyModel {
 /** Threat points the enemy can spend on a given day. */
 export const threatBudget = (day: number, scale = 1): number => (8 + day * 10.8) * scale;
 
+/** How one enemy operation is shaped (a pulse of the continuous campaign): its share of the day and what it may use. */
+export interface PlanOpts {
+  /** Threat points for this operation, instead of the whole day's budget. */
+  budget?: number;
+  /** Only these kinds of package. */
+  allow?: PkgKind[];
+  /** Extra weight per kind (jets when the strike force is turned round, missiles at night). */
+  bias?: Partial<Record<PkgKind, number>>;
+  /** Chance of an airliner crossing with its transponder off. */
+  darkChance?: number;
+}
+
 /**
- * Build a day's raid plan from the enemy's budget and what it has learned. Package sectors are listed
- * relative to the enemy side of the map (sector 0 = the mountains, bearing `rot`).
+ * Build a raid plan from the enemy's budget and what it has learned: a whole day's, or with `opts` one
+ * operation's. Package sectors are listed relative to the enemy side of the map (sector 0 = the mountains,
+ * bearing `rot`).
  */
-export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: number, rot = 0, threatScale = 1, noDrones = false): PlannedPkg[] {
+export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: number, rot = 0, threatScale = 1, noDrones = false, opts: PlanOpts = {}): PlannedPkg[] {
   const k = sectorOf(rot);
   const rng = new Rng(seed * 7919 + day * 104729);
-  let budget = threatBudget(day, threatScale);
+  let budget = opts.budget ?? threatBudget(day, threatScale);
   const out: PlannedPkg[] = [];
-  const kinds = (Object.keys(PKG) as PkgKind[]).filter((k) => day >= PKG[k].minDay && k !== 'dark' && !(noDrones && (k === 'drones' || k === 'decoys' || k === 'recon')));
+  const kinds = (Object.keys(PKG) as PkgKind[]).filter(
+    (k) => day >= PKG[k].minDay && k !== 'dark' && !(noDrones && (k === 'drones' || k === 'decoys' || k === 'recon')) && (!opts.allow || opts.allow.includes(k)),
+  );
   const doc = doctrineOf(enemy.doctrine);
   let guard = 0;
   while (budget > 2 && guard++ < 40) {
@@ -175,7 +190,7 @@ export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: n
     const decoys = out.filter((p) => p.kind === 'decoys').length;
     const recon = out.some((p) => p.kind === 'recon');
     const kind = pick(rng, affordable, (k) =>
-      (k === 'decoys' && decoys >= 2) || (k === 'recon' && recon) ? 0 : enemy.kindW[k] * (doc?.bias[k] ?? 1) * ((enemy.suppressed?.[k] ?? 0) > 0 ? 0.25 : 1),
+      (k === 'decoys' && decoys >= 2) || (k === 'recon' && recon) ? 0 : enemy.kindW[k] * (doc?.bias[k] ?? 1) * (opts.bias?.[k] ?? 1) * ((enemy.suppressed?.[k] ?? 0) > 0 ? 0.25 : 1),
     );
     const def = PKG[kind];
     const sector = (pick(rng, def.sectors, (s) => enemy.axisW[(s + k) % 8] ** (doc?.axisFocus ?? 1)) + k) % 8;
@@ -191,7 +206,7 @@ export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: n
       if ((p.kind === 'cruise' || p.kind === 'tbm' || p.kind === 'drones' || p.kind === 'strike') && rng.chance(0.65)) p.aims = known.slice(0, Math.max(1, p.size));
     }
   }
-  if (day >= PKG.dark.minDay && rng.chance(0.45)) {
+  if (day >= PKG.dark.minDay && rng.chance(opts.darkChance ?? 0.45)) {
     out.push({ id: firstId + out.length, kind: 'dark', bearing: 270, size: 1, t: 0, reported: false });
   }
   // Waves: two or three packages each, a few minutes apart; jammers and SEAD lead their wave.

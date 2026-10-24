@@ -8,6 +8,7 @@ import { DeepStrikeId, deepStrike, deepStrikeError, strikeTargets } from '../src
 import { stockText } from '../src/sim/theatre';
 import { assaultSpot } from '../src/campaign/front';
 import { nearestFree } from '../src/sim/deploy';
+import { hhmm } from '../src/campaign/clock';
 
 const seed = Number(process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 1);
 const verbose = process.argv.includes('--verbose');
@@ -90,6 +91,13 @@ function shop(): string[] {
       if (!c.place(c.terrain, u, q.x, q.y)) bought.push(`${t} to ${ft.name}`);
     }
   }
+  // Batteries the enemy has a fix on move a couple of kilometres before the next raid.
+  for (const u of c.units) {
+    if (!c.spotted(u) || u.type === 'CAP' || u.type === 'LR') continue;
+    const a = ((u.uid * 137 + c.s.history.length * 61) % 360) * (Math.PI / 180);
+    const q = nearestFree(c.terrain, u.type, u.x + Math.cos(a) * 2000, u.y + Math.sin(a) * 2000, c.units, u.uid, 600, c.zones);
+    if (!c.place(c.terrain, u, q.x, q.y)) bought.push(`${u.type} relocated`);
+  }
   for (const id of ['pdfuze', 'hardened'] as const) if (!saving && c.s.money > 150 && c.upgrade(id)) bought.push(id);
   for (const u of c.units) if (!saving && (u.type === 'LR' || u.type === 'MR') && c.s.money > 250 && c.addLauncher(u)) bought.push(`launcher ${u.type}`);
   return bought;
@@ -100,8 +108,10 @@ const t0 = Date.now();
 while (!c.s.over) {
   const bought = shop();
   const day = c.s.day;
+  const slot = c.pulse;
   const plan = c.s.plan.map((p) => `${PKG[p.kind].name}(${p.size}) ${SECTOR_NAMES[sectorOf(p.bearing)]}@${p.t}s`).join(', ');
-  const w = c.makeWorld();
+  const w = c.startPulse();
+  const at = c.clock;
   const spent = c.s.money;
   if (process.argv.includes('--no-cb')) w.exposure.strikesLeft = 0;
   for (const j of w.gnss) j.on = true;
@@ -141,7 +151,7 @@ while (!c.s.over) {
   const r = c.settle(w);
   const dmg = r.damage.filter((d) => d.lost > 0).map((d) => `${d.name} -${d.lost} (${d.hp})`).join(', ') || 'none';
   console.log(
-    `\nDay ${day}  budget left after shopping $${Math.round(spent)}M  bought: ${bought.join(', ') || 'nothing'}` +
+    `\nDay ${day} ${hhmm(at)} ${slot?.type ?? ''}  budget left after shopping $${Math.round(spent)}M  bought: ${bought.join(', ') || 'nothing'}` +
       `\n  raid: ${plan}` +
       `\n  counter-battery: ${w.exposure.located.map((l) => `${l.unit}@${Math.round(l.t)}s${l.moved ? ' (moved)' : ''}`).join(', ') || 'none'}` +
       `\n  kills ${r.kills}, leakers ${r.leakers}, missiles ${r.missilesFired} ($${r.missileCostM}M), civil ${r.civilian}, fratricide ${r.fratricide}, ${Math.round(w.t / 60)} min (${Math.round(realS / 60)} real at auto tempo)` +
@@ -150,9 +160,9 @@ while (!c.s.over) {
       (verbose && r.lessons.length ? `\n  lessons: ${r.lessons.join(' / ')}` : '') +
       (r.enemy?.length ? `\n  enemy: ${r.enemy.join(' / ')}` : '') +
       (verbose ? `\n  theatre: ${c.theatre.map((b) => `${b.id}${b.known ? '*' : ''}${b.lost ? ' LOST' : ''} [${stockText(b)}]`).join('; ')}` : '') +
-      `\n  income $${r.income}M`,
+      `\n  bonus $${r.bonusM ?? 0}M${r.income ? `  income $${r.income}M` : ''}`,
   );
 }
-console.log(`\n${c.s.over.won ? 'WON' : 'LOST'} on day ${c.s.day}: ${c.s.over.reason}  score ${c.score()}  (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+console.log(`\n${c.s.over.won ? 'WON' : 'LOST'} on day ${c.s.day} (${c.s.history.length} raids): ${c.s.over.reason}  score ${c.score()}  (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
 console.log('Towns held:', c.s.front?.towns.filter((t) => t.ours).map((t) => t.name).join(', '));
 console.log('Force at the end:', c.units.map((u) => u.type).join(' '));

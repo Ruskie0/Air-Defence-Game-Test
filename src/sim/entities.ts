@@ -782,6 +782,8 @@ export interface Sighting {
   x: number;
   y: number;
   name: string;
+  /** Campaign clock when the enemy got this fix (campaign only). */
+  at?: number;
 }
 
 /**

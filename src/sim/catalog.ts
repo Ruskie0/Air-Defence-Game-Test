@@ -33,8 +33,12 @@ export interface DeployedUnit {
   on?: boolean;
   /** Kills over the whole campaign: the crew's experience. */
   xp?: number;
-  /** On loan for one day (an event): leaves after the battle. */
+  /** On loan for one day (an event): leaves when the day turns over. */
   loan?: boolean;
+  /** Campaign clock (minutes) when a unit on order reaches the airbase depot; it sits out battles until then. */
+  arrives?: number;
+  /** Exposure carried over from the last battle (the enemy still half remembers where it was firing from). */
+  heat?: number;
 }
 
 /** Crew ranks by campaign kills. Each rank above Green makes the unit a little deadlier and quicker to reload. */

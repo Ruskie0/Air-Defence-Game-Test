@@ -266,7 +266,7 @@ export class World {
 
   /** Instantiate one deployed unit: its sites, radar, launchers, gun or aircraft. */
   field(u: DeployedUnit): Fielded {
-    const f: Fielded = { unit: u, sites: [] };
+    const f: Fielded = { unit: u, sites: [], heat: u.heat };
     const site = (name: string, kind: SiteKind, x: number, y: number, mast: number, radius: number): Site => {
       const s = this.addSite(name, kind, x, y, mast, radius);
       f.sites.push(s);

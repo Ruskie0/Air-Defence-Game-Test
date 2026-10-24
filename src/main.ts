@@ -44,6 +44,7 @@ let stand: LastStand | null = null;
 let standUi: StandUi | null = null;
 const view = new View3D(document.getElementById('view')!, world);
 gfx.mount();
+view.planClock = () => (document.body.dataset.mode === 'plan' ? cui.campaign?.clock : undefined);
 const ppi = new Ppi(document.getElementById('ppi') as HTMLCanvasElement, world);
 const ctl: GameControl = { speed: Number(params.get('speed')) || 1, paused: false, skipQuiet: params.get('skipquiet') !== '0' };
 const hud = new Hud(world, view, ppi, ctl);

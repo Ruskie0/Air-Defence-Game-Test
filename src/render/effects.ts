@@ -70,7 +70,7 @@ const MISSILE_SMOKE: Record<string, { s0: number; s1: number; life: number; flam
   AAM: { s0: 4, s1: 40, life: 24, flame: 4 },
 };
 
-const CONTRAIL_KINDS = new Set(['fighter', 'bomber', 'sead', 'soj', 'airliner', 'strike']);
+const CONTRAIL_KINDS = new Set(['fighter', 'bomber', 'sead', 'soj', 'airliner', 'strike', 'awacs', 'tanker']);
 
 /** Smoke, fire, debris, contrails and tracers, all driven by sim time so they freeze when paused. */
 export class Effects {

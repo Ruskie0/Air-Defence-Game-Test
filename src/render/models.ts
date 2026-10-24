@@ -193,6 +193,47 @@ function soj(): THREE.BufferGeometry {
   return k.build();
 }
 
+/** Four-jet high-wing military transport airframe (46 m), the base for the AWACS and the tanker. */
+function heavyJet(k: Kit, c: number): void {
+  k.lathe([[-23, 0], [-21.5, 0.9], [-15, 2.3], [-5, 2.5], [12, 2.5], [17.5, 2.1], [21.5, 1.2], [23, 0]], c, 16);
+  k.ellipsoid(1.1, 0.55, 1.6, GLASS, 0, 1.55, 18.6);
+  // Glazed navigator's nose under the radome.
+  k.ellipsoid(0.9, 0.7, 1.2, GLASS, 0, -0.9, 21.2);
+  k.plate(sym([[1.8, 5.0], [24.5, 0.6], [24.5, -1.6], [1.8, -2.6]]), 0.42, c, 2.1);
+  for (const x of [-15.5, -8.5, 8.5, 15.5]) {
+    const z = 3.2 - Math.abs(x) * 0.17;
+    k.tube(0.82, 0.68, 5.4, c, x, 0.55, z);
+    k.tube(0.66, 0.66, 0.08, DARK, x, 0.55, z + 2.72);
+  }
+  // T-tail.
+  k.fin([[-13.5, 2.3], [-20.2, 9.6], [-22.6, 9.6], [-22.4, 2.3]], 0.3, c);
+  k.plate(sym([[0.2, -19.4], [8.2, -21.6], [8.2, -23], [0.2, -23.2]]), 0.22, c, 9.6);
+  // Main gear fairings.
+  for (const x of [-2.4, 2.4]) k.lathe([[-5, 0], [-4.4, 0.6], [4, 0.6], [4.6, 0]], c, 8, x, -2.1);
+}
+
+/** Airborne early warning aircraft: the transport airframe with a rotodome on twin struts. */
+function awacs(): THREE.BufferGeometry {
+  const c = 0xa9b0b4;
+  const k = new Kit();
+  heavyJet(k, c);
+  for (const z of [-6.6, -3.4]) k.box(0.5, 2.6, 1.2, c, 0, 3.6, z);
+  const dome = new THREE.LatheGeometry([[0, -0.95], [5.3, -0.45], [5.4, 0], [5.3, 0.45], [0, 0.95]].map(([r, y]) => new THREE.Vector2(r, y)), 28);
+  k.add(dome, 0xd8dcde, 0, 5.4, -5);
+  k.box(10.6, 0.12, 0.3, 0x3c4246, 0, 5.4, -5);
+  return k.build();
+}
+
+/** Air refuelling tanker: the transport airframe with hose-drogue pods under the wings and the tail. */
+function tanker(): THREE.BufferGeometry {
+  const c = 0x9aa3a2;
+  const k = new Kit();
+  heavyJet(k, c);
+  for (const x of [-20.5, 20.5]) k.lathe([[-2.5, 0], [-2.3, 0.42], [0.6, 0.42], [1.2, 0]], 0x6c7472, 8, x, 1.2);
+  k.lathe([[-21.4, 0], [-21.2, 0.55], [-17.6, 0.55], [-16.8, 0]], 0x6c7472, 8, 0, -1.0);
+  return k.build();
+}
+
 function airliner(): THREE.BufferGeometry {
   const body = 0xf1f1ef;
   const wing = 0xc3c8cc;
@@ -434,6 +475,8 @@ const AIR: Record<string, () => THREE.BufferGeometry> = {
   bomber,
   soj,
   airliner,
+  awacs,
+  tanker,
   drone,
   cruise,
   tbm,
@@ -499,6 +542,8 @@ export const MODEL_LEN: Record<string, number> = {
   bomber: 42,
   soj: 36,
   airliner: 40,
+  awacs: 46,
+  tanker: 46,
   recon: 10,
   helo: 17,
   drone: 3.5,
@@ -527,6 +572,8 @@ export const WRECK_SIZE: Record<string, number> = {
   soj: 2.2,
   bomber: 2.6,
   airliner: 3,
+  awacs: 3,
+  tanker: 3,
 };
 
 // ------------------------------------------------------------------ ground units
@@ -756,6 +803,44 @@ function tank(): THREE.BufferGeometry {
   return k.build();
 }
 
+const HULL = 0x6d7378;
+const DECK = 0x4a4e52;
+
+/** Amphibious assault ship (200 m, bow to -Z): flight deck, starboard island, helicopters spotted on deck. */
+function shipLhd(): THREE.BufferGeometry {
+  const k = new Kit();
+  k.plate([[-15, 100], [15, 100], [16, -40], [12, -88], [0, -100], [-12, -88], [-16, -40]], 14, HULL, 5);
+  k.plate([[-16, 100], [16, 100], [16, -92], [-16, -92]], 0.6, DECK, 12.3);
+  k.box(7, 14, 34, HULL, 12, 19.3, 10);
+  k.box(5, 6, 12, HULL, 12, 29, 6);
+  k.box(1.2, 10, 1.2, 0x55595d, 12, 37, 6);
+  k.box(6, 0.4, 0.4, 0x55595d, 12, 39, 6);
+  // Deck markings and parked helicopters as dark crosses.
+  for (let i = 0; i < 5; i++) k.box(0.6, 0.05, 6, 0xd8d8d0, -7, 12.65, -70 + i * 30);
+  for (let i = 0; i < 3; i++) {
+    k.box(1.6, 1.8, 14, 0x3b4040, -4, 13.6, -50 + i * 32);
+    k.box(12, 0.15, 0.6, 0x2a2d2e, -4, 15, -52 + i * 32);
+  }
+  return k.build();
+}
+
+/** Missile and drone launch ship (110 m, bow to -Z): a frigate hull with a stepped superstructure and mast. */
+function shipFrigate(): THREE.BufferGeometry {
+  const k = new Kit();
+  k.plate([[-7, 55], [7, 55], [7.5, -10], [5, -42], [0, -56], [-5, -42], [-7.5, -10]], 10, HULL, 3);
+  k.plate([[-7, 55], [7, 55], [7.5, -10], [5, -42], [0, -56], [-5, -42], [-7.5, -10]], 0.4, DECK, 8.2);
+  k.box(11, 8, 36, HULL, 0, 12.4, 4);
+  k.box(8, 5, 14, HULL, 0, 18.9, -2);
+  k.box(1.4, 14, 1.4, 0x55595d, 0, 28.4, -2);
+  k.box(7, 0.4, 0.4, 0x55595d, 0, 32, -2);
+  k.box(3.2, 3.2, 3.2, 0x8a8f94, 0, 36.8, -2);
+  k.box(5, 4, 8, 0x3b4040, 0, 10.4, 30);
+  // Launch rails and a gun up front.
+  k.box(4, 1.6, 8, 0x3b4040, 0, 9.2, -26);
+  k.tube(0.2, 0.2, 5, 0x3b4040, 0, 9.6, -33);
+  return k.build();
+}
+
 /** Infantry fighting vehicle: a taller, boxier hull with a small turret and autocannon. */
 function ifv(): THREE.BufferGeometry {
   const k = new Kit();
@@ -770,6 +855,8 @@ function ifv(): THREE.BufferGeometry {
 }
 
 const GROUND: Record<string, () => THREE.BufferGeometry> = {
+  'ship-lhd': shipLhd,
+  'ship-frigate': shipFrigate,
   tank,
   ifv,
   'jammer-base': jammerBase,

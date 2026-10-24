@@ -46,6 +46,8 @@ export class Decoy implements Emitter {
   readonly signature = 'LR' as const;
   readonly site: Site;
   on = false;
+  /** Packed up for a move. */
+  stowed = false;
 
   constructor(site: Site) {
     this.site = site;
@@ -61,7 +63,7 @@ export class Decoy implements Emitter {
   }
 
   isEmitting(): boolean {
-    return this.site.alive && this.on;
+    return this.site.alive && this.on && !this.stowed;
   }
 }
 
@@ -70,13 +72,15 @@ export class GnssJammer {
   readonly site: Site;
   readonly rangeM = 30000;
   on = false;
+  /** Packed up for a move. */
+  stowed = false;
 
   constructor(site: Site) {
     this.site = site;
   }
 
   get active(): boolean {
-    return this.on && this.site.alive;
+    return this.on && this.site.alive && !this.stowed;
   }
 }
 
@@ -116,6 +120,8 @@ export class FireUnit {
   spares = Infinity;
   /** Hold fire: no automatic engagements. Direct orders from the player still fire. */
   hold = false;
+  /** Packed up or on the move: cannot fire. */
+  stowed = false;
   private queue: { t: number; trackId: number; manual: boolean }[] = [];
 
   constructor(
@@ -191,6 +197,7 @@ export class FireUnit {
 
   feasibility(w: World, tr: Track): Feasibility {
     const s = this.spec;
+    if (this.stowed) return no('packed up to move');
     if (this.radar && !this.radar.alive && !this.remote) return no('radar destroyed');
     if (this.radar && !this.remote && !this.radar.emitting) return no('radar in EMCON');
     const ready = this.launchers.filter((l) => l.site.alive && l.rounds > 0);
@@ -232,6 +239,12 @@ export class FireUnit {
     for (let i = 0; i < n; i++) this.queue.push({ t: w.t + i * 1.2, trackId: tr.id, manual });
     w.log(`${this.name} engaging ${tr.label} (${tr.cls}) with ${n}: ${f.reason}`, 'engage');
     return true;
+  }
+
+  /** Pack up for a move (cancelling queued launches) or come back into action. */
+  stow(stowed: boolean): void {
+    this.stowed = stowed;
+    if (stowed) this.queue = [];
   }
 
   /** Toggle hold fire; going to hold cancels launches that are queued but not yet away. */

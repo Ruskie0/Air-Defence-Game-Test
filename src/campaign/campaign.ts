@@ -1,5 +1,6 @@
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, ROUND_COST, UnitType, launcherOffsets, newUnit } from '../sim/catalog';
 import { CAP_RADIUS, DEPLOY_RADIUS, nearestFree, placeError } from '../sim/deploy';
+import { finishMoves } from '../sim/mobility';
 import { hdist, v3 } from '../sim/math';
 import { CLASSIC_LAYOUT, MapLayout, MapType, Terrain, legacyLayout, randomLayout, typeForSeed } from '../sim/terrain';
 import { MAP_SEED } from '../sim/world';
@@ -361,6 +362,7 @@ export class Campaign {
       w.detonate(e);
     }
 
+    finishMoves(w);
     const losses: string[] = [];
     const before = new Map(s.deployment.assets.map((a) => [a.name, a.hp]));
     s.deployment.assets = DEFENDED_ASSETS.map((a) => ({ name: a.name, hp: Math.round(w.site(a.name)?.hp ?? 0) }));
@@ -375,7 +377,7 @@ export class Campaign {
           continue;
         }
         u.launchers = f.fu.launchers
-          .map((l, i) => ({ ...u.launchers[i], rounds: l.rounds }))
+          .map((l, i) => ({ ...u.launchers[i], x: Math.round(l.site.pos.x), y: Math.round(l.site.pos.y), rounds: l.rounds }))
           .filter((_l, i) => {
             const alive = f.fu!.launchers[i].site.alive;
             if (!alive) losses.push(`${f.fu!.name} launcher ${i + 1}`);
@@ -391,6 +393,9 @@ export class Campaign {
         losses.push(main.name);
         continue;
       }
+      // Units moved during the battle stay where they ended up.
+      u.x = f.unit.x;
+      u.y = f.unit.y;
       if (f.radar) u.armWatch = f.radar.armWatch;
       if (f.fu) u.holdFire = f.fu.hold;
       if (f.ciws) u.holdFire = !f.ciws.auto;

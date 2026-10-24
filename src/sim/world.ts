@@ -1,5 +1,6 @@
 import { DT } from './constants';
 import { Ciws, GUNS } from './ciws';
+import { MoveOrder, orderMove, stepMoves } from './mobility';
 import { Arm, Cruise, Emitter, Entity, Fate } from './entities';
 import { Fighter } from './fighter';
 import { V3, add, bearingDeg, clone, dist, norm, scale, sub, v3 } from './math';
@@ -60,6 +61,8 @@ export interface Fielded {
   ciws?: Ciws;
   fighters?: Fighter[];
   radar?: Radar;
+  /** Set while the unit is packing up, moving or setting up again. */
+  move?: MoveOrder | null;
 }
 
 /** Terrain seed of the one map every mode is fought over. */
@@ -86,6 +89,8 @@ export class World {
   wcs: Wcs = 'TIGHT';
   /** Multiplier on point-defence kill rates (campaign upgrades). */
   pdBonus = 1;
+  /** Bumped whenever a unit's position changes, so views can redraw coverage. */
+  layoutSeq = 0;
   readonly logEntries: LogEntry[] = [];
   /** Total log entries ever written (the list itself is capped). */
   logSeq = 0;
@@ -466,9 +471,31 @@ export class World {
   toggleEmcon(code: string): void {
     const r = this.radarByCode(code);
     if (!r) return;
+    if (r.stowed) {
+      this.log(`${r.name} is packed up for a move`, 'info');
+      return;
+    }
     r.emitting = !r.emitting;
     r.armSilent = false;
     this.log(`${r.name} ${r.emitting ? 'radiating' : 'EMCON (silent)'}`, 'info');
+  }
+
+  /** Order a unit (by any of its codes) to move to (x, y). Returns why it cannot, or null. */
+  moveUnit(code: string, x: number, y: number): string | null {
+    const f = this.fieldedByCode(code);
+    if (!f) return 'no such unit';
+    const err = orderMove(this, f, x, y);
+    if (!err) this.layoutSeq++;
+    return err;
+  }
+
+  /** The fielded unit a HUD code (fire unit, gun, radar, or F<index> for a fighter) belongs to. */
+  fieldedByCode(code: string): Fielded | undefined {
+    if (/^F\d+$/.test(code)) {
+      const fi = this.fighters[Number(code.slice(1))];
+      return this.fielded.find((f) => f.fighters?.includes(fi));
+    }
+    return this.fielded.find((f) => f.fu?.code === code || f.ciws?.code === code || f.radar?.code === code);
   }
 
   /** Hold fire on a SAM battery or gun (by code), or release it. */
@@ -573,6 +600,7 @@ export class World {
     this.jammerCache = this.entities.filter((e) => e.alive && e.jammer?.active);
 
     for (const e of this.entities) if (e.alive) e.update(this, dt);
+    if (stepMoves(this, dt)) this.layoutSeq++;
     this.stepGnss(dt);
     this.stepArmWatch();
 

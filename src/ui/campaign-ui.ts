@@ -1,8 +1,9 @@
+import type { HurtBy } from '../sim/world';
 import { loadBest } from '../campaign/laststand';
 import { MEDALS, MedalId, earnedMedals } from '../campaign/medals';
-import { ARMOUR_STRIKE, CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty } from '../campaign/campaign';
+import { ARMOUR_STRIKE, CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty, REPAIR_CREW } from '../campaign/campaign';
 import { ARMOUR } from '../sim/enemyarmour';
-import { DELIVERY_H, PULSES, REPAIR_PER_H, hhmm, stamp } from '../campaign/clock';
+import { DELIVERY_H, PULSES, hhmm, stamp } from '../campaign/clock';
 import type { View3D } from '../render/view3d';
 import { CATALOG, DeployedUnit, RANKS, UnitType, rankOf } from '../sim/catalog';
 import { bearingDeg, v3 } from '../sim/math';
@@ -168,6 +169,14 @@ export class CampaignUi {
   }
 
   /** Rebuild the preview world after anything on the map changed. */
+  /** Hire an extra repair crew: faster repairs between raids, for money that could buy a unit. */
+  private crewRow(c: Campaign): string {
+    const n = c.s.repairCrews ?? 0;
+    const why = c.crewError();
+    return `<div class="asset"><span>Repair crews <span class="dim">${1 + n} at work, ${c.repairPerH} points an hour</span></span><span></span>
+      <button data-cui="crew" ${why ? 'disabled' : ''} title="${esc(why ?? `Hire another crew for the rest of the war (${money(REPAIR_CREW.costM)}): repairs between raids go ${Math.round(((2 + n) / (1 + n) - 1) * 100)}% faster. That is three quarters of a SHORAD unit.`)}">Hire crew ${money(REPAIR_CREW.costM)}</button></div>`;
+  }
+
   private refreshWorld(): void {
     if (!this.c) return;
     this.host.showPreview(this.c.makeWorld(false));
@@ -282,11 +291,11 @@ export class CampaignUi {
         const cost = c.repairCost(a.name);
         const col = a.hp > 60 ? '#5ee07a' : a.hp > 25 ? '#ffd84d' : '#ff4d4d';
         const done = c.repairDone(a.name);
-        const working = done !== null ? ` <span class="dim" title="Repair crews restore ${REPAIR_PER_H} points an hour">+${Math.round(c.repairing(a.name))} by ${hhmm(done)}</span>` : '';
+        const working = done !== null ? ` <span class="dim" title="Repair crews restore ${c.repairPerH} points an hour">+${Math.round(c.repairing(a.name))} by ${hhmm(done)}</span>` : '';
         return `<div class="asset"><span>${a.name}${working}</span><span class="bar"><i style="width:${a.hp}%;background:${col}"></i></span>
-          ${cost > 0 ? `<button data-cui="repair" data-name="${a.name}" ${s.money > 0 ? '' : 'disabled'} title="Full repair ${money(cost)}; a partial repair uses what you have.${c.started ? ` The crews restore ${REPAIR_PER_H} points an hour.` : ''}">Repair ${money(Math.min(cost, s.money))}</button>` : '<span class="dim">intact</span>'}</div>`;
+          ${cost > 0 ? `<button data-cui="repair" data-name="${a.name}" ${s.money > 0 ? '' : 'disabled'} title="Full repair ${money(cost)}; a partial repair uses what you have.${c.started ? ` The crews restore ${c.repairPerH} points an hour.` : ''}">Repair ${money(Math.min(cost, s.money))}</button>` : '<span class="dim">intact</span>'}</div>`;
       })
-      .join('');
+      .join('') + this.crewRow(c);
 
     const units = c.units
       .map((u) => {
@@ -570,6 +579,7 @@ export class CampaignUi {
             : ''
         }
         <span>Leakers (hits on defended or AD sites)</span><b>${r.leakers}</b>
+        ${r.hurt?.length ? `<span>What hurt you</span><b>${r.hurt.map((h) => `<span title="${esc(`${HURT_TIP[h.by]} Hit: ${h.sites.join(', ')}`)}">${esc(HURT_NAME[h.by])} ${h.dmg} dmg (${h.hits} hit${h.hits > 1 ? 's' : ''})</span>`).join(' · ')}<br><span class="dim">${esc(HURT_TIP[r.hurt[0].by])}</span></b>` : ''}
         <span>Missiles fired</span><b>${r.missilesFired} (${money(r.missileCostM)})</b>
         ${r.supportM ? `<span>Support calls (convoys, repairs)</span><b>${money(r.supportM)}</b>` : ''}
         ${r.civilian ? `<span class="bad">Civil airliners shot down</span><b class="bad">${r.civilian}</b>` : ''}
@@ -738,6 +748,9 @@ export class CampaignUi {
       case 'repair':
         c.repair(d.name!);
         break;
+      case 'crew':
+        if (c.hireCrew()) this.note = `Repair crew hired: repairs now run at ${c.repairPerH} points an hour.`;
+        break;
       case 'repairtown':
         c.repairTown(Number(d.i));
         break;
@@ -792,3 +805,21 @@ export class CampaignUi {
     this.render();
   }
 }
+
+const HURT_NAME: Record<HurtBy, string> = {
+  drones: 'Attack drones', cruise: 'Cruise missiles', tbm: 'Ballistic missiles', arm: 'Anti-radiation missiles',
+  helo: 'Helicopters', strike: 'Strike jets', artillery: 'Artillery', other: 'Other',
+};
+
+/** One line of advice per kind of weapon that did the most damage. */
+const HURT_TIP: Record<HurtBy, string> = {
+  drones: 'Drones got through: put guns, SHORAD or CIWS right next to what they hit, and jam their GNSS.',
+  cruise: 'Cruise missiles come in low: cover the approaches with SHORAD and CIWS, and keep an early warning radar up.',
+  tbm: 'Only the LR SAM stops ballistic missiles: keep it covering what matters and stocked with missiles.',
+  arm: 'ARMs hit your radars: use the Auto EMCON presets and ARM auto, and place radar decoys.',
+  helo: 'Helicopters pop up close: guns and SHORAD forward, on the side they come from.',
+  strike: 'Strike jets got to their release point: fighters on CAP and an MR SAM on their approach.',
+  artillery: 'Enemy artillery spotted by a SAM site radar: sweep that site with a fighter.',
+  other: 'Mixed damage this raid.',
+};
+

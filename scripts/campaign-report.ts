@@ -126,6 +126,9 @@ while (!c.s.over) {
   let escorted = process.argv.includes('--no-escort');
   const sweep = !process.argv.includes('--no-sweep');
   const hunt = !process.argv.includes('--no-hunt');
+  // Counterplay: the SAM radars radiate only while a hostile is within reach (EMCON preset 'near').
+  const emcon = process.argv.includes('--emcon');
+  if (emcon) for (const f of w.fielded) if (f.fu?.radar && f.fu.type !== 'SH') w.cycleEmcon(f.fu.radar.code);
   const sent = new Set<unknown>();
   while (!w.scenario.done && w.t < last + 3600) {
     w.step();

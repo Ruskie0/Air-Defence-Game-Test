@@ -10,7 +10,7 @@ import type { DeepStrikeId } from './deepstrike';
 import { WEATHER, WeatherId, rollWeather } from './weather';
 import { hdist, v3 } from '../sim/math';
 import { CLASSIC_LAYOUT, MapLayout, MapType, Terrain, legacyLayout, randomLayout, typeForSeed } from '../sim/terrain';
-import { MAP_SEED, RECON_BOUNTY_M } from '../sim/world';
+import { type HurtBy, MAP_SEED, RECON_BOUNTY_M } from '../sim/world';
 import { World } from '../sim/world';
 import { doctrineOf, pickDoctrine } from './doctrine';
 import { award, battleMedals } from './medals';
@@ -61,6 +61,8 @@ export interface DayReport {
   /** Kills per shooter. */
   killsBy?: Record<string, number>;
   leakers: number;
+  /** What hurt us: damage to our sites by weapon type, worst first. */
+  hurt?: { by: HurtBy; dmg: number; hits: number; sites: string[] }[];
   missilesFired: number;
   missileCostM: number;
   civilian: number;
@@ -140,6 +142,8 @@ export interface CampaignState {
   sorties?: { key: string; n: number; until: number }[];
   /** Repair points paid for that the crews are still working on, per asset. */
   repairs?: Record<string, number>;
+  /** Extra repair crews hired: each adds REPAIR_PER_H points an hour to repairs. */
+  repairCrews?: number;
   /** Day the last offensive went in (one a day). */
   offensiveDay?: number;
   /** The enemy's own ground offensive today: on which of our towns, from which of theirs, in which operation. */
@@ -163,6 +167,9 @@ const DEFAULT_SPOTS: Record<UnitType, [number, number][]> = {
   JAM: [[-4500, 1500], [3500, -4500]],
   CAP: [[0, 50000], [35000, 25000], [-35000, 25000]],
 };
+
+/** An extra repair crew: cost, and how many can be hired. */
+export const REPAIR_CREW = { costM: 30, max: 2 };
 
 export class Campaign {
   s: CampaignState;
@@ -306,7 +313,7 @@ export class Campaign {
       delete u.arrives;
       out.push(`${CATALOG[u.type].name} has arrived.`);
     }
-    const pts = (REPAIR_PER_H * (t - from)) / 60;
+    const pts = (this.repairPerH * (t - from)) / 60;
     const reps = this.s.repairs ?? {};
     for (const [name, left] of Object.entries(reps)) {
       const a = this.s.deployment.assets.find((x) => x.name === name);
@@ -528,7 +535,27 @@ export class Campaign {
     return a ? Math.max(0, Math.ceil((100 - a.hp - this.repairing(name)) * this.repairRate(name))) : 0;
   }
 
-  /** Repair an asset as far as the budget allows. Before the first raid it is done at once; after, crews restore REPAIR_PER_H points an hour. */
+  /** Repair points restored an hour: the base crews plus every crew hired. */
+  get repairPerH(): number {
+    return REPAIR_PER_H * (1 + (this.s.repairCrews ?? 0));
+  }
+
+  /** Why another repair crew cannot be hired, or null. */
+  crewError(): string | null {
+    if ((this.s.repairCrews ?? 0) >= REPAIR_CREW.max) return `At most ${REPAIR_CREW.max} extra crews`;
+    if (this.s.money < REPAIR_CREW.costM) return 'Not enough budget';
+    return null;
+  }
+
+  /** Hire a repair crew for the rest of the war: repairs go faster, for money that could have bought a unit. */
+  hireCrew(): boolean {
+    if (this.crewError()) return false;
+    this.s.money -= REPAIR_CREW.costM;
+    this.s.repairCrews = (this.s.repairCrews ?? 0) + 1;
+    return true;
+  }
+
+  /** Repair an asset as far as the budget allows. Before the first raid it is done at once; after, crews restore this.repairPerH points an hour. */
   repair(name: string): boolean {
     const a = this.s.deployment.assets.find((x) => x.name === name);
     const need = a ? Math.floor(100 - a.hp - this.repairing(name)) : 0;
@@ -546,13 +573,13 @@ export class Campaign {
   /** A unit's worst damaged site (main site or launcher), 100 when undamaged, and when its crew will have it repaired. */
   unitDamage(u: DeployedUnit): { hp: number; done: number | null } {
     const hp = Math.min(u.hp ?? 100, ...u.launchers.map((l) => l.hp ?? 100));
-    return { hp, done: hp < 100 ? this.clock + ((100 - hp) / REPAIR_PER_H) * 60 : null };
+    return { hp, done: hp < 100 ? this.clock + ((100 - hp) / this.repairPerH) * 60 : null };
   }
 
   /** When the crews will have finished an asset's repairs (clock), or null if nothing is being repaired. */
   repairDone(name: string): number | null {
     const left = this.repairing(name);
-    return left > 0 ? this.clock + (left / REPAIR_PER_H) * 60 : null;
+    return left > 0 ? this.clock + (left / this.repairPerH) * 60 : null;
   }
 
   has(id: UpgradeId): boolean {
@@ -1184,6 +1211,7 @@ export class Campaign {
       kills: w.stats.kills,
       killsBy: { ...w.stats.killsBy },
       leakers: w.stats.leakers,
+      hurt: [...w.hurt].map(([by, h]) => ({ by, dmg: Math.round(h.dmg), hits: h.hits, sites: [...h.sites] })).filter((h) => h.dmg > 0).sort((a, b) => b.dmg - a.dmg),
       missilesFired: w.stats.fired.LR + w.stats.fired.MR + w.stats.fired.SH + w.stats.fired.AAM,
       missileCostM: Math.round(w.stats.costM * 10) / 10,
       civilian: w.stats.civilian,

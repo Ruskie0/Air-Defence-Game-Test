@@ -102,6 +102,18 @@ export interface Fielded {
 }
 
 /** Terrain seed of the one map every mode is fought over. */
+/** What dealt damage to our sites, for the debrief. */
+export type HurtBy = 'drones' | 'cruise' | 'tbm' | 'arm' | 'helo' | 'strike' | 'artillery' | 'other';
+
+const HURT_PREFIX: [RegExp, HurtBy][] = [
+  [/^(DRN|LM)-/, 'drones'], [/^(CM|ALCM)-/, 'cruise'], [/^TBM-/, 'tbm'], [/^ARM-/, 'arm'],
+  [/^(HEL|ATGM)-/, 'helo'], [/^(GB|STK)-/, 'strike'], [/^artillery/, 'artillery'],
+];
+
+export function hurtBy(by: string): HurtBy {
+  return HURT_PREFIX.find(([re]) => re.test(by))?.[1] ?? 'other';
+}
+
 /** Campaign reward for each enemy recon drone shot down with photos aboard ($M). */
 export const RECON_BOUNTY_M = 6;
 
@@ -180,6 +192,8 @@ export class World {
   };
   /** Our positions enemy recon drones got home with, by unit id. */
   readonly reconSeen = new Map<number, Sighting>();
+  /** Damage our sites took this battle, by what dealt it ("what hurt you"). */
+  readonly hurt = new Map<HurtBy, { dmg: number; hits: number; sites: Set<string> }>();
   /** Enemy recon drones shot down with photos aboard: the intel they carried never got home. */
   reconDenied = 0;
   /** Every site's health when the battle started (for the day's objectives). */
@@ -571,6 +585,17 @@ export class World {
     let t = this.pkgTally.get(pkg);
     if (!t) this.pkgTally.set(pkg, (t = { spawned: 0, down: 0, hits: 0, missed: 0, home: 0 }));
     return t;
+  }
+
+  /** A site of ours took `dmg` points of damage from `by` (an entity name, or 'artillery'). */
+  noteHurt(by: string, dmg: number, site: string): void {
+    if (dmg <= 0) return;
+    const k = hurtBy(by);
+    const h = this.hurt.get(k) ?? { dmg: 0, hits: 0, sites: new Set<string>() };
+    h.dmg += dmg;
+    h.hits++;
+    h.sites.add(site);
+    this.hurt.set(k, h);
   }
 
   /** Record how an entity died or left, once. */

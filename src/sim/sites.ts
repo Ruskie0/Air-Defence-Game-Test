@@ -32,7 +32,9 @@ export class Site {
 
   damage(w: World, amount: number, by: string): void {
     if (!this.alive) return;
+    const before = this.hp;
     this.hp = Math.max(0, this.hp - amount * this.vuln);
+    w.noteHurt(by, before - this.hp, this.name);
     w.log(`${this.name} hit by ${by} (${Math.round(this.hp)}% remaining)`, 'damage');
     if (this.hp <= 0) {
       this.alive = false;

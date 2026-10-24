@@ -58,7 +58,7 @@ function shop(): string[] {
   return bought;
 }
 
-console.log(`Campaign seed ${seed}, ${diff}`);
+console.log(`Campaign seed ${seed}, ${diff}, enemy ${c.s.enemy.doctrine}`);
 const t0 = Date.now();
 while (!c.s.over) {
   const bought = shop();

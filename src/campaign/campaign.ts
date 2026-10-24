@@ -11,6 +11,7 @@ import { hdist, v3 } from '../sim/math';
 import { CLASSIC_LAYOUT, MapLayout, MapType, Terrain, legacyLayout, randomLayout, typeForSeed } from '../sim/terrain';
 import { MAP_SEED } from '../sim/world';
 import { World } from '../sim/world';
+import { doctrineOf, pickDoctrine } from './doctrine';
 import { EnemyModel, PKG, PkgKind, PlannedPkg, SECTOR_NAMES, newEnemy, planDay, sectorOf, toRaids } from './raidgen';
 
 export const CAMPAIGN_DAYS = 10;
@@ -119,7 +120,7 @@ export class Campaign {
       deployment: { units: [], assets: DEFENDED_ASSETS.map((a) => ({ name: a.name, hp: 100 })) },
       nextUid: 1,
       nextPkg: 1,
-      enemy: newEnemy(randomLayout(seed, mapType).rot),
+      enemy: newEnemy(randomLayout(seed, mapType).rot, pickDoctrine(seed)),
       plan: [],
       history: [],
       civilLosses: 0,
@@ -425,6 +426,8 @@ export class Campaign {
   intel(): string[] {
     const wx = WEATHER[this.s.weather ?? 'clear'];
     const lines = [`Weather: ${wx.desc}`];
+    const doc = doctrineOf(this.s.enemy.doctrine);
+    if (doc) lines.push(this.s.day >= 2 ? `Enemy commander: ${doc.name}. ${doc.desc}` : 'Enemy commander: not yet known. Watch what they send today; by tomorrow we will know who we are up against.');
     lines.push(...this.s.plan
       .filter((p) => p.reported)
       .map((p) => {
@@ -530,7 +533,7 @@ export class Campaign {
       const hits = w.pkgHits.get(p.id) ?? 0;
       const sec = sectorOf(p.bearing);
       if (hits > 0) {
-        s.enemy.kindW[p.kind] = clamp(s.enemy.kindW[p.kind] * 1.25);
+        s.enemy.kindW[p.kind] = clamp(s.enemy.kindW[p.kind] * (doctrineOf(s.enemy.doctrine)?.learn ?? 1.25));
         s.enemy.axisW[sec] = clamp(s.enemy.axisW[sec] * 1.35);
         lessons.push(`${PKG[p.kind].name} from the ${SECTOR_NAMES[sec]} got through (${hits} hit${hits > 1 ? 's' : ''}). Expect more of that.`);
       } else {

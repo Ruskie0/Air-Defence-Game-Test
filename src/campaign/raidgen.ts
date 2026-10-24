@@ -1,3 +1,4 @@
+import { DoctrineId, doctrineOf } from './doctrine';
 import { Rng } from '../sim/rng';
 import type { Raid } from '../sim/scenario';
 import type { Sighting } from '../sim/entities';
@@ -29,6 +30,8 @@ export interface EnemyModel {
   known?: Sighting[];
   /** Kinds of attack our deep strikes have knocked back, with the days left until they recover. */
   suppressed?: Partial<Record<PkgKind, number>>;
+  /** The enemy commander's style; absent in old saves. */
+  doctrine?: DoctrineId;
 }
 
 interface PkgDef {
@@ -110,12 +113,13 @@ export const SECTOR_NAMES = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 export const sectorOf = (bearing: number): number => Math.round((((bearing % 360) + 360) % 360) / 45) % 8;
 
 /** A fresh enemy whose preferred axis is the map's mountain side (`rot`, deg). */
-export function newEnemy(rot = 0): EnemyModel {
+export function newEnemy(rot = 0, doctrine?: DoctrineId): EnemyModel {
   const rel = [1.3, 1, 1, 0.8, 0.8, 0.7, 0.9, 1];
   const k = sectorOf(rot);
   return {
     kindW: { drones: 1.4, decoys: 0.8, recon: 1, cruise: 1, strike: 1, sead: 1, soj: 0.8, bomber: 0.9, tbm: 1, dark: 0.5 },
     axisW: rel.map((_x, a) => rel[(a - k + 8) % 8]),
+    doctrine,
   };
 }
 
@@ -132,6 +136,7 @@ export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: n
   let budget = threatBudget(day, threatScale);
   const out: PlannedPkg[] = [];
   const kinds = (Object.keys(PKG) as PkgKind[]).filter((k) => day >= PKG[k].minDay && k !== 'dark' && !(noDrones && (k === 'drones' || k === 'decoys' || k === 'recon')));
+  const doc = doctrineOf(enemy.doctrine);
   let guard = 0;
   while (budget > 2 && guard++ < 40) {
     const affordable = kinds.filter((k) => PKG[k].cost(PKG[k].size(day, rng)) <= budget + 2);
@@ -140,9 +145,11 @@ export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: n
     // At most two decoy packages a day: they are there to thin out a real attack, not to be the attack.
     const decoys = out.filter((p) => p.kind === 'decoys').length;
     const recon = out.some((p) => p.kind === 'recon');
-    const kind = pick(rng, affordable, (k) => ((k === 'decoys' && decoys >= 2) || (k === 'recon' && recon) ? 0 : enemy.kindW[k] * ((enemy.suppressed?.[k] ?? 0) > 0 ? 0.25 : 1)));
+    const kind = pick(rng, affordable, (k) =>
+      (k === 'decoys' && decoys >= 2) || (k === 'recon' && recon) ? 0 : enemy.kindW[k] * (doc?.bias[k] ?? 1) * ((enemy.suppressed?.[k] ?? 0) > 0 ? 0.25 : 1),
+    );
     const def = PKG[kind];
-    const sector = (pick(rng, def.sectors, (s) => enemy.axisW[(s + k) % 8]) + k) % 8;
+    const sector = (pick(rng, def.sectors, (s) => enemy.axisW[(s + k) % 8] ** (doc?.axisFocus ?? 1)) + k) % 8;
     const bearing = (sector * 45 + rng.range(-18, 18) + 360) % 360;
     const size = def.size(day, rng);
     budget -= def.cost(size);

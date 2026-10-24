@@ -290,7 +290,10 @@ export class World {
       }
       case 'JAM': {
         const id = this.ident('JAM', 'EJ', 'EW jammer');
-        const j = new EwJammer(site(id.name, 'jammer', u.x, u.y, 10, 8));
+        const js = site(id.name, 'jammer', u.x, u.y, 10, 8);
+        // A hardened shelter: it is built to be shot at, and takes two or three ARMs.
+        js.vuln = 0.6;
+        const j = new EwJammer(js);
         j.on = !!u.on;
         this.ewj.push(j);
         break;

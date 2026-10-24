@@ -67,7 +67,7 @@ export const PKG: Record<PkgKind, PkgDef> = {
     describe: (n) => `${n} terrain-following cruise missiles`,
   },
   strike: {
-    name: 'Strike jets', cost: (n) => 3 + n * 4, minDay: 4, sectors: [0, 1, 7, 2, 6, 3, 5],
+    name: 'Strike jets', cost: (n) => 2 + n * 3.5, minDay: 4, sectors: [0, 1, 7, 2, 6, 3, 5],
     size: (d, r) => Math.min(4, 2 + (d >= 7 ? 1 : 0) + (d >= 9 ? r.int(0, 1) : 0)),
     spawn: (w, b, n, aims) => spawnStrike(w, n, b, 150000, aims),
     describe: (n) => `${n} strike fighters that will come in at treetop height, pop up and glide-bomb a site. Low-flying jets with no IFF are declared hostile inside 45 km`,
@@ -118,7 +118,7 @@ export function newEnemy(rot = 0): EnemyModel {
 }
 
 /** Threat points the enemy can spend on a given day. */
-export const threatBudget = (day: number, scale = 1): number => (8 + day * 10.5) * scale;
+export const threatBudget = (day: number, scale = 1): number => (8 + day * 11.5) * scale;
 
 /**
  * Build a day's raid plan from the enemy's budget and what it has learned. Package sectors are listed

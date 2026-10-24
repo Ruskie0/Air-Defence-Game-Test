@@ -26,6 +26,7 @@ function shop(): string[] {
     ['CIWS', () => count('CIWS') < 3],
     ['GUN', () => count('GUN') < 2],
     ['DECOY', () => count('DECOY') < 1 && c.s.day >= 4],
+    ['JAM', () => count('JAM') < 1 && c.s.day >= 5],
     ['MR', () => count('MR') < 3],
     ['SH', () => count('SH') < 4],
     ['CIWS', () => count('CIWS') < 4],

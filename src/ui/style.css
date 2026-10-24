@@ -957,3 +957,24 @@ li.warn {
   display: block;
   font-family: inherit;
 }
+
+.timeline {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.timeline th {
+  text-align: left;
+  font-weight: normal;
+  opacity: 0.6;
+  padding: 2px 6px 2px 0;
+}
+.timeline td {
+  padding: 2px 6px 2px 0;
+  border-top: 1px solid rgba(70, 209, 138, 0.12);
+  vertical-align: top;
+}
+.timeline tr.tl-hit td:first-child {
+  box-shadow: inset 2px 0 0 #ff4d4d;
+  padding-left: 4px;
+}

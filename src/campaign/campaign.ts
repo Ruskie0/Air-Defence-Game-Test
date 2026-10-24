@@ -52,6 +52,8 @@ export interface DayReport {
   pulse?: PulseType;
   /** Paid at once for the raid's bonus objectives ($M). */
   bonusM?: number;
+  /** After action: each package, when it came, from where, and how what it sent ended. */
+  timeline?: { at: number; name: string; size: number; from: string; base?: string; spawned: number; down: number; hits: number; missed: number; home: number; counter?: boolean }[];
   kills: number;
   /** Kills per shooter. */
   killsBy?: Record<string, number>;
@@ -1070,8 +1072,16 @@ export class Campaign {
     const lastToday = (s.pulseIdx ?? 0) + 1 >= (s.pulses?.length ?? 1);
     // The day's income is paid at 06:00, after the day's last raid.
     const income = lastToday ? this.income() : 0;
+    const timeline = s.plan
+      .filter((p) => p.kind !== 'dark')
+      .map((p) => {
+        const t = w.pkgTally.get(p.id) ?? { spawned: 0, down: 0, hits: 0, missed: 0, home: 0 };
+        const b = this.theatre.find((x) => x.id === p.base);
+        return { at: at + p.t / 60, name: PKG[p.kind].name, size: p.size, from: SECTOR_NAMES[sectorOf(p.bearing)], base: b?.known ? b.name : undefined, counter: p.counter, ...t };
+      });
     const report: DayReport = {
       day: s.day,
+      timeline,
       at,
       end,
       pulse: slot?.type,

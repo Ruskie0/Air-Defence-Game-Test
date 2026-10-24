@@ -178,6 +178,8 @@ export class World {
   readonly startHp = new Map<string, number>();
   /** Hits on defended sites per campaign raid package. */
   readonly pkgHits = new Map<number, number>();
+  /** Per raid package, for the after-action timeline: what it put in the air and how each one ended. */
+  readonly pkgTally = new Map<number, { spawned: number; down: number; hits: number; missed: number; home: number }>();
   /** Seconds each radar spent radiating (by radar code). */
   readonly radiating = new Map<string, number>();
   /** Package tag given to everything spawned while it is set. */
@@ -529,6 +531,7 @@ export class World {
   spawn(e: Entity): void {
     if (this.spawnTag >= 0 && e.pkg < 0) e.pkg = this.spawnTag;
     if (e.side === 'red') this.stats.spawnedKind[World.tally(e)] = (this.stats.spawnedKind[World.tally(e)] ?? 0) + 1;
+    if (e.side === 'red' && e.pkg >= 0) this.tallyOf(e.pkg).spawned++;
     // A headwind slows the attack drones down.
     if (e instanceof Drone && this.weather.droneSpeed !== 1) {
       e.spd *= this.weather.droneSpeed;
@@ -551,11 +554,26 @@ export class World {
     this.log(`Launches detected from the ${b.name.toLowerCase()}: it is on the map now, and a deep strike can find it`, 'info');
   }
 
+  private tallyOf(pkg: number): { spawned: number; down: number; hits: number; missed: number; home: number } {
+    let t = this.pkgTally.get(pkg);
+    if (!t) this.pkgTally.set(pkg, (t = { spawned: 0, down: 0, hits: 0, missed: 0, home: 0 }));
+    return t;
+  }
+
   /** Record how an entity died or left, once. */
   setFate(e: Entity, how: Fate['how'], by: string, extra: Partial<Fate> = {}): void {
     if (e.fate) return;
     e.fate = { how, by, t: this.t, pos: clone(e.pos), vel: clone(e.vel), air: how === 'missile' || how === 'gun' || how === 'laser', ...extra };
     this.deaths.push(e);
+    if (e.side === 'red' && e.pkg >= 0) {
+      const t = this.tallyOf(e.pkg);
+      if (e.fate.air) t.down++;
+      else if (how === 'exit') t.home++;
+      else if (how === 'impact') {
+        if (e.fate.hit) t.hits++;
+        else t.missed++;
+      }
+    }
     // Enemy aircraft shot down are lost to their base for good.
     if (e.side === 'red' && !e.munition && e.fate.air) {
       const key = `${e.pkg}|${World.tally(e)}`;

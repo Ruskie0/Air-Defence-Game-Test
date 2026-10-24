@@ -114,7 +114,7 @@ export class CampaignUi {
         </div>
         ${
           saved
-            ? `<button data-cui="continue" class="big"><b>Continue campaign</b><small>Day ${saved.s.day} of ${CAMPAIGN_DAYS}, budget ${money(saved.s.money)}, ${saved.units.length} units deployed.</small></button>`
+            ? `<button data-cui="continue" class="big"><b>Continue campaign</b><small>${esc(stamp(saved.clock))} of ${CAMPAIGN_DAYS} days, budget ${money(saved.s.money)}, ${saved.units.length} units deployed. Saved automatically between raids.</small></button>`
             : ''
         }
         <button data-cui="laststand" class="big">
@@ -194,7 +194,7 @@ export class CampaignUi {
     if (!c) return;
     const s = c.s;
     const last = s.history[s.history.length - 1];
-    $('raid').innerHTML = `<span class="lbl">DAY</span><b>${s.day}</b><span class="dim">/${CAMPAIGN_DAYS}</span> <span class="lbl" style="margin-left:10px">PLANNING</span><span class="dim">${c.diff.name}</span>`;
+    $('raid').innerHTML = `<span class="lbl">DAY</span><b>${s.day}</b><span class="dim">/${CAMPAIGN_DAYS}</span> <span class="lbl" style="margin-left:10px">PLANNING</span><span class="dim">${c.diff.name} · saved</span>`;
     $('clock').innerHTML = `<b>${hhmm(c.clock)}</b> <span class="rate paused">CLOCK STOPPED</span>`;
     $('score').innerHTML = `<span class="chip">Budget <b>${money(s.money)}</b></span>`;
 
@@ -565,6 +565,7 @@ export class CampaignUi {
               .join('')}</ul>`
           : ''
       }
+      ${this.timeline(r)}
       ${r.front?.length ? `<h3>The front</h3><ul class="intel">${r.front.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
       ${r.enemy?.length ? `<h3>The enemy</h3><ul class="intel">${r.enemy.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
       <h3>Damage</h3>
@@ -584,6 +585,25 @@ export class CampaignUi {
              <div class="row"><button data-cui="plan" class="go">Plan for the next raid ▶</button><button data-cui="menu">Save and quit</button></div>`
       }`;
     $('debrief').classList.remove('hidden');
+  }
+
+  /** After action: every package in the order it came, and what became of it. */
+  private timeline(r: DayReport): string {
+    if (!r.timeline?.length) return '';
+    const rows = r.timeline
+      .map((p) => {
+        const out: string[] = [];
+        if (p.down) out.push(`${p.down} shot down`);
+        if (p.hits) out.push(`<span class="bad">${p.hits} hit${p.hits > 1 ? 's' : ''}</span>`);
+        if (p.missed) out.push(`${p.missed} missed`);
+        if (p.home) out.push(`${p.home} went home`);
+        const left = p.spawned - p.down - p.hits - p.missed - p.home;
+        if (left > 0) out.push(`${left} still out`);
+        const outcome = p.spawned ? out.join(', ') : '<span class="dim">never launched</span>';
+        return `<tr class="${p.hits ? 'tl-hit' : ''}"><td class="mono">${hhmm(p.at)}</td><td>${p.counter ? 'Counter-attack: ' : ''}${esc(p.name)} ×${p.size}</td><td>${esc(p.from)}${p.base ? ` <span class="dim">${esc(p.base.toLowerCase())}</span>` : ''}</td><td>${outcome}</td></tr>`;
+      })
+      .join('');
+    return `<h3>After action</h3><table class="timeline"><thead><tr><th>Time</th><th>Package</th><th>From</th><th>What became of it</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   // ------------------------------------------------------------- input

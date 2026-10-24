@@ -389,6 +389,8 @@ export class Campaign {
         continue;
       }
       if (f.radar) u.armWatch = f.radar.armWatch;
+      if (f.fu) u.holdFire = f.fu.hold;
+      if (f.ciws) u.holdFire = !f.ciws.auto;
       kept.push(u);
     }
     s.deployment.units = kept;

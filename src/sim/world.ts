@@ -188,6 +188,7 @@ export class World {
       const info = CATALOG[type];
       const fu = new FireUnit(type, id.code, u.uid, id.name, missile, r, launchers, info.channels!, info.reloadS!, type === 'MR');
       fu.spares = u.spares;
+      fu.hold = !!u.holdFire;
       // A launch with rounds already missing starts the reload clock straight away.
       for (const l of launchers) if (l.rounds < l.max && fu.spares > 0) l.reloadAt = info.reloadS!;
       this.units.push(fu);
@@ -211,6 +212,7 @@ export class World {
         const r = this.addRadar(code, `${name} radar`, CIWS_RADAR, s, 'CIWS');
         f.radar = r;
         const c = new Ciws(code, name, s, r);
+        c.auto = !u.holdFire;
         this.ciws.push(c);
         f.ciws = c;
         break;
@@ -433,7 +435,7 @@ export class World {
     if (!tr || !u) return 'no such track';
     const f = u.feasibility(this, tr);
     if (!f.ok) return f.reason;
-    u.fire(this, tr, tr.cls === 'TBM' ? 2 : 1);
+    u.fire(this, tr, tr.cls === 'TBM' ? 2 : 1, true);
     return 'engaging';
   }
 
@@ -455,6 +457,17 @@ export class World {
     r.emitting = !r.emitting;
     r.armSilent = false;
     this.log(`${r.name} ${r.emitting ? 'radiating' : 'EMCON (silent)'}`, 'info');
+  }
+
+  /** Hold fire on a SAM battery or gun (by code), or release it. */
+  toggleHold(code: string): void {
+    const fu = this.unit(code);
+    if (fu) return fu.setHold(this, !fu.hold);
+    const c = this.ciws.find((x) => x.code === code);
+    if (c) {
+      c.auto = !c.auto;
+      this.log(`${c.name} ${c.auto ? 'AUTO' : 'HOLD FIRE'}`, 'info');
+    }
   }
 
   toggleArmWatch(code: string): void {

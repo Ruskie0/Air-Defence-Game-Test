@@ -114,7 +114,9 @@ export class FireUnit {
   readonly remote: boolean;
   /** Spare missiles held at the battery for reloading launchers. */
   spares = Infinity;
-  private queue: { t: number; trackId: number }[] = [];
+  /** Hold fire: no automatic engagements. Direct orders from the player still fire. */
+  hold = false;
+  private queue: { t: number; trackId: number; manual: boolean }[] = [];
 
   constructor(
     type: 'LR' | 'MR' | 'SH',
@@ -223,13 +225,20 @@ export class FireUnit {
     return { ok: true, reason: `PIP ${(range / 1000).toFixed(1)} km, TOF ${tof.toFixed(0)} s`, pip, tof, rangeM: range };
   }
 
-  fire(w: World, tr: Track, salvo: number): boolean {
+  fire(w: World, tr: Track, salvo: number, manual = false): boolean {
     const f = this.feasibility(w, tr);
     if (!f.ok) return false;
     const n = Math.min(salvo, this.rounds);
-    for (let i = 0; i < n; i++) this.queue.push({ t: w.t + i * 1.2, trackId: tr.id });
+    for (let i = 0; i < n; i++) this.queue.push({ t: w.t + i * 1.2, trackId: tr.id, manual });
     w.log(`${this.name} engaging ${tr.label} (${tr.cls}) with ${n}: ${f.reason}`, 'engage');
     return true;
+  }
+
+  /** Toggle hold fire; going to hold cancels launches that are queued but not yet away. */
+  setHold(w: World, hold: boolean): void {
+    this.hold = hold;
+    if (hold) this.queue = this.queue.filter((q) => q.manual);
+    w.log(`${this.name} ${hold ? 'HOLD FIRE' : 'weapons free to engage automatically'}`, 'info');
   }
 
   remap(from: number, to: number): void {

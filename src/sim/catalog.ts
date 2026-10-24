@@ -27,6 +27,8 @@ export interface DeployedUnit {
   aircraft: number;
   /** Radar starts the day on automatic ARM response. */
   armWatch?: boolean;
+  /** Starts the day on hold fire (no automatic engagements). */
+  holdFire?: boolean;
 }
 
 export interface AssetState {

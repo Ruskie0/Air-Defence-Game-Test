@@ -66,7 +66,7 @@ export function autoEngage(w: World): void {
       // Of the batteries of this type that can take the shot, the one with the earliest intercept.
       let best: { u: FireUnit; tof: number } | null = null;
       for (const u of w.units) {
-        if (u.type !== type) continue;
+        if (u.type !== type || u.hold) continue;
         // Magazine discipline: keep the last MR rounds for cruise missiles, ARMs and aircraft.
         if (type === 'MR' && tr.cls === 'UAV' && u.rounds <= Math.ceil(u.maxRounds * MR_RESERVE)) continue;
         const f = u.feasibility(w, tr);

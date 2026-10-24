@@ -137,6 +137,9 @@ export class Hud {
     } else if (/^Digit[1-5]$/.test(e.code)) {
       this.ctl.speed = SPEEDS[Number(e.code.slice(5)) - 1];
       this.ctl.paused = false;
+    } else if (e.code === 'KeyH' && this.unitSel) {
+      this.w.toggleHold(this.unitSel);
+      this.nextSlow = 0;
     } else if (e.code === 'Escape') {
       this.clearSelection();
       $('help').classList.add('hidden');
@@ -176,14 +179,10 @@ export class Hud {
       case 'armwatch':
         w.toggleArmWatch(d.code!);
         break;
-      case 'ciws': {
-        const c = w.ciws.find((x) => x.code === d.code);
-        if (c) {
-          c.auto = !c.auto;
-          w.log(`${c.name} ${c.auto ? 'AUTO' : 'HOLD'}`, 'info');
-        }
+      case 'ciws':
+      case 'hold':
+        w.toggleHold(d.code!);
         break;
-      }
       case 'gnss': {
         const j = w.gnss[Number(d.i)];
         j.on = !j.on;
@@ -354,6 +353,10 @@ export class Hud {
       `<button data-act="armwatch" data-code="${r.code}" class="${r.armWatch ? 'on' : ''}" ${dis} title="Automatic ARM response: shut the radar down while an anti-radiation missile is closing on it">ARM auto</button>`;
   }
 
+  private holdButton(code: string, hold: boolean): string {
+    return `<button data-act="hold" data-code="${code}" class="${hold ? 'on warn' : ''}" title="Hold fire (H): no automatic engagements. Your direct orders still fire.">${hold ? 'Holding' : 'Hold fire'}</button>`;
+  }
+
   private updateSystems(): void {
     const w = this.w;
     const rows: string[] = ['<h3>Fire units</h3>'];
@@ -362,9 +365,9 @@ export class Hud {
       const active = u.activeTargets(w).size;
       const reload = u.launchers.filter((l) => l.reloadAt > 0 && l.site.alive);
       rows.push(`<div class="sys sel-able ${this.unitSel === u.code ? 'focus' : ''}" data-act="unit" data-code="${u.code}">
-        <div class="sys-h"><b>${u.name}</b> ${this.radarState(r.code)}</div>
+        <div class="sys-h"><b>${u.name}</b> ${this.radarState(r.code)}${u.hold ? ' <span class="st emcon">HOLD</span>' : ''}</div>
         <div class="sys-b">Missiles <b>${u.rounds}</b>/${u.maxRounds}${Number.isFinite(u.spares) ? ` +${u.spares}` : ''} · Channels ${active}/${u.channels}${reload.length ? ` · reload ${fmtTime(Math.min(...reload.map((l) => l.reloadAt)) - w.t)}` : ''}
-        ${this.radarButtons(r)}</div></div>`);
+        ${this.holdButton(u.code, u.hold)}${this.radarButtons(r)}</div></div>`);
     }
     for (const c of w.ciws) {
       const st = !c.site.alive
@@ -379,7 +382,7 @@ export class Hud {
                 ? '<span class="st ok">AUTO</span>'
                 : '<span class="st emcon">HOLD</span>';
       rows.push(`<div class="sys sel-able ${this.unitSel === c.code ? 'focus' : ''}" data-act="unit" data-code="${c.code}"><div class="sys-h"><b>${c.name}</b> ${st}</div>
-        <div class="sys-b">Rounds <b>${c.ammo}</b>/${c.maxAmmo} <button data-act="ciws" data-code="${c.code}" ${c.site.alive ? '' : 'disabled'}>${c.auto ? 'Hold' : 'Auto'}</button></div></div>`);
+        <div class="sys-b">Rounds <b>${c.ammo}</b>/${c.maxAmmo} <button data-act="ciws" data-code="${c.code}" class="${c.auto ? '' : 'on warn'}" ${c.site.alive ? '' : 'disabled'}>${c.auto ? 'Hold fire' : 'Holding'}</button></div></div>`);
     }
     const ewr = w.fielded.filter((f) => f.unit.type === 'EWR' && f.radar);
     if (ewr.length) {
@@ -513,7 +516,7 @@ export class Hud {
           <span>Channels</span><b>${active.length}/${fu.channels}${active.length ? `: ${active.join(', ')}` : ''}</b>
           <span>Missile</span><b>${fu.spec.name}, ${(fu.spec.maxRangeM / 1000).toFixed(0)} km</b>
         </div>
-        <div class="row">${this.radarButtons(r)}</div>
+        <div class="row">${this.holdButton(fu.code, fu.hold)}${this.radarButtons(r)}</div>
         ${order}${this.targetTable(rows)}`;
     }
     const c = w.ciws.find((x) => x.code === code);

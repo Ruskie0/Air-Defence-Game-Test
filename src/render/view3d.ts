@@ -444,9 +444,11 @@ export class View3D {
           const radar = w.radars.find((r) => r.pos === s.pos || (r.pos.x === s.pos.x && r.pos.y === s.pos.y));
           const sig = radar?.signature ?? 'MR';
           const hm = s.pos.z - ground;
-          const base = part(sig === 'SH' ? 'shorad-hull' : sig === 'LR' ? 'radar-base-LR' : 'radar-base');
+          // A SHORAD fire unit's radar rides on its vehicle; a gap-filler with the same radar stands on a trailer and mast.
+          const shorad = sig === 'SH' && w.units.some((u) => u.radar === radar);
+          const base = part(shorad ? 'shorad-hull' : sig === 'LR' ? 'radar-base-LR' : 'radar-base');
           base.rotation.y = -(radar?.boresight ?? 0) * DEG;
-          const deck = sig === 'SH' ? 3.0 : 3.4;
+          const deck = shorad ? 3.0 : 3.4;
           if (hm - deck > 1) part(`mast-${Math.round(hm - deck)}`, root, deck);
           const ant = new THREE.Group();
           ant.position.y = Math.max(hm, deck + 1);
@@ -464,13 +466,16 @@ export class View3D {
         }
         case 'ciws': {
           const c = w.ciws.find((x) => x.site === s);
-          part('ciws-base');
+          // CIWS on a trailer, the towed 35 mm gun, or the laser truck: base, traversing mount and elevating mass.
+          const kind = c?.spec.kind ?? 'ciws';
+          const [yawAt, pitchY] = kind === 'gun35' ? [[0, 1.6, 0], 1.3] : kind === 'laser' ? [[0, 3.3, 1.6], 1.35] : [[0, 2.3, 1.2], 1.4];
+          part(`${kind}-base`);
           const yaw = new THREE.Group();
-          yaw.position.set(0, 2.3, 1.2);
-          part('ciws-yaw', yaw);
+          yaw.position.set(yawAt[0], yawAt[1], yawAt[2]);
+          part(`${kind}-yaw`, yaw);
           const pitch = new THREE.Group();
-          pitch.position.y = 1.4;
-          part('ciws-gun', pitch);
+          pitch.position.y = pitchY;
+          part(`${kind}-gun`, pitch);
           yaw.add(pitch);
           root.add(yaw);
           if (c) this.turrets.push({ ciws: c, yaw, pitch });

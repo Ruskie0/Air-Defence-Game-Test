@@ -68,7 +68,7 @@ export interface UnitInfo {
 export const CATALOG: Record<UnitType, UnitInfo> = {
   LR: {
     type: 'LR', name: 'LR SAM battery', costM: 280, unlockDay: 3, missile: LR_MSL,
-    role: 'C-band phased array, 120° sector, 120 km missiles. The only defence against ballistic missiles (inside 40 km).',
+    role: 'C-band phased array, 120° sector, 120 km missiles. The only missile that can intercept ballistic missiles (inside 40 km).',
     launchers: 2, perLauncher: 4, maxLaunchers: 4, launcherCostM: 30, channels: 9, reloadS: 600, rangeKm: 120, sector: true,
   },
   MR: {
@@ -83,7 +83,7 @@ export const CATALOG: Record<UnitType, UnitInfo> = {
   },
   CIWS: {
     type: 'CIWS', name: 'CIWS gun', costM: 25, unlockDay: 1,
-    role: 'Radar-directed 4500 rpm gun, about 2 km. Last-ditch point defence; free to rearm.',
+    role: 'Radar-directed 4500 rpm gun, 2.5 km. Last-ditch point defence: best against anti-radiation and cruise missiles, and it even gets a shot at a ballistic missile diving on it. Free to rearm.',
     rangeKm: 2.5,
   },
   GUN: {

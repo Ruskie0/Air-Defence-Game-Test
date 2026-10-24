@@ -21,10 +21,12 @@ import type { Ppi } from './ppi';
 export interface GameControl {
   speed: number;
   paused: boolean;
-  /** Run quiet stretches (nothing hostile in the picture) at 16x. */
+  /** Auto tempo: run stretches with the nearest threat minutes away at up to 16x. */
   skipQuiet?: boolean;
-  /** Set by the game loop while a quiet stretch is being skipped. */
+  /** Set by the game loop while the auto tempo runs faster than the chosen speed. */
   fastForward?: boolean;
+  /** The auto tempo's current compression (1 when a threat is close or a missile is in the air). */
+  tempo?: number;
 }
 
 const SPEEDS = [1, 2, 4, 8, 16];
@@ -418,7 +420,7 @@ export class Hud {
       'speed',
       `<button data-act="pause" class="${this.ctl.paused ? 'on warn' : ''}">${this.ctl.paused ? '▶' : '❚❚'}</button>` +
         SPEEDS.map((s) => `<button data-act="speed" data-v="${s}" class="${!this.ctl.paused && this.ctl.speed === s ? 'on' : ''}">${s}×</button>`).join('') +
-        `<button data-act="skipquiet" class="${this.ctl.skipQuiet ? 'on' : ''}" title="Skip quiet: while nothing hostile or unknown is in the picture, time runs at 16× and drops back the moment a new contact appears">${this.ctl.fastForward ? 'Quiet ▸▸' : 'Skip quiet'}</button>`,
+        `<button data-act="skipquiet" class="${this.ctl.skipQuiet ? 'on' : ''}" title="Auto tempo: while the nearest threat is still minutes away, time runs up to 16× faster, slowing back to your speed as it closes, whenever a missile is in the air, and while a located battery is under threat">${this.ctl.fastForward ? `Auto ▸▸ ${this.ctl.tempo}×` : 'Auto tempo'}</button>`,
     );
     this.set(
       'wcs',

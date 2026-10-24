@@ -14,7 +14,7 @@ import { MAP_SEED } from '../sim/world';
 import { World } from '../sim/world';
 import { doctrineOf, pickDoctrine } from './doctrine';
 import { award, battleMedals } from './medals';
-import { EnemyModel, PKG, PkgKind, PlannedPkg, SECTOR_NAMES, assignBases, newEnemy, planDay, refundBases, sectorOf, sortiesOf, threatBudget, toRaids } from './raidgen';
+import { EnemyModel, PKG, PkgKind, PlannedPkg, SECTOR_NAMES, aimAtSightings, assignBases, newEnemy, planDay, refundBases, sectorOf, sortiesOf, threatBudget, toRaids } from './raidgen';
 import { DAY_START_MIN, DELIVERY_H, PULSES, PulseSlot, PulseType, REPAIR_PER_H, TURNAROUND_H, hhmm, scheduleDay } from './clock';
 import { cbStrikes } from '../sim/exposure';
 import { ARMOUR } from '../sim/enemyarmour';
@@ -434,6 +434,7 @@ export class Campaign {
     // Every package flies from a real installation, only as big as what it has ready: aircraft still being
     // turned round from an earlier sortie stay on the ground.
     this.s.plan = assignBases(this.pulsePlan(), this.theatre, this.busy(slot.at));
+    aimAtSightings(this.s.plan, this.s.enemy.known ?? []);
     // An operation the enemy has nothing left to fly is called off: on to its next one today.
     if (!this.s.plan.some((p) => p.kind !== 'dark') && (this.s.pulseIdx ?? 0) + 1 < (this.s.pulses?.length ?? 0)) {
       this.s.pulseIdx = (this.s.pulseIdx ?? 0) + 1;

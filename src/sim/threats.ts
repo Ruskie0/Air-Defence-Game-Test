@@ -207,12 +207,15 @@ export function spawnHelos(w: World, n: number, bearing: number, rangeM: number,
   }
 }
 
-export function spawnSead(w: World, n: number, bearing: number, rangeM: number, from?: LaunchFrom): void {
+export function spawnSead(w: World, n: number, bearing: number, rangeM: number, from?: LaunchFrom, aims?: Target[]): void {
   const base = launchPoint(w, 'sead', bearing, from);
+  // Aimed at a battery their recon found: go for the radars there first.
+  const a = aims?.find((x) => typeof x !== 'string');
+  const focus = a && typeof a !== 'string' ? v3(a.x, a.y) : undefined;
   for (let i = 0; i < n; i++) {
     const start = add(base ?? polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 4000));
     start.z = base ? start.z + 800 : 7500;
-    w.spawn(new Sead(w.nextName('SEAD'), start));
+    w.spawn(new Sead(w.nextName('SEAD'), start, focus));
   }
 }
 

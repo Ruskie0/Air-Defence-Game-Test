@@ -666,10 +666,13 @@ export class Sead extends Air {
   private quiet = 0;
   private emitter: Emitter | null = null;
   private readonly home: V3;
+  /** A battery the enemy's recon found: its radars are hunted first, and the pair waits off it when all is quiet. */
+  readonly focus: V3 | null;
 
-  constructor(name: string, pos: V3) {
-    super(name, pos, bearingDeg(pos, v3()), 270);
+  constructor(name: string, pos: V3, focus?: V3) {
+    super(name, pos, bearingDeg(pos, focus ?? v3()), 270);
     this.home = clone(pos);
+    this.focus = focus ? clone(focus) : null;
     this.rcs = 4;
     this.hitRadius = 8;
     this.cmdAlt = 7500;
@@ -686,7 +689,7 @@ export class Sead extends Air {
       if (!e.alive || !e.isEmitting()) continue;
       const d = dist(e.pos, this.pos);
       if (d > (blinded && e.signature !== 'JAM' ? 30000 : 190000) || !w.terrain.los(this.pos, e.pos)) continue;
-      const s = rank[e.signature] * 1e6 + d;
+      const s = rank[e.signature] * 1e6 + d - (this.focus && hdist(e.pos, this.focus) < 6000 ? 5e6 : 0);
       if (s < score) {
         score = s;
         best = e;
@@ -715,9 +718,10 @@ export class Sead extends Air {
         }
       } else {
         // Nothing radiating: hold outside launch range waiting for a radar to come up.
-        const d = Math.hypot(this.pos.x, this.pos.y);
-        if (d > 95000) this.steer(0, 0, dt);
-        else this.steer(this.pos.x * 2, this.pos.y * 2, dt);
+        const c = this.focus ?? v3();
+        const d = hdist(this.pos, c);
+        if (d > (this.focus ? 70000 : 95000)) this.steer(c.x, c.y, dt);
+        else this.steer(2 * this.pos.x - c.x, 2 * this.pos.y - c.y, dt);
         this.quiet += dt;
         if (this.quiet > 150 * w.redSupport.stationMult) {
           this.egress = true;

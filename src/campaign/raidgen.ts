@@ -108,7 +108,7 @@ export const PKG: Record<PkgKind, PkgDef> = {
     name: 'SEAD pair', cost: () => 10, minDay: 3, sectors: [7, 0, 1, 6, 2],
     size: () => 2,
     asset: 'sead',
-    spawn: (w, b, n, _a, _o, f) => spawnSead(w, n, b, 160000, f),
+    spawn: (w, b, n, aims, _o, f) => spawnSead(w, n, b, 160000, f, aims),
     describe: () => '2 SEAD fighters hunting radiating radars with anti-radiation missiles',
   },
   soj: {
@@ -309,4 +309,17 @@ export function assignBases(plan: PlannedPkg[], bases: EnemyBase[], sorties = ne
     out.push(p);
   }
   return out;
+}
+
+/**
+ * SEAD and strike against what the enemy's recon found of our air defences: the operation's first SEAD pair
+ * goes for the SAM battery it photographed, and its first strike package bombs it. Aims only: no new packages.
+ */
+export function aimAtSightings(plan: PlannedPkg[], known: Sighting[]): void {
+  const sams = known.filter((k) => /SAM|radar/.test(k.name));
+  if (!sams.length) return;
+  const sead = plan.find((p) => p.kind === 'sead');
+  if (sead) sead.aims = [sams[0]];
+  const strike = plan.find((p) => p.kind === 'strike');
+  if (strike) strike.aims = sams.slice(0, Math.max(1, strike.size));
 }

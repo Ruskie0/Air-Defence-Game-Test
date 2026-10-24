@@ -71,6 +71,8 @@ export interface WorldOptions {
   weather?: WeatherId;
   /** Level of the enemy's counter-battery fire (campaign day); 0 turns it off. 4 when omitted. */
   counterBattery?: number;
+  /** Campaign clock (minutes since midnight before day 1, as in campaign/clock.ts) at t = 0; absent outside the campaign. */
+  clockStart?: number;
   /** Campaign front line: the towns we hold (defended), and today's assault force if an offensive is on. */
   towns?: { name: string; x: number; y: number; hp: number }[];
   /** Today's assault force: its start line, the town it goes for, and where its column sets off from (it starts on its start line when omitted). */
@@ -102,6 +104,8 @@ export const MAP_SEED = 20261023;
 export class World {
   t = 0;
   readonly seed: number;
+  /** Campaign clock at t = 0 (minutes); the time of day is clockStart + t / 60. Undefined outside the campaign. */
+  readonly clockStart?: number;
   readonly rng: Rng;
   readonly terrain: Terrain;
   /** Enemy installations: where every enemy weapon starts. Shared with the campaign, which keeps the stocks. */
@@ -194,6 +198,7 @@ export class World {
   constructor(opts: WorldOptions | number = {}) {
     const o: WorldOptions = typeof opts === 'number' ? { seed: opts } : opts;
     this.seed = o.seed ?? MAP_SEED;
+    this.clockStart = o.clockStart;
     this.rng = new Rng(this.seed);
     this.mods = modifiers(o.upgrades);
     this.weatherId = o.weather ?? 'clear';

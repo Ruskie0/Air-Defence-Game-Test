@@ -10,7 +10,7 @@ import type { DeepStrikeId } from './deepstrike';
 import { WEATHER, WeatherId, rollWeather } from './weather';
 import { hdist, v3 } from '../sim/math';
 import { CLASSIC_LAYOUT, MapLayout, MapType, Terrain, legacyLayout, randomLayout, typeForSeed } from '../sim/terrain';
-import { MAP_SEED } from '../sim/world';
+import { MAP_SEED, RECON_BOUNTY_M } from '../sim/world';
 import { World } from '../sim/world';
 import { doctrineOf, pickDoctrine } from './doctrine';
 import { award, battleMedals } from './medals';
@@ -1161,6 +1161,7 @@ export class Campaign {
 
     s.civilLosses += w.stats.civilian;
     const objectives = (s.objectives ?? []).map((o) => ({ name: objectiveName(o), rewardM: o.rewardM, done: objectiveStatus(o, w, true) === 'done' }));
+    if (w.reconDenied) objectives.push({ name: `Intel denied: ${w.reconDenied} recon drone${w.reconDenied > 1 ? 's' : ''} shot down with photos aboard`, rewardM: w.reconDenied * RECON_BOUNTY_M, done: true });
     const bonus = objectives.reduce((t, o) => t + (o.done ? o.rewardM : 0), 0);
     s.money += bonus;
     const lastToday = (s.pulseIdx ?? 0) + 1 >= (s.pulses?.length ?? 1);

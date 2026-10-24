@@ -65,6 +65,11 @@ export interface Strobe {
   t: number;
 }
 
+/** Emission control presets for a radar. */
+export type EmconPreset = 'on' | 'near' | 'engaged';
+
+export const EMCON_TEXT: Record<EmconPreset, string> = { on: 'always on', near: 'on when a threat is near', engaged: 'silent until engaged' };
+
 export class Radar implements Emitter {
   readonly code: string;
   readonly name: string;
@@ -75,6 +80,11 @@ export class Radar implements Emitter {
   emitting = true;
   /** Automatic ARM response: shut down while a hostile missile track is closing on this radar. */
   armWatch = false;
+  /** Emission control preset: 'on' radiates as ordered; 'near' only while a hostile is within reach of its
+   *  battery; 'engaged' stays silent until a hostile is inside its weapons' range. */
+  emcon: EmconPreset = 'on';
+  /** Until when an automatic preset keeps it radiating after the last threat (sim s). */
+  emconHold = 0;
   /** Silent because of the ARM response (rather than by operator order). */
   armSilent = false;
   armClearAt = 0;

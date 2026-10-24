@@ -295,6 +295,9 @@ export class Hud {
       case 'emcon':
         w.toggleEmcon(d.code!);
         break;
+      case 'emcon-preset':
+        w.cycleEmcon(d.code!);
+        break;
       case 'armwatch':
         w.toggleArmWatch(d.code!);
         break;
@@ -530,7 +533,9 @@ export class Hud {
 
   private radarButtons(r: Radar): string {
     const dis = r.alive ? '' : 'disabled';
+    const preset = { on: 'Auto: off', near: 'Auto: near', engaged: 'Auto: engage' }[r.emcon];
     return `<button data-act="emcon" data-code="${r.code}" ${dis}>${r.emitting ? 'EMCON' : 'Radiate'}</button>` +
+      `<button data-act="emcon-preset" data-code="${r.code}" class="${r.emcon === 'on' ? '' : 'on'}" ${dis} title="Emission control preset (click to cycle). Off: radiates as you order. Near: radiates only while a hostile is within reach of the battery. Engage: silent until a hostile is inside its weapons' range. Less time radiating means less exposure and fewer ARM shots.">${preset}</button>` +
       `<button data-act="armwatch" data-code="${r.code}" class="${r.armWatch ? 'on' : ''}" ${dis} title="Automatic ARM response: shut the radar down while an anti-radiation missile is closing on it">ARM auto</button>`;
   }
 

@@ -4,6 +4,7 @@ import type { Fighter } from './fighter';
 import { V3, add, bearingDeg, clone, dist, hdist, polar, v3 } from './math';
 import { type EnemyBase, avail } from './theatre';
 import type { World } from './world';
+import { isNight } from '../campaign/clock';
 
 /**
  * The enemy's high-value aircraft: an AWACS and a tanker flying racetracks well back, over its own SAM
@@ -228,7 +229,7 @@ export class RedFighter extends Air {
       if (w.t >= this.nextShot && dist(this.pos, tgt.pos) < RED_FIGHTER.rangeM) {
         this.nextShot = w.t + 20;
         this.aams--;
-        w.spawn(new RedSam(w.nextName('AA'), clone(this.pos), tgt, w.t, RED_FIGHTER.pk, 'an enemy fighter'));
+        w.spawn(new RedSam(w.nextName('AA'), clone(this.pos), tgt, w.t, redFighterPk(w) || RED_FIGHTER.pk * 0.5, 'an enemy fighter'));
         w.log(`Enemy fighter ${this.name} fires on ${tgt.name}`, 'alert');
         // Firing is a hostile act: our picture marks it hostile.
         for (const tr of w.tracker.tracks) if (!tr.dropped && hdist(tr.predict(w.t), this.pos) < 4000) tr.hostileAct = true;
@@ -253,9 +254,19 @@ export class RedFighter extends Air {
   }
 }
 
+/**
+ * Whether the enemy's fighters fly now, and how well: its fighter pilots are not trained for night combat, fog
+ * and storms ground them, and rain cuts their missiles' kill chance. Game-level.
+ */
+export function redFighterPk(w: World): number {
+  if (w.clockStart !== undefined && isNight(w.clockStart + w.t / 60)) return 0;
+  if (w.weatherId === 'fog' || w.weatherId === 'storm') return 0;
+  return w.weatherId === 'rain' ? RED_FIGHTER.pk * 0.7 : RED_FIGHTER.pk;
+}
+
 /** Escorts for a strike package (one per two jets), from the same airfield, once the enemy flies them. */
 export function escortStrike(w: World, jets: Air[], from: V3, delay: number): void {
-  if (w.exposure.level < RED_FIGHTER.level || !w.fighters.some((f) => f.alive)) return;
+  if (w.exposure.level < RED_FIGHTER.level || !w.fighters.some((f) => f.alive) || !redFighterPk(w)) return;
   const n = Math.max(1, Math.round(jets.length / 2));
   for (let i = 0; i < n; i++) {
     const p = add(from, polar(i * 120, 800));
@@ -266,7 +277,7 @@ export function escortStrike(w: World, jets: Air[], from: V3, delay: number): vo
 
 /** A fighter sweep on our CAP: a pair from the forward airfield, some minutes into the battle. */
 export function sweepCap(w: World): void {
-  if (w.exposure.level < RED_FIGHTER.level || !w.fighters.length) return;
+  if (w.exposure.level < RED_FIGHTER.level || !w.fighters.length || !redFighterPk(w)) return;
   const af = w.theatre.find((b) => b.kind === 'airfield' && !b.lost && avail(b, 'strike') >= 2);
   if (!af) return;
   const delay = w.rng.range(240, 600);

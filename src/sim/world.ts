@@ -8,7 +8,7 @@ import { Modifiers, modifiers } from '../campaign/upgrades';
 import { WEATHER, Weather, WeatherId } from '../campaign/weather';
 import { Arm, Atgm, Cruise, Drone, Emitter, Entity, Fate, GlideBomb, ReconDrone, Sighting } from './entities';
 import { Fighter } from './fighter';
-import { V3, add, bearingDeg, clone, dist, norm, polar, scale, sub, v3 } from './math';
+import { V3, add, bearingDeg, clone, dist, hdist, norm, polar, scale, sub, v3 } from './math';
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, UnitType, rankOf } from './catalog';
 import { DEFAULT_ZONES, DeployZone, sandboxDeployment } from './deploy';
 import { AssaultOutcome, Column } from './column';
@@ -16,7 +16,7 @@ import { EnemyAd } from './enemyad';
 import { Exposure } from './exposure';
 import { RedSupport, sweepCap } from './redair';
 import { Interceptor, LR_MSL, MR_MSL, MissileSpec, SH_MSL } from './missile';
-import { CIWS_RADAR, EW_RADAR, LR_RADAR, MR_RADAR, Radar, RadarSpec, Report, SH_RADAR } from './radar';
+import { EMCON_TEXT, CIWS_RADAR, EW_RADAR, LR_RADAR, MR_RADAR, Radar, RadarSpec, Report, SH_RADAR } from './radar';
 import { Rng } from './rng';
 import { Raid, Scenario } from './scenario';
 import { Decoy, EwJammer, FireUnit, GnssJammer, Launcher, Site, SiteKind } from './sites';
@@ -102,6 +102,9 @@ export interface Fielded {
 }
 
 /** Terrain seed of the one map every mode is fought over. */
+/** Campaign reward for each enemy recon drone shot down with photos aboard ($M). */
+export const RECON_BOUNTY_M = 6;
+
 export const MAP_SEED = 20261023;
 
 /** The whole simulation. Stepped at a fixed 60 Hz; all randomness comes from one seeded stream. */
@@ -177,6 +180,8 @@ export class World {
   };
   /** Our positions enemy recon drones got home with, by unit id. */
   readonly reconSeen = new Map<number, Sighting>();
+  /** Enemy recon drones shot down with photos aboard: the intel they carried never got home. */
+  reconDenied = 0;
   /** Every site's health when the battle started (for the day's objectives). */
   readonly startHp = new Map<string, number>();
   /** Hits on defended sites per campaign raid package. */
@@ -201,6 +206,7 @@ export class World {
   private nextEffect = 1;
   private nextTewa = 0;
   private nextGnss = 0;
+  private nextEmcon = 0;
   private nextArmWatch = 0;
   private readonly names = new Map<string, number>();
   private readonly typeCount = new Map<string, number>();
@@ -586,6 +592,10 @@ export class World {
       const key = `${e.pkg}|${World.tally(e)}`;
       this.redAirLost.set(key, (this.redAirLost.get(key) ?? 0) + 1);
       this.redSupport.lost(this, e.kind);
+      if (e instanceof ReconDrone && e.photos.size) {
+        this.reconDenied++;
+        this.log(`${e.name} shot down with ${e.photos.size} of our positions photographed: that intel never gets home (+$${RECON_BOUNTY_M}M in the campaign)`, 'engage');
+      }
     }
   }
 
@@ -753,7 +763,37 @@ export class World {
     }
     r.emitting = !r.emitting;
     r.armSilent = false;
+    // A direct order takes the radar off its automatic preset.
+    r.emcon = 'on';
     this.log(`${r.name} ${r.emitting ? 'radiating' : 'EMCON (silent)'}`, 'info');
+  }
+
+  /** Cycle a radar's emission control preset: always on, on when a threat is near, silent until engaged. */
+  cycleEmcon(code: string): void {
+    const r = this.radarByCode(code);
+    if (!r) return;
+    r.emcon = r.emcon === 'on' ? 'near' : r.emcon === 'near' ? 'engaged' : 'on';
+    if (r.emcon === 'on' && !r.armSilent) r.emitting = true;
+    this.log(`${r.name} emission control: ${EMCON_TEXT[r.emcon]}`, 'info');
+  }
+
+  /** Radars on an automatic emission preset: radiate only while a hostile is close enough to matter. */
+  private stepEmcon(): void {
+    if (this.t < this.nextEmcon) return;
+    this.nextEmcon = this.t + 1;
+    for (const f of this.fielded) {
+      const r = f.fu?.radar ?? f.radar;
+      if (!r || r.emcon === 'on' || !r.alive || r.stowed || r.armSilent) continue;
+      const weapon = f.fu?.spec.maxRangeM ?? 0;
+      const reach = r.emcon === 'engaged' && weapon ? weapon * 0.9 : Math.max(60000, weapon * 1.6);
+      const threat = this.tracker.tracks.some((tr) => tr.confirmed && !tr.dropped && tr.ident === 'HOS' && hdist(tr.predict(this.t), r.pos) < reach);
+      if (threat) r.emconHold = this.t + 20;
+      const want = this.t < r.emconHold;
+      if (want !== r.emitting) {
+        r.emitting = want;
+        this.log(`${r.name} ${want ? 'radiating: threat within reach' : 'back to EMCON: no threat near'}`, 'info');
+      }
+    }
   }
 
   /** Order a unit (by any of its codes) to move to (x, y). Returns why it cannot, or null. */
@@ -889,6 +929,7 @@ export class World {
     stepSupport(this);
     this.stepGnss(dt);
     this.stepArmWatch();
+    this.stepEmcon();
 
     const reports: Report[] = [];
     for (const r of this.allRadars()) {

@@ -47,7 +47,8 @@ export class StandUi {
         <p class="dim">Wave ${st.wave + 1} launches 30 seconds after you choose. New units arrive at a free default spot: move them where you need them.</p>
         <div class="cards">${st.offer
           .map((c, i) => `<button data-stand="pick" data-i="${i}"><b>${esc(c.name)}</b><small>${esc(c.desc)}</small></button>`)
-          .join('')}</div>`;
+          .join('')}</div>
+        <p class="dim stocks"><b>Enemy stocks:</b> ${st.enemyStocks().map((b) => `${esc(b.name)}: ${esc(b.text)}`).join(' · ')}</p>`;
       this.el.hidden = false;
       this.ctl.paused = true;
       return;

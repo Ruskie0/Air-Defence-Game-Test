@@ -1,4 +1,4 @@
-import { reinforce } from '../sim/theatre';
+import { type Asset, type EnemyBase, TALLY_ASSET, assetCount, avail, draw, reinforce, stockText } from '../sim/theatre';
 import { CATALOG, UnitType } from '../sim/catalog';
 import { Rng } from '../sim/rng';
 import { MapType, typeForSeed } from '../sim/terrain';
@@ -7,14 +7,14 @@ import type { World } from '../sim/world';
 import { Campaign } from './campaign';
 import { DOCTRINES } from './doctrine';
 import { award, battleMedals } from './medals';
-import { planDay, toRaids } from './raidgen';
+import { assignBases, planDay, toRaids } from './raidgen';
 
 /**
  * Last Stand: one long battle against endless waves that grow every time. After each wave held, pick one of
  * three reinforcements. It ends when the airbase falls or too many airliners are shot down; the score is the
  * number of waves held.
  */
-export type CardId = UnitType | 'resupply' | 'repair' | 'funds';
+export type CardId = UnitType | 'resupply' | 'repair' | 'funds' | 'strike';
 
 export interface Card {
   id: CardId;
@@ -26,13 +26,14 @@ export interface Card {
 const POOL: [CardId, number][] = [
   ['MR', 1], ['SH', 1], ['CIWS', 1], ['GUN', 1], ['EWR', 1], ['GNSS', 2], ['GAP', 2], ['DECOY', 2],
   ['LASER', 3], ['CAP', 3], ['JAM', 4], ['LR', 4],
-  ['resupply', 2], ['repair', 2], ['funds', 1],
+  ['resupply', 2], ['repair', 2], ['funds', 1], ['strike', 2],
 ];
 
-const EXTRA: Record<'resupply' | 'repair' | 'funds', Omit<Card, 'id'>> = {
+const EXTRA: Record<'resupply' | 'repair' | 'funds' | 'strike', Omit<Card, 'id'>> = {
   resupply: { name: 'Ammunition train', desc: 'Every SAM launcher refilled at once, and 4 more spare missiles for each battery.' },
   repair: { name: 'Engineer battalion', desc: 'Every damaged defended asset and site patched up by 40%.' },
   funds: { name: 'War chest', desc: '+$60M for support calls: resupply convoys, field repairs and the alert pair.' },
+  strike: { name: 'Deep strike', desc: 'Our bombers hit the enemy installation with the most left in it: half its stock destroyed for good.' },
 };
 
 const UNIT_DESC: Partial<Record<UnitType, string>> = {
@@ -96,6 +97,10 @@ export class LastStand {
   private callNow = false;
   /** Where each battery stood when the last wave began. */
   private stood = new Map<number, { x: number; y: number }>();
+  /** Enemy aircraft losses already taken off the theatre's stocks ("pkg|tally" -> count). */
+  private written = new Map<string, number>();
+  /** The installation each package launched from. */
+  private pkgBase = new Map<number, string>();
 
   constructor(seed: number, mapType: MapType = typeForSeed(seed)) {
     this.c = Campaign.create(seed, 'normal', mapType);
@@ -120,19 +125,22 @@ export class LastStand {
     const w = this.w;
     this.wave++;
     const s = this.c.s;
-    const plan = planDay(this.wave, s.seed, s.enemy, s.nextPkg, this.c.layout.rot, waveScale(this.wave));
-    s.nextPkg += plan.length;
+    // The enemy's launch sites restock between waves; then every package launches from one of them and draws
+    // on its stock, so nothing appears near us and a wave is only as big as what the enemy has left.
+    reinforce(w.theatre, 1 + this.wave * 0.2);
+    const wanted = planDay(this.wave, s.seed, s.enemy, s.nextPkg, this.c.layout.rot, waveScale(this.wave));
+    s.nextPkg += wanted.length;
+    const plan = assignBases(wanted, w.theatre);
+    for (const p of plan) if (p.base) this.pkgBase.set(p.id, p.base);
     for (const p of plan) p.t = Math.round(w.t + 30 + p.t * PACE);
     w.scenario.raids.push(...toRaids(plan));
     w.scenario.done = false;
     w.scenario.doneMsg = `Wave ${this.wave} held.`;
     w.qraUsed = false;
     w.exposure.rearm(this.wave);
-    // The enemy's launch sites restock between waves, so it always has something to strike located batteries with.
-    reinforce(w.theatre, 1 + this.wave * 0.2);
     w.exposure.strikesLeft = 2 + Math.floor(this.wave / 2);
     w.exposure.cooldownS = cbCooldown(this.wave);
-    w.log(`Wave ${this.wave}: ${plan.length} packages inbound`, 'raid');
+    w.log(`Wave ${this.wave}: ${plan.length} packages inbound${plan.length < wanted.length ? ` (${wanted.length - plan.length} called off: their launch sites ran dry)` : ''}`, 'raid');
     // Batteries that have not moved since the last wave began start this one already half found.
     const heat = studied(this.wave);
     const stale: string[] = [];
@@ -161,6 +169,7 @@ export class LastStand {
     const quiet = w.pendingCount === 0 && !w.entities.some((e) => e.alive && e.side === 'red' && e.munition);
     if (!raids.every((r) => r.launched) || !(this.callNow || (quiet && w.t > last + 90) || w.t > last + WAVE_MAX_S)) return false;
     this.held = this.wave;
+    this.writeOffLosses();
     w.budgetM += WAVE_PAY_M;
     if (this.callNow) {
       this.callNow = false;
@@ -177,6 +186,26 @@ export class LastStand {
     this.saveBest();
     this.offer = this.deal();
     return true;
+  }
+
+  /** Enemy aircraft shot down come off their bases' strength for good. */
+  private writeOffLosses(): void {
+    const w = this.w;
+    for (const [key, n] of w.redAirLost) {
+      const done = this.written.get(key) ?? 0;
+      if (n <= done) continue;
+      this.written.set(key, n);
+      const [pkg, tally] = key.split('|');
+      const a = TALLY_ASSET[tally];
+      const id = this.pkgBase.get(Number(pkg));
+      const b = (a && w.theatre.find((x) => x.id === id)) || (a && w.theatre.find((x) => avail(x, a) > 0));
+      if (a && b) draw(b, a, n - done);
+    }
+  }
+
+  /** What the enemy has left at each installation we know about, for the reinforcement screen. */
+  enemyStocks(): { name: string; text: string; lost: boolean }[] {
+    return this.w.theatre.filter((b) => b.known || b.lost).map((b) => ({ name: b.name, text: b.lost ? 'destroyed' : stockText(b), lost: !!b.lost }));
   }
 
   /** Whether the player can call the next wave in now: every package of this one has launched. */
@@ -217,6 +246,19 @@ export class LastStand {
       for (const s of w.sites) if (s.alive && s.hp < 100) s.hp = Math.min(100, s.hp + 40);
     } else if (card.id === 'funds') {
       w.budgetM += 60;
+    } else if (card.id === 'strike') {
+      const total = (b: EnemyBase): number => (Object.keys(b.stock) as Asset[]).reduce((n, a) => n + avail(b, a), 0);
+      const b = w.theatre.filter((x) => !x.lost && x.kind !== 'rear').sort((p, q) => total(q) - total(p))[0];
+      if (b) {
+        b.known = true;
+        const gone: string[] = [];
+        for (const a of Object.keys(b.stock) as Asset[]) {
+          const n = Math.round(avail(b, a) / 2);
+          if (n > 0) gone.push(assetCount(a, n));
+          draw(b, a, n);
+        }
+        w.log(`Deep strike on the ${b.name}: ${gone.join(', ') || 'nothing'} destroyed`, 'kill');
+      }
     } else {
       const u = this.c.add(card.id);
       u.spares = u.launchers.length ? 4 : 0;
@@ -244,6 +286,6 @@ export class LastStand {
 }
 
 export function card(id: CardId): Card {
-  if (id === 'resupply' || id === 'repair' || id === 'funds') return { id, ...EXTRA[id] };
+  if (id === 'resupply' || id === 'repair' || id === 'funds' || id === 'strike') return { id, ...EXTRA[id] };
   return { id, name: CATALOG[id].name, desc: UNIT_DESC[id] ?? '' };
 }

@@ -18,7 +18,8 @@ import { CameraRig } from './camera';
 import { Effects } from './effects';
 import { type FrameEvents, WorldEvents } from './events';
 import { airModel, groundGeometry, interceptorModel } from './models';
-import { Scenery, buildScenery, buildSky, terrainSeed, updateHaze } from './terrain3d';
+import { Scenery, type SkyRig, buildScenery, buildSky, terrainSeed, updateHaze } from './terrain3d';
+import { WeatherView } from './weather';
 import { Wrecks } from './wrecks';
 
 /** Sim frame (x east, y north, z up) to three.js frame (x east, y up, z south). */
@@ -155,6 +156,8 @@ export class View3D {
   private scenery!: Scenery;
   private readonly fx: Effects;
   private readonly wrecks: Wrecks;
+  private readonly sky: SkyRig;
+  private readonly weather: WeatherView;
   private readonly events = new WorldEvents();
   private readonly composer: EffectComposer;
   private readonly bloom: UnrealBloomPass;
@@ -208,12 +211,14 @@ export class View3D {
     this.rig.onHome = () => this.setView('defended');
     this.setView('defended', true);
 
-    buildSky(this.renderer, this.scene);
+    this.sky = buildSky(this.renderer, this.scene);
     this.buildTerrain();
     this.buildSites();
     this.buildCoverage();
     this.fx = new Effects(this.scene);
     this.wrecks = new Wrecks(this.scene, this.fx);
+    this.weather = new WeatherView(this.scene, this.sky);
+    this.weather.apply(world, this.terrainMesh, this.fx);
 
     // The composer renders off-screen, so the canvas's own antialiasing does not apply: multisample the target.
     this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
@@ -330,6 +335,7 @@ export class View3D {
     this.selected = null;
     this.buildSites();
     this.buildCoverage();
+    this.weather.apply(w, this.terrainMesh, this.fx);
   }
 
   resize(): void {
@@ -773,8 +779,10 @@ export class View3D {
     this.rig.clampAboveGround();
     this.fx.update(this.world, ev, visible);
     this.wrecks.update(ev.simDt, this.world.terrain, this.camera.position);
+    const strikes = this.weather.update(ev.simDt > 0 ? realDt : 0, this.camera, this.controls.target, this.world.terrain, this.world, this.fx);
+    for (const p of strikes) this.sound.thunder(p, this.camera);
     this.scenery.update(realDt);
-    updateHaze(this.scene, this.camera.position.y);
+    updateHaze(this.scene, this.camera.position.y, this.weather.haze);
     this.camera.updateMatrixWorld();
     this.sound.update(this.world, ev, this.camera, visible, realDt);
     this.composer.render();

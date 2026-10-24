@@ -46,8 +46,6 @@ const smokeTex = canvasTex(128, (g, s) => {
   g.putImageData(img, 0, 0);
 });
 
-const WIND_X = 5;
-const WIND_Z = -2.5;
 
 const rnd = Math.random;
 const sym = (a: number): number => (rnd() * 2 - 1) * a;
@@ -85,6 +83,8 @@ export class Effects {
   private readonly trCol: Float32Array;
   private readonly debris: Debris[] = [];
   private readonly lastEmit = new Map<number, { x: number; y: number; z: number }>();
+  /** Surface wind (m/s, three.js x and z) that smoke drifts with; the weather sets it. */
+  readonly wind = { x: 5, z: -2.5 };
   private readonly siteAcc = new Map<object, number>();
   private readonly v = new THREE.Vector3();
 
@@ -143,8 +143,8 @@ export class Effects {
     this.lowFlyers(w, dt, visible);
     this.updateDebris(w, dt);
     this.guns(w, dt);
-    this.fire.update(dt, WIND_X, WIND_Z);
-    this.smoke.update(dt, WIND_X, WIND_Z);
+    this.fire.update(dt, this.wind.x, this.wind.z);
+    this.smoke.update(dt, this.wind.x, this.wind.z);
   }
 
   // ---------------------------------------------------------------- emitters
@@ -467,6 +467,33 @@ export class Effects {
         this.fire.spawn({ x, y, z, life: 1.6, size0: 6, size1: 260, alpha: 0.22, c0: [0.9, 0.3, 1.6], c1: [0.2, 0.05, 0.4], windK: 0 });
         this.siteAcc.set(j, 0);
       } else this.siteAcc.set(j, acc);
+    }
+  }
+
+  /** Strong wind lifts dust off open ground around where the camera looks. */
+  windDust(w: World, cx: number, cz: number, dt: number, k: number): void {
+    if (dt <= 0) return;
+    const n = Math.round(dt * 10 * k + rnd());
+    for (let i = 0; i < n; i++) {
+      const x = cx + sym(5000);
+      const z = cz + sym(5000);
+      const g = w.terrain.groundAt(x, -z);
+      if (g <= 0.5 || w.terrain.waterAt(x, -z)) continue;
+      this.puff({
+        x,
+        y: g + 4,
+        z,
+        vx: this.wind.x * 1.5,
+        vy: 1 + rnd() * 2,
+        vz: this.wind.z * 1.5,
+        life: 12 + rnd() * 10,
+        size0: 30,
+        size1: 220 + rnd() * 160,
+        alpha: 0.16 * k,
+        c0: [0.6, 0.53, 0.4],
+        c1: [0.68, 0.64, 0.56],
+        windK: 1,
+      });
     }
   }
 

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { WeatherId } from '../campaign/weather';
 import type { Entity, Kind } from '../sim/entities';
 import type { Effect, World } from '../sim/world';
 import type { FrameEvents } from '../render/events';
@@ -51,6 +52,10 @@ class Loop {
   }
 }
 
+/** Wind bed and rain hiss levels for each kind of weather. */
+const WIND_LEVEL: Partial<Record<WeatherId, number>> = { overcast: 1.3, rain: 1.6, fog: 0.4, wind: 4, storm: 5 };
+const RAIN_LEVEL: Partial<Record<WeatherId, number>> = { rain: 0.05, storm: 0.09 };
+
 const JET: Partial<Record<Kind, number>> = { fighter: 2500, strike: 2500, sead: 2500, bomber: 4000, soj: 3500, airliner: 3500 };
 
 export class SoundEngine {
@@ -64,7 +69,7 @@ export class SoundEngine {
   private ui!: GainNode;
   private white!: AudioBuffer;
   private brown!: AudioBuffer;
-  private loops!: { jet: Loop; drone: Loop; cruise: Loop; ciws: Loop; wind: Loop };
+  private loops!: { jet: Loop; drone: Loop; cruise: Loop; ciws: Loop; wind: Loop; rain: Loop };
   private jetFilter!: BiquadFilterNode;
   private droneOsc: OscillatorNode[] = [];
   private cruiseFilter!: BiquadFilterNode;
@@ -284,7 +289,7 @@ export class SoundEngine {
     const ctx = this.ctx!;
     const t = ctx.currentTime;
     const mk = (): Loop => new Loop(ctx, this.sfx);
-    this.loops = { jet: mk(), drone: mk(), cruise: mk(), ciws: mk(), wind: mk() };
+    this.loops = { jet: mk(), drone: mk(), cruise: mk(), ciws: mk(), wind: mk(), rain: mk() };
 
     // Jet: broadband roar with a low rumble and a little turbine hiss.
     const L = this.loops;
@@ -344,6 +349,10 @@ export class SoundEngine {
     g2.connect(this.gain(0.3)).connect(gust.gain);
     g2.start(t);
     this.noise(this.brown, t).connect(this.filter('lowpass', 650)).connect(gust).connect(L.wind.input);
+
+    // Rain: a soft broadband hiss with a little low patter.
+    this.noise(this.white, t).connect(this.filter('bandpass', 2600, 0.4)).connect(L.rain.input);
+    this.noise(this.brown, t).connect(this.filter('lowpass', 400)).connect(this.gain(0.4)).connect(L.rain.input);
   }
 
   // ---------------------------------------------------------------- placement
@@ -540,7 +549,32 @@ export class SoundEngine {
     L.ciws.set(gun, 1.1, 0.02);
     // Wind is louder near the ground and fades as the camera climbs.
     const alt = cam.position.y - w.terrain.groundAt(cam.position.x, -cam.position.z);
-    L.wind.set({ gain: 0.05 / (1 + Math.max(0, alt) / 3000), pan: 0, cutoff: 20000, delay: 0 }, 1, 0.5);
+    const near = 1 / (1 + Math.max(0, alt) / 3000);
+    L.wind.set({ gain: 0.05 * near * (WIND_LEVEL[w.weatherId] ?? 1), pan: 0, cutoff: 20000, delay: 0 }, 1, 0.5);
+    L.rain.set({ gain: (RAIN_LEVEL[w.weatherId] ?? 0) / (1 + Math.max(0, alt) / 800), pan: 0, cutoff: 20000, delay: 0 }, 1, 0.5);
+  }
+
+  /** Thunder from a lightning strike at a three.js position: a sharp crack close by, a long rolling rumble far off. */
+  thunder(p: THREE.Vector3, cam: THREE.Camera): void {
+    if (!this.ctx || this.ctx.state !== 'running') return;
+    const d = Math.max(1, p.distanceTo(cam.position));
+    const s = this.spatial(cam, p.x, p.y, p.z, 7000, 1);
+    s.delay = Math.min(d / SOUND_SPEED, 9);
+    const out = this.oneShot(s, 1.3, 9);
+    if (!out) return;
+    const t = this.ctx.currentTime + s.delay;
+    if (d < 4000) {
+      const cr = this.gain(0);
+      this.env(cr.gain, t, 0.003, 1, 0.5);
+      this.noise(this.white, t, t + 0.6).connect(this.filter('lowpass', 3800)).connect(cr).connect(out);
+    }
+    const rl = this.gain(0);
+    rl.gain.setValueAtTime(0.0001, t);
+    rl.gain.exponentialRampToValueAtTime(1.2, t + 0.2 + Math.random() * 0.4);
+    rl.gain.exponentialRampToValueAtTime(0.45, t + 1.6);
+    rl.gain.exponentialRampToValueAtTime(0.8, t + 2.6 + Math.random());
+    rl.gain.exponentialRampToValueAtTime(0.0001, t + 8);
+    this.noise(this.brown, t, t + 8.1).connect(this.filter('lowpass', 300)).connect(rl).connect(out);
   }
 }
 

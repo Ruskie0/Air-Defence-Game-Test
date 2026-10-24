@@ -48,18 +48,34 @@ void main() {
  * A clear afternoon sky: a gradient from haze at the horizon to blue overhead, with the sun.
  * Kept below the bloom threshold apart from the sun disc, so the sky never glows.
  */
-export function buildSky(renderer: THREE.WebGLRenderer, scene: THREE.Scene): void {
+/** The sky dome, its lights and the haze, so the weather can repaint them. */
+export interface SkyRig {
+  readonly colors: { zenith: THREE.Color; horizon: THREE.Color; below: THREE.Color; sunCol: THREE.Color };
+  readonly hemi: THREE.HemisphereLight;
+  readonly sun: THREE.DirectionalLight;
+  readonly fog: THREE.FogExp2;
+  /** Re-render the background and the reflections after changing the colours. */
+  refresh(): void;
+}
+
+export function buildSky(renderer: THREE.WebGLRenderer, scene: THREE.Scene): SkyRig {
+  const colors = {
+    zenith: new THREE.Color('#3f6ea8'),
+    horizon: HAZE.clone(),
+    below: new THREE.Color('#9aa89f'),
+    sunCol: new THREE.Color('#fff1d6'),
+  };
   const mat = new THREE.ShaderMaterial({
     vertexShader: SKY_VS,
     fragmentShader: SKY_FS,
     side: THREE.BackSide,
     depthWrite: false,
     uniforms: {
-      zenith: { value: new THREE.Color('#3f6ea8') },
-      horizon: { value: HAZE.clone() },
-      below: { value: new THREE.Color('#9aa89f') },
+      zenith: { value: colors.zenith },
+      horizon: { value: colors.horizon },
+      below: { value: colors.below },
       sunDir: { value: SUN_DIR.clone() },
-      sunCol: { value: new THREE.Color('#fff1d6') },
+      sunCol: { value: colors.sunCol },
     },
   });
   const skyScene = new THREE.Scene();
@@ -67,24 +83,35 @@ export function buildSky(renderer: THREE.WebGLRenderer, scene: THREE.Scene): voi
 
   const cube = new THREE.WebGLCubeRenderTarget(512, { type: THREE.HalfFloatType });
   const cubeCam = new THREE.CubeCamera(1, 5000, cube);
-  cubeCam.update(renderer, skyScene);
   scene.background = cube.texture;
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(skyScene, 0, 1, 5000).texture;
   scene.environmentIntensity = 0.5;
-  pmrem.dispose();
+  let env: THREE.WebGLRenderTarget | null = null;
+  const refresh = (): void => {
+    cubeCam.update(renderer, skyScene);
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    env?.dispose();
+    env = pmrem.fromScene(skyScene, 0, 1, 5000);
+    scene.environment = env.texture;
+    pmrem.dispose();
+  };
+  refresh();
 
-  scene.fog = new THREE.FogExp2(HAZE.getHex(), 1e-5);
-  scene.add(new THREE.HemisphereLight(0xc6d8ea, 0x5d5443, 0.7));
+  const fog = new THREE.FogExp2(HAZE.getHex(), 1e-5);
+  scene.fog = fog;
+  const hemi = new THREE.HemisphereLight(0xc6d8ea, 0x5d5443, 0.7);
+  scene.add(hemi);
   const sun = new THREE.DirectionalLight(0xfff0d8, 2.6);
   sun.position.copy(SUN_DIR).multiplyScalar(100000);
   scene.add(sun);
+  return { colors, hemi, sun, fog, refresh };
 }
 
 /** Aerial perspective is a low-level effect: thin the haze as the camera climbs so the overview stays clear. */
-export function updateHaze(scene: THREE.Scene, cameraY: number): void {
+export function updateHaze(scene: THREE.Scene, cameraY: number, weatherK = 1): void {
   const f = scene.fog as THREE.FogExp2 | null;
-  if (f) f.density = 1.15e-5 / (1 + Math.max(0, cameraY) / 22000);
+  // Bad weather thickens the haze near the ground most, so the overview stays readable.
+  const y = Math.max(0, cameraY);
+  if (f) f.density = (1.15e-5 * (1 + (weatherK - 1) / (1 + y / 6000))) / (1 + y / 22000);
 }
 
 // ---------------------------------------------------------------- land cover

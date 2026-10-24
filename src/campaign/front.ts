@@ -1,5 +1,6 @@
 import type { DeployZone } from '../sim/deploy';
 import { Rng } from '../sim/rng';
+import { COLUMN } from '../sim/column';
 import type { Terrain } from '../sim/terrain';
 
 /**
@@ -121,4 +122,19 @@ export function assaultSpot(t: Terrain, f: FrontState, i: number): { x: number; 
 /** Daily income from the towns we hold: a battered town pays less. */
 export function townIncome(f: FrontState | undefined): number {
   return Math.round((f?.towns ?? []).filter((x) => x.ours).reduce((s, x) => s + x.incomeM * (0.5 + x.hp / 200), 0));
+}
+
+/** Where the assault column sets off: back down the road from its start line, towards the town before it. */
+export function columnStart(t: Terrain, f: FrontState, i: number): { x: number; y: number } {
+  const at = assaultSpot(t, f, i);
+  const prev = i > 0 ? f.towns[i - 1] : { x: 0, y: 0 };
+  const d = Math.hypot(prev.x - at.x, prev.y - at.y);
+  const run = Math.min(d, COLUMN.maxRunM);
+  for (const k of [1, 0.9, 0.8, 1.1, 0.7, 0.6]) {
+    const m = Math.min(d, run * k);
+    const x = Math.round(at.x + ((prev.x - at.x) * m) / Math.max(1, d));
+    const y = Math.round(at.y + ((prev.y - at.y) * m) / Math.max(1, d));
+    if (t.buildable(x, y, 90)) return { x, y };
+  }
+  return { x: prev.x, y: prev.y };
 }

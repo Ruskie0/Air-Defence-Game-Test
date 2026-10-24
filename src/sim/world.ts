@@ -10,6 +10,7 @@ import { Fighter } from './fighter';
 import { V3, add, bearingDeg, clone, dist, norm, polar, scale, sub, v3 } from './math';
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, UnitType, rankOf } from './catalog';
 import { DEFAULT_ZONES, DeployZone, sandboxDeployment } from './deploy';
+import { AssaultOutcome, Column } from './column';
 import { Exposure } from './exposure';
 import { Interceptor, LR_MSL, MR_MSL, MissileSpec, SH_MSL } from './missile';
 import { CIWS_RADAR, EW_RADAR, LR_RADAR, MR_RADAR, Radar, RadarSpec, Report, SH_RADAR } from './radar';
@@ -71,7 +72,8 @@ export interface WorldOptions {
   counterBattery?: number;
   /** Campaign front line: the towns we hold (defended), and today's assault force if an offensive is on. */
   towns?: { name: string; x: number; y: number; hp: number }[];
-  assault?: { x: number; y: number; target: string };
+  /** Today's assault force: its start line, the town it goes for, and where its column sets off from (it starts on its start line when omitted). */
+  assault?: { x: number; y: number; target: string; from?: { x: number; y: number } };
   /** Where ground units may stand (the sandbox's 60 km circle when omitted). */
   zones?: DeployZone[];
   /** The enemy's installations, which every enemy weapon launches from (a fresh default theatre when omitted). */
@@ -126,6 +128,15 @@ export class World {
   supportSpentM = 0;
   /** Shoot and scoot: exposure of our batteries and the enemy's counter-battery strikes. */
   readonly exposure: Exposure;
+  /** The offensive's assault column driving to its start line, if there is one. */
+  column: Column | null = null;
+  /** What has happened to the assault force so far ('arrived' or 'destroyed'), or null. */
+  assaultOutcome: AssaultOutcome | null = null;
+  /**
+   * Outcome hook for the offensive: called once when the column reaches its start line and once if the
+   * assault force is destroyed. The campaign connects it; nothing listens by default.
+   */
+  onAssault: ((outcome: AssaultOutcome, w: World) => void) | null = null;
   /** Where ground units may stand. */
   readonly zones: readonly DeployZone[];
   /** The quick reaction alert pair has been scrambled this battle. */
@@ -203,8 +214,15 @@ export class World {
       s.alive = s.hp > 0;
     }
     if (o.assault) {
-      const s = this.addSite('Assault force', 'asset', o.assault.x, o.assault.y, 0, 250, true);
+      const a = o.assault;
+      const at = a.from ?? a;
+      const s = this.addSite('Assault force', 'asset', at.x, at.y, 0, 250, true);
       s.role = 'assault';
+      s.onDestroyed = () => this.assaultEvent('destroyed');
+      if (a.from) {
+        const dest = v3(a.x, a.y, this.terrain.groundAt(a.x, a.y) + 2);
+        this.column = new Column('Assault column', v3(at.x, at.y, this.terrain.groundAt(at.x, at.y) + 2), dest, s, a.target, 0);
+      }
     }
     this.zones = o.zones ?? DEFAULT_ZONES;
     this.theatre = o.theatre ?? makeTheatre(this.terrain, this.seed);
@@ -216,6 +234,7 @@ export class World {
       s.vuln *= this.mods.damageMult;
       this.startHp.set(s.name, s.hp);
     }
+    if (this.column) this.spawn(this.column);
     this.scenario = new Scenario(o.raids, this.terrain.layout.rot);
     if (o.civil ?? true) this.scenario.start(this);
   }
@@ -464,6 +483,13 @@ export class World {
     for (const p of d.seen) this.reconSeen.set(p.uid, p);
     if (d.seen.length) this.log(`${d.name} got away with pictures of ${d.seen.length} of our positions`, 'alert');
     this.retire(d);
+  }
+
+  /** Record and announce what happened to the assault force (see onAssault). */
+  assaultEvent(o: AssaultOutcome): void {
+    if (this.assaultOutcome === o || this.assaultOutcome === 'destroyed') return;
+    this.assaultOutcome = o;
+    this.onAssault?.(o, this);
   }
 
   log(msg: string, level: LogLevel = 'info'): void {

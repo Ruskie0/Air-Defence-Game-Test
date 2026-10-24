@@ -567,6 +567,20 @@ export class Hud {
           <div class="sys-b">${esc(l.weapon)} on its spot${l.moved || f?.move ? '' : ` <button data-act="scoot" data-code="${code}" title="Pack up and move 2 to 4 km, out from under the strike">Scoot</button> <button data-act="unit" data-code="${code}">Select</button>`} <button data-act="flyto" data-x="${l.x}" data-y="${l.y}" title="Fly the camera to the located spot">Fly to</button></div></div>`);
       }
     }
+    const col = w.column;
+    const aSite = w.sites.find((x) => x.role === 'assault');
+    if (aSite) {
+      const hp = Math.round(aSite.hp);
+      const st = !aSite.alive ? '<span class="st dead">DESTROYED</span>'
+        : !col || col.state === 'arrived' ? '<span class="st ok">IN POSITION</span>'
+        : col.state === 'halted' ? `<span class="st jam blink">HALTED: ${esc(col.haltWhy.toUpperCase())}</span>`
+        : col.state === 'forming' ? '<span class="st">FORMING UP</span>' : '<span class="st ok">MOVING</span>';
+      const pct = col ? Math.round(col.progress * 100) : 100;
+      const eta = col && aSite.alive && col.state !== 'arrived' ? ` · start line in about ${fmtTime(col.eta(w))}` : '';
+      rows.push(`<h3>Assault${col ? ` on ${esc(col.objective)}` : ''}</h3><div class="sys assault"><div class="sys-h"><b>Assault force</b> ${st} <button data-act="flyto" data-x="${Math.round(aSite.pos.x)}" data-y="${Math.round(aSite.pos.y)}" title="Fly the camera to the assault force">Fly to</button></div>
+        <div class="sys-b">Road <span class="heat" style="width:80px"><i style="width:${pct}%;background:#78ffaa"></i></span> ${pct}%${eta}</div>
+        <div class="sys-b">Health <span class="heat" style="width:80px"><i style="width:${hp}%;background:${hp >= 40 ? '#ffd84d' : '#ff4d4d'}"></i></span> ${hp}% <span class="dim">(must end the day above 40%)</span></div></div>`);
+    }
     if (this.campaign?.objectives.length) {
       rows.push('<h3>Objectives</h3>');
       for (const o of this.campaign.objectives) {

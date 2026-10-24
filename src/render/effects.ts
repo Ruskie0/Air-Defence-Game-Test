@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { Ciws } from '../sim/ciws';
 import type { Entity } from '../sim/entities';
 import type { Effect, World } from '../sim/world';
 import type { FrameEvents } from './events';
@@ -78,6 +79,8 @@ export class Effects {
   private readonly fire = new ParticlePool(7000, glowTex, true);
   private readonly smoke = new ParticlePool(16000, smokeTex, false);
   private readonly tracers: THREE.LineSegments;
+  private readonly beams: THREE.LineSegments;
+  private readonly bmPos = new Float32Array(16 * 6);
   private readonly trPos: Float32Array;
   private readonly trCol: Float32Array;
   private readonly debris: Debris[] = [];
@@ -101,6 +104,16 @@ export class Effects {
     this.tracers.frustumCulled = false;
     this.tracers.renderOrder = 4;
     scene.add(this.tracers);
+    const bg = new THREE.BufferGeometry();
+    bg.setAttribute('position', new THREE.BufferAttribute(this.bmPos, 3).setUsage(THREE.DynamicDrawUsage));
+    bg.setDrawRange(0, 0);
+    this.beams = new THREE.LineSegments(
+      bg,
+      new THREE.LineBasicMaterial({ color: new THREE.Color(5, 1.1, 0.9), blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, fog: false }),
+    );
+    this.beams.frustumCulled = false;
+    this.beams.renderOrder = 4;
+    scene.add(this.beams);
   }
 
   /** Point-size scale: drawing-buffer height over the vertical field of view. */
@@ -641,11 +654,86 @@ export class Effects {
     }
   }
 
-  /** CIWS tracer streaks, muzzle flash and gun smoke. */
+  /**
+   * 35 mm airburst: each round is time-fused to burst just short of the target, throwing a cone of
+   * tungsten pellets. The sim decides kills on its own; this shows the burst cloud.
+   */
+  private airbursts(w: World, c: Ciws): void {
+    const g = c.gun;
+    const tgt = c.target;
+    const tr = tgt && tgt.alive ? Math.hypot(tgt.pos.x - g.x, tgt.pos.y - g.y, tgt.pos.z - g.z) - 10 : Infinity;
+    for (const r of c.rounds) {
+      if (this.burst.has(r)) continue;
+      const d = Math.hypot(r.pos.x - g.x, r.pos.y - g.y, r.pos.z - g.z);
+      // Fused for the target's range; rounds that cannot get there burst at the end of their flight.
+      if (d < tr && d < c.spec.rangeM && w.t - r.t0 < 4.3) continue;
+      this.burst.add(r);
+      const x = r.pos.x;
+      const y = r.pos.z;
+      const z = -r.pos.y;
+      this.flash(x, y, z, 6, 0.07, [14, 9, 4], 2);
+      this.puff({ x, y, z, vx: r.vel.x * 0.02, vy: r.vel.z * 0.02, vz: -r.vel.y * 0.02, life: 5 + rnd() * 3, size0: 3, size1: 13 + rnd() * 5, alpha: 0.7, minPx: 1.2, c0: [0.12, 0.11, 0.1], c1: [0.38, 0.38, 0.39], drag: 1.5, lift: 0.2 });
+      const sp = Math.hypot(r.vel.x, r.vel.y, r.vel.z) || 1;
+      for (let i = 0; i < 4; i++) {
+        this.fire.spawn({
+          x,
+          y,
+          z,
+          vx: (r.vel.x / sp) * 300 + sym(60),
+          vy: (r.vel.z / sp) * 300 + sym(60),
+          vz: (-r.vel.y / sp) * 300 + sym(60),
+          life: 0.12 + rnd() * 0.1,
+          size0: 1.2,
+          size1: 0.6,
+          c0: [10, 7, 3],
+          minPx: 1.2,
+          windK: 0,
+        });
+      }
+    }
+  }
+
+  /** A laser on its target: the beam from the director, and the target glowing and smoking where it is burned. */
+  private laser(w: World, c: Ciws, tgt: Entity, nb: number, dt: number): number {
+    const max = this.bmPos.length / 6;
+    if (nb >= max) return nb;
+    const s = c.site.pos;
+    const g = w.terrain.groundAt(s.x, s.y);
+    const x0 = s.x;
+    const y0 = g + 4.7;
+    const z0 = -s.y;
+    const x1 = tgt.pos.x;
+    const y1 = tgt.pos.z;
+    const z1 = -tgt.pos.y;
+    const o = nb * 6;
+    this.bmPos[o] = x0;
+    this.bmPos[o + 1] = y0;
+    this.bmPos[o + 2] = z0;
+    this.bmPos[o + 3] = x1;
+    this.bmPos[o + 4] = y1;
+    this.bmPos[o + 5] = z1;
+    const k = 0.7 + 0.3 * rnd();
+    this.fire.spawn({ x: x1, y: y1, z: z1, life: Math.max(0.05, dt * 1.5), size0: 3 * k, size1: 3 * k, c0: [18, 14, 9], minPx: 3, windK: 0 });
+    this.fire.spawn({ x: x1, y: y1, z: z1, life: Math.max(0.05, dt * 1.5), size0: 9, size1: 9, alpha: 0.5, c0: [3, 1.2, 0.4], windK: 0 });
+    if (dt > 0 && rnd() < dt * 8) this.puff({ x: x1, y: y1, z: z1, life: 4, size0: 1, size1: 7, alpha: 0.4, c0: [0.3, 0.3, 0.3], drag: 0.5, lift: 0.8 });
+    this.fire.spawn({ x: x0, y: y0, z: z0, life: Math.max(0.05, dt * 1.5), size0: 1.2, size1: 1.2, c0: [8, 3, 3], minPx: 2, windK: 0 });
+    return nb + 1;
+  }
+
+  /** 35 mm rounds that have already burst (they stay in the sim's list until it drops them). */
+  private readonly burst = new WeakSet<object>();
+
+  /** Point-defence fire: tracers, muzzle flash and smoke, 35 mm airbursts, and laser beams. */
   private guns(w: World, dt: number): void {
     let n = 0;
+    let nb = 0;
     const max = this.trPos.length / 6;
     for (const c of w.ciws) {
+      if (c.spec.kind === 'laser') {
+        if (c.lasing && c.target && c.site.alive) nb = this.laser(w, c, c.target, nb, dt);
+        continue;
+      }
+      if (c.spec.kind === 'gun35') this.airbursts(w, c);
       if (c.firing && c.site.alive) {
         const g = c.gun;
         const az = (c.aimAz * Math.PI) / 180;
@@ -656,11 +744,12 @@ export class Effects {
         const x = g.x + fx * 3;
         const y = g.z + fz * 3;
         const z = -(g.y + fy * 3);
-        this.fire.spawn({ x, y, z, life: Math.max(0.04, dt * 1.2), size0: 3.5, size1: 3.5, c0: [16, 9, 3.5], minPx: 3, windK: 0 });
+        const big = c.spec.kind === 'gun35' ? 2 : 1;
+        this.fire.spawn({ x, y, z, life: Math.max(0.04, dt * 1.2), size0: 3.5 * big, size1: 3.5 * big, c0: [16, 9, 3.5], minPx: 3, windK: 0 });
         this.puff({ x, y, z, vx: fx * 6, vy: fz * 6 + 1, vz: -fy * 6, life: 4, size0: 2, size1: 16, alpha: 0.25, c0: [0.6, 0.6, 0.6], drag: 0.8 });
       }
       for (const r of c.rounds) {
-        if (!r.tracer || n >= max) continue;
+        if (!r.tracer || n >= max || this.burst.has(r)) continue;
         const o = n * 6;
         this.trPos[o] = r.pos.x;
         this.trPos[o + 1] = r.pos.z;
@@ -677,6 +766,9 @@ export class Effects {
         n++;
       }
     }
+    const bg = this.beams.geometry;
+    bg.setDrawRange(0, nb * 2);
+    (bg.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
     const g = this.tracers.geometry;
     g.setDrawRange(0, n * 2);
     (g.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;

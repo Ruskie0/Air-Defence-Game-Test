@@ -457,7 +457,65 @@ function ciwsTurret(): { yaw: THREE.BufferGeometry; gun: THREE.BufferGeometry } 
   return { yaw: y.build(), gun: g.build() };
 }
 
+/** Skyburst: towed four-wheel trailer with levelling jacks; the twin 35 mm turret is separate. */
+function gun35Base(): THREE.BufferGeometry {
+  const k = new Kit();
+  k.box(2.4, 0.7, 6.0, OLIVE, 0, 0.95, 0);
+  k.box(0.25, 0.25, 2.2, OLIVE_D, 0, 0.75, -4.0);
+  for (const z of [-1.7, 1.7]) for (const x of [-1.15, 1.15]) k.wheel(0.5, 0.35, TYRE, x, 0.5, z);
+  for (const x of [-2.2, 2.2]) for (const z of [-2.4, 2.4]) {
+    k.box(2.0, 0.15, 0.2, OLIVE_D, x / 2, 0.8, z);
+    k.box(0.5, 0.1, 0.5, OLIVE_D, x, 0.05, z);
+  }
+  k.add(new THREE.CylinderGeometry(1.0, 1.1, 0.3, 16), OLIVE_D, 0, 1.45, 0);
+  return k.build();
+}
+
+function gun35Turret(): { yaw: THREE.BufferGeometry; gun: THREE.BufferGeometry } {
+  const y = new Kit();
+  y.box(2.1, 1.2, 2.4, 0x5f6a40, 0, 0.6, -0.2);
+  y.box(1.7, 0.5, 1.4, 0x56603a, 0, 1.45, 0.3);
+  y.add(new THREE.CylinderGeometry(0.35, 0.35, 0.25, 12), 0x3d432a, 0.6, 1.8, 0.2);
+  const g = new Kit();
+  g.box(1.3, 0.7, 1.4, 0x56603a, 0, 0, -0.2);
+  for (const x of [-0.42, 0.42]) {
+    g.tube(0.16, 0.16, 1.0, 0x4a4f36, x, 0, 0.9, 10);
+    g.tube(0.06, 0.07, 3.0, 0x2e2e2e, x, 0, 2.9, 8);
+    g.tube(0.1, 0.1, 0.35, 0x2e2e2e, x, 0, 4.4, 8);
+  }
+  return { yaw: y.build(), gun: g.build() };
+}
+
+/** Counter-drone laser: a 6x6 truck; the beam director turret is separate. */
+function laserBase(): THREE.BufferGeometry {
+  const k = new Kit();
+  chassis(k, 9, 2.55, [-2.9, 1.6, 3.0]);
+  k.box(2.5, 2.0, 5.2, OLIVE, 0, 2.3, 1.6);
+  k.box(1.0, 0.6, 1.2, 0x3d432a, 0.6, 3.6, 3.4);
+  for (let i = 0; i < 4; i++) k.box(0.05, 0.9, 1.0, 0x2f3424, 1.28, 2.3, 0.6 + i * 1.1);
+  return k.build();
+}
+
+function laserTurret(): { yaw: THREE.BufferGeometry; gun: THREE.BufferGeometry } {
+  const y = new Kit();
+  y.add(new THREE.CylinderGeometry(0.55, 0.7, 0.8, 14), 0x6f7552, 0, 0.4, 0);
+  for (const x of [-0.75, 0.75]) y.box(0.2, 1.3, 0.6, 0x6f7552, x, 1.0, 0);
+  const g = new Kit();
+  g.box(1.2, 1.1, 1.3, 0x7a8160, 0, 0, 0);
+  g.tube(0.42, 0.42, 0.2, 0x7a8160, 0, 0.05, 0.72, 20);
+  g.tube(0.34, 0.34, 0.05, 0x101820, 0, 0.05, 0.84, 20);
+  g.box(0.35, 0.3, 0.5, 0x3d432a, 0.45, 0.62, 0.15);
+  g.add(new THREE.SphereGeometry(0.12, 10, 6), 0x101820, 0.45, 0.62, 0.42);
+  return { yaw: y.build(), gun: g.build() };
+}
+
 const GROUND: Record<string, () => THREE.BufferGeometry> = {
+  'gun35-base': gun35Base,
+  'gun35-yaw': () => gun35Turret().yaw,
+  'gun35-gun': () => gun35Turret().gun,
+  'laser-base': laserBase,
+  'laser-yaw': () => laserTurret().yaw,
+  'laser-gun': () => laserTurret().gun,
   'launcher-LR': launcherLR,
   'launcher-MR': launcherMR,
   'shorad-hull': shoradHull,

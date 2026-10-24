@@ -197,6 +197,8 @@ export class View3D {
   private readonly siteRing: THREE.Sprite;
   private readonly tmp = new THREE.Vector3();
   private sceneryRes = 1;
+  /** The campaign clock (minutes) while planning, when the shown world has no battle clock of its own. */
+  planClock: (() => number | undefined) | null = null;
 
   constructor(container: HTMLElement, world: World) {
     this.container = container;
@@ -543,7 +545,28 @@ export class View3D {
         m.position.y = kind === 'helo' ? 0.2 : 1.6;
         at(g, x, z, yaw);
       };
-      switch (b.kind) {
+      // Bases out at sea are ships: an assault ship for the helicopters, launch ships for the drones.
+      const ship = w.terrain.heightAt(b.x, b.y) < 0;
+      if (ship) {
+        root.position.y = 0;
+        const grey = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.3, roughness: 0.6 });
+        mats.push(grey);
+        const hull = new THREE.Mesh(groundGeometry(b.kind === 'farp' ? 'ship-lhd' : 'ship-frigate'), grey);
+        hull.rotation.y = away + Math.PI;
+        root.add(hull);
+        if (b.kind === 'farp') for (let i = 0; i < 3; i++) {
+          const g = new THREE.Group();
+          const m = airModel('helo');
+          m.getObjectByName('blur')?.removeFromParent();
+          m.material = paint;
+          for (const c of m.children) if (c instanceof THREE.Mesh) c.material = paint;
+          g.add(m);
+          g.position.set(-6, 12.6, -40 + i * 35).applyAxisAngle(new THREE.Vector3(0, 1, 0), away + Math.PI);
+          g.rotation.y = away;
+          root.add(g);
+        }
+      }
+      if (!ship) switch (b.kind) {
         case 'sam': {
           // A battery: tracking radar in the middle, launchers spread round it, a command post and a reload truck.
           const radar = unit('radar-base', 0, 0);
@@ -1072,6 +1095,10 @@ export class View3D {
     this.rig.clampAboveGround();
     this.fx.update(this.world, ev, visible);
     this.wrecks.update(ev.simDt, this.world.terrain, this.camera.position);
+    // Time of day from the campaign clock (minutes since midnight before day 1) plus the battle's own time.
+    const clock = this.world.clockStart !== undefined ? this.world.clockStart + this.world.t / 60 : this.planClock?.();
+    if (clock !== undefined) this.weather.setHour(clock / 60);
+    this.renderer.toneMappingExposure = 0.9 + 0.7 * this.weather.night;
     const strikes = this.weather.update(ev.simDt > 0 ? realDt : 0, this.camera, this.controls.target, this.world.terrain, this.world, this.fx);
     for (const p of strikes) this.sound.thunder(p, this.camera);
     this.scenery.update(realDt);

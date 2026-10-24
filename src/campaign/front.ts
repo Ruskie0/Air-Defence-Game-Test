@@ -129,12 +129,7 @@ export function columnStart(t: Terrain, f: FrontState, i: number): { x: number; 
   const at = assaultSpot(t, f, i);
   const prev = i > 0 ? f.towns[i - 1] : { x: 0, y: 0 };
   const d = Math.hypot(prev.x - at.x, prev.y - at.y);
-  const run = Math.min(d, COLUMN.maxRunM);
-  for (const k of [1, 0.9, 0.8, 1.1, 0.7, 0.6]) {
-    const m = Math.min(d, run * k);
-    const x = Math.round(at.x + ((prev.x - at.x) * m) / Math.max(1, d));
-    const y = Math.round(at.y + ((prev.y - at.y) * m) / Math.max(1, d));
-    if (t.buildable(x, y, 90)) return { x, y };
-  }
-  return { x: prev.x, y: prev.y };
+  // It drives the road, so it does not need buildable ground to set off from.
+  const m = Math.min(d, COLUMN.maxRunM);
+  return { x: Math.round(at.x + ((prev.x - at.x) * m) / Math.max(1, d)), y: Math.round(at.y + ((prev.y - at.y) * m) / Math.max(1, d)) };
 }

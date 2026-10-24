@@ -20,7 +20,7 @@ import type { World } from './world';
 import type { Site } from './sites';
 
 export type Side = 'blue' | 'red' | 'neutral';
-export type Kind = 'drone' | 'cruise' | 'bomber' | 'strike' | 'bomb' | 'helo' | 'atgm' | 'convoy' | 'column' | 'sead' | 'soj' | 'tbm' | 'arm' | 'airliner' | 'fighter' | 'rsam' | 'awacs' | 'tanker';
+export type Kind = 'drone' | 'cruise' | 'bomber' | 'strike' | 'bomb' | 'helo' | 'atgm' | 'convoy' | 'column' | 'sead' | 'soj' | 'tbm' | 'arm' | 'airliner' | 'fighter' | 'rsam' | 'awacs' | 'tanker' | 'redfighter';
 
 export interface Warhead {
   lethalR: number;
@@ -665,6 +665,8 @@ export class Sead extends Air {
   private nextLaunch = 0;
   private quiet = 0;
   private emitter: Emitter | null = null;
+  /** How long the current emitter has kept radiating (s): one that will not shut up gets a stand-off shot. */
+  private dwell = 0;
   private readonly home: V3;
   /** A battery the enemy's recon found: its radars are hunted first, and the pair waits off it when all is quiet. */
   readonly focus: V3 | null;
@@ -695,6 +697,7 @@ export class Sead extends Air {
         best = e;
       }
     }
+    if (best !== this.emitter) this.dwell = 0;
     this.emitter = best;
   }
 
@@ -707,16 +710,20 @@ export class Sead extends Air {
       const em = this.emitter;
       if (em) {
         this.quiet = 0;
+        this.dwell += dt;
         const d = hdist(this.pos, em.pos);
-        if (d > this.armRange - 8000) this.steer(em.pos.x, em.pos.y, dt);
+        // From day 5: a radar that keeps radiating for 40 s gets an ARM lofted from well beyond the usual range.
+        const range = w.exposure.level >= 5 && this.dwell > 40 ? this.armRange * 1.4 : this.armRange;
+        if (d > range - 8000) this.steer(em.pos.x, em.pos.y, dt);
         else this.steer(this.pos.x * 2, this.pos.y * 2, dt); // hold off at launch range
-        if (d < this.armRange && w.t >= this.nextLaunch && this.arms > 0) {
+        if (d < range && w.t >= this.nextLaunch && this.arms > 0) {
           w.launchArm(this, em);
           this.arms--;
           this.nextLaunch = w.t + 6;
           if (this.arms === 0) this.egress = true;
         }
       } else {
+        this.dwell = 0;
         // Nothing radiating: hold outside launch range waiting for a radar to come up.
         const c = this.focus ?? v3();
         const d = hdist(this.pos, c);

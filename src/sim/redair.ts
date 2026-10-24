@@ -1,5 +1,7 @@
 import { Air } from './entities';
-import { V3, add, bearingDeg, hdist, polar, v3 } from './math';
+import { RedSam } from './enemyad';
+import type { Fighter } from './fighter';
+import { V3, add, bearingDeg, clone, dist, hdist, polar, v3 } from './math';
 import { type EnemyBase, avail } from './theatre';
 import type { World } from './world';
 
@@ -151,4 +153,125 @@ function orbitCenter(w: World, rear: EnemyBase): V3 {
   }
   const c = sams.reduce((s, a) => v3(s.x + a.site.pos.x / sams.length, s.y + a.site.pos.y / sams.length), v3());
   return add(c, polar(bearingDeg(c, v3(rear.x, rear.y)), RED_SUPPORT.behindM));
+}
+
+/** Enemy fighters: escorts for strike packages and sweeps on our CAP. Game-level numbers. */
+export const RED_FIGHTER = {
+  /** From which campaign day (or Last Stand wave). */
+  level: 5,
+  aams: 2,
+  /** Launch range and kill chance of its missiles against our fighters. */
+  rangeM: 30000,
+  pk: 0.35,
+  /** An escort only goes for our fighters this close to its strike jet. */
+  escortM: 30000,
+  /** Time out before it heads home (s). */
+  enduranceS: 1500,
+};
+
+/** An enemy fighter: escorts a strike jet, or sweeps towards our fighters; fires on our fighters in reach. */
+export class RedFighter extends Air {
+  readonly kind = 'redfighter' as const;
+  readonly side = 'red' as const;
+  aams = RED_FIGHTER.aams;
+  private readonly ward: Air | null;
+  private readonly home: V3;
+  private readonly t0: number;
+  private nextLook = 0;
+  private nextShot = 0;
+  private egress = false;
+
+  /** `ward`: the strike jet it escorts; none for a sweep. */
+  constructor(name: string, pos: V3, t0: number, ward: Air | null) {
+    super(name, pos, bearingDeg(pos, v3()), 250);
+    this.home = clone(pos);
+    this.ward = ward;
+    this.t0 = t0;
+    this.rcs = 4;
+    this.hitRadius = 8;
+    this.cmdAlt = 8000;
+    this.turnRate = 6;
+    this.climb = 120;
+    this.accel = 15;
+  }
+
+  private pickFighter(w: World): Fighter | null {
+    let best: Fighter | null = null;
+    let bd = Infinity;
+    const ref = this.ward?.alive ? this.ward.pos : this.pos;
+    for (const f of w.fighters) {
+      if (!f.alive || !f.airborne) continue;
+      const d = hdist(f.pos, this.pos);
+      if (this.ward && hdist(f.pos, ref) > RED_FIGHTER.escortM) continue;
+      if (d < bd) {
+        bd = d;
+        best = f;
+      }
+    }
+    return best;
+  }
+
+  update(w: World, dt: number): void {
+    if (!this.egress && (this.aams === 0 || w.t - this.t0 > RED_FIGHTER.enduranceS || (this.ward && !this.ward.alive && w.t - this.t0 > 30))) this.egress = true;
+    if (this.egress) {
+      this.steer(this.home.x, this.home.y, dt);
+      this.cmdSpd = 260;
+      if (hdist(this.pos, this.home) < 5000) w.retire(this);
+      this.integrate(w, dt);
+      return;
+    }
+    const tgt = this.pickFighter(w);
+    if (tgt) {
+      this.steer(tgt.pos.x, tgt.pos.y, dt);
+      this.cmdAlt = Math.max(3000, tgt.pos.z);
+      this.cmdSpd = 380;
+      if (w.t >= this.nextShot && dist(this.pos, tgt.pos) < RED_FIGHTER.rangeM) {
+        this.nextShot = w.t + 20;
+        this.aams--;
+        w.spawn(new RedSam(w.nextName('AA'), clone(this.pos), tgt, w.t, RED_FIGHTER.pk, 'an enemy fighter'));
+        w.log(`Enemy fighter ${this.name} fires on ${tgt.name}`, 'alert');
+        // Firing is a hostile act: our picture marks it hostile.
+        for (const tr of w.tracker.tracks) if (!tr.dropped && hdist(tr.predict(w.t), this.pos) < 4000) tr.hostileAct = true;
+      }
+    } else if (this.ward?.alive) {
+      // Ride a few km above and behind the strike jet.
+      const p = add(this.ward.pos, polar(this.ward.hdg, -3000));
+      this.steer(p.x, p.y, dt);
+      this.cmdAlt = 7000;
+      this.cmdSpd = Math.max(220, this.ward.spd);
+    } else {
+      // Sweep: head for where our fighters patrol.
+      const f = w.fighters.find((x) => x.alive);
+      const p = f ? f.station : v3();
+      this.steer(p.x, p.y, dt);
+      this.cmdAlt = 8000;
+      this.cmdSpd = 300;
+      if (!f && w.t >= this.nextLook) this.egress = true;
+    }
+    if (w.t >= this.nextLook) this.nextLook = w.t + 2;
+    this.integrate(w, dt);
+  }
+}
+
+/** Escorts for a strike package (one per two jets), from the same airfield, once the enemy flies them. */
+export function escortStrike(w: World, jets: Air[], from: V3, delay: number): void {
+  if (w.exposure.level < RED_FIGHTER.level || !w.fighters.some((f) => f.alive)) return;
+  const n = Math.max(1, Math.round(jets.length / 2));
+  for (let i = 0; i < n; i++) {
+    const p = add(from, polar(i * 120, 800));
+    p.z = from.z + 600;
+    w.spawnLater(new RedFighter(w.nextName('FTR'), p, w.t + delay, jets[i * 2] ?? jets[0]), delay + 4 + i * 6);
+  }
+}
+
+/** A fighter sweep on our CAP: a pair from the forward airfield, some minutes into the battle. */
+export function sweepCap(w: World): void {
+  if (w.exposure.level < RED_FIGHTER.level || !w.fighters.length) return;
+  const af = w.theatre.find((b) => b.kind === 'airfield' && !b.lost && avail(b, 'strike') >= 2);
+  if (!af) return;
+  const delay = w.rng.range(240, 600);
+  for (let i = 0; i < 2; i++) {
+    const p = v3(af.x + i * 1500, af.y, w.terrain.groundAt(af.x, af.y) + 600);
+    w.spawnLater(new RedFighter(w.nextName('FTR'), p, w.t + delay, null), delay + i * 5);
+  }
 }

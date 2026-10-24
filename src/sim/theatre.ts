@@ -51,7 +51,7 @@ export const stockText = (b: EnemyBase): string =>
   (Object.keys(b.stock) as Asset[]).map((a) => assetCount(a, avail(b, a))).join(', ') || 'nothing';
 
 /** Which kind of enemy entity (World.tally) is which asset, for aircraft shot down. */
-export const TALLY_ASSET: Record<string, Asset> = { strike: 'strike', sead: 'sead', recon: 'recon', helo: 'helo', bomber: 'bomber', soj: 'soj', awacs: 'awacs', tanker: 'tanker' };
+export const TALLY_ASSET: Record<string, Asset> = { strike: 'strike', sead: 'sead', recon: 'recon', helo: 'helo', bomber: 'bomber', soj: 'soj', awacs: 'awacs', tanker: 'tanker', redfighter: 'strike' };
 
 interface BaseDef {
   name: string;

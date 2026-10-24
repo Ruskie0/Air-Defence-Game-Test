@@ -13,7 +13,7 @@ import { DEFAULT_ZONES, DeployZone, sandboxDeployment } from './deploy';
 import { AssaultOutcome, Column } from './column';
 import { EnemyAd } from './enemyad';
 import { Exposure } from './exposure';
-import { RedSupport } from './redair';
+import { RedSupport, sweepCap } from './redair';
 import { Interceptor, LR_MSL, MR_MSL, MissileSpec, SH_MSL } from './missile';
 import { CIWS_RADAR, EW_RADAR, LR_RADAR, MR_RADAR, Radar, RadarSpec, Report, SH_RADAR } from './radar';
 import { Rng } from './rng';
@@ -248,6 +248,7 @@ export class World {
     }
     if (this.column) this.spawn(this.column);
     this.redSupport.launch(this, o.counterBattery ?? 0);
+    sweepCap(this);
     this.scenario = new Scenario(o.raids, this.terrain.layout.rot);
     if (o.civil ?? true) this.scenario.start(this);
   }

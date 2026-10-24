@@ -3,6 +3,7 @@ import { CATALOG, UnitType } from '../sim/catalog';
 import { Rng } from '../sim/rng';
 import { MapType, typeForSeed } from '../sim/terrain';
 import { Exposure } from '../sim/exposure';
+import { sweepCap } from '../sim/redair';
 import type { World } from '../sim/world';
 import { Campaign } from './campaign';
 import { DOCTRINES } from './doctrine';
@@ -139,6 +140,7 @@ export class LastStand {
     w.qraUsed = false;
     w.exposure.rearm(this.wave);
     w.redSupport.launch(w, this.wave);
+    sweepCap(w);
     w.exposure.strikesLeft = 2 + Math.floor(this.wave / 2);
     w.exposure.cooldownS = cbCooldown(this.wave);
     w.log(`Wave ${this.wave}: ${plan.length} packages inbound${plan.length < wanted.length ? ` (${wanted.length - plan.length} called off: their launch sites ran dry)` : ''}`, 'raid');

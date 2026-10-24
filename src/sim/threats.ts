@@ -1,6 +1,7 @@
 import { V3, add, bearingDeg, clone, hdist, polar, v3, wrap180 } from './math';
 import { Airliner, Bomber, Cruise, Drone, Helo, ReconDrone, Sead, Soj, Striker, Tbm } from './entities';
 import type { World } from './world';
+import { escortStrike } from './redair';
 import { type Asset, type EnemyBase, HOSTS } from './theatre';
 
 export type ThreatType = 'drones' | 'decoys' | 'recon' | 'cruise' | 'bomber' | 'strike' | 'helo' | 'sead' | 'soj' | 'tbm' | 'airliner' | 'airliner-dark';
@@ -41,6 +42,46 @@ function targetsByName(w: World, names: Target[]): Aim[] {
     .map((n) => (typeof n === 'string' ? all.find((a) => a.name === n) : { pos: v3(n.x, n.y, w.terrain.groundAt(n.x, n.y)), name: n.name }))
     .filter((a): a is Aim => !!a);
   return picked.length ? picked : all;
+}
+
+/** How much each kind of battery covers a target point against it (game-level weights). */
+const COVER_W: Record<string, number> = { LR: 1.5, MR: 1, SH: 0.6 };
+
+/**
+ * The enemy planner's pick: of the usual targets for this weapon (plus batteries running low on missiles,
+ * the assault column and, for a big raid, the power plant), the ones it hurts most to lose and that are worst
+ * covered, most painful first. Game-level scoring of what the enemy would know from its recon and our launches.
+ */
+export function smartAims(w: World, defaults: string[], weapon: 'drone' | 'cruise' | 'strike' | 'bomber', n: number): Aim[] {
+  const all = strikeTargets(w);
+  const score = new Map<Aim, number>();
+  const bump = (a: Aim | undefined, v: number): void => {
+    if (a) score.set(a, (score.get(a) ?? 0) + v);
+  };
+  defaults.forEach((name, i) => bump(all.find((a) => a.name === name), 1 - i * 0.15));
+  // A battery that has fired most of its missiles is easy prey: hit it before it reloads.
+  for (const f of w.fielded) {
+    const fu = f.fu;
+    if (!fu || !f.sites[0]?.alive || fu.maxRounds === 0) continue;
+    if (fu.rounds <= fu.maxRounds * 0.34) bump(all.find((a) => a.name === f.sites[0].name) ?? { pos: clone(f.sites[0].pos), name: f.sites[0].name }, 1.4);
+  }
+  // The assault column on the road: drones and strike jets go for it.
+  if ((weapon === 'drone' || weapon === 'strike') && w.column?.alive && !w.assaultOutcome) bump(all.find((a) => a.name === 'Assault force'), 1.6);
+  // A big missile raid takes the power out first, so the radars fight on generators.
+  if ((weapon === 'cruise' || weapon === 'bomber') && n >= 4) bump(all.find((a) => a.name === 'Power plant'), 1.2);
+  // Coverage gaps: the fewer batteries with missiles that reach a target, the better it looks.
+  const out = [...score.keys()];
+  for (const a of out) {
+    let cover = 0;
+    for (const f of w.fielded) {
+      const fu = f.fu;
+      if (!fu || fu.stowed || fu.rounds === 0 || !f.sites[0]?.alive) continue;
+      if (hdist(f.sites[0].pos, a.pos) < fu.spec.maxRangeM * 0.6) cover += COVER_W[fu.type] ?? 1;
+    }
+    bump(a, 1.5 / (1 + cover) + w.rng.range(0, 0.3));
+  }
+  out.sort((a, b) => score.get(b)! - score.get(a)!);
+  return out.length ? out.slice(0, 3) : all;
 }
 
 /**
@@ -103,7 +144,7 @@ export function spawnDecoyDrones(w: World, n: number, bearing: number, rangeM: n
  * there; `origin` is a point they attack round instead of the airbase (a counter-attack on the assault force).
  */
 export function spawnDrones(w: World, n: number, bearing: number, rangeM: number, targets?: Target[], origin?: { x: number; y: number }, from?: LaunchFrom): void {
-  const aims = targets ? targetsByName(w, targets) : targetsByName(w, ['Airbase', 'Power plant', 'CRC']);
+  const aims = targets ? targetsByName(w, targets) : origin ? targetsByName(w, ['Airbase', 'Power plant', 'CRC']) : smartAims(w, ['Airbase', 'Power plant', 'CRC'], 'drone', n);
   const o = v3(origin?.x ?? 0, origin?.y ?? 0);
   const base = launchPoint(w, 'drone', bearing, from);
   for (let i = 0; i < n; i++) {
@@ -130,7 +171,7 @@ export function spawnDrones(w: World, n: number, bearing: number, rangeM: number
 }
 
 export function spawnCruise(w: World, n: number, bearing: number, rangeM: number, targets?: Target[], from?: LaunchFrom): void {
-  const aims = targets ? targetsByName(w, targets) : targetsByName(w, ['Airbase', 'CRC', 'LR radar', 'MR radar']);
+  const aims = targets ? targetsByName(w, targets) : smartAims(w, ['Airbase', 'CRC', 'LR radar', 'MR radar'], 'cruise', n);
   const t = w.terrain;
   const base = launchPoint(w, 'cruise', bearing, from);
   // From the mountain side they come down the passes; elsewhere in low over the plain or the sea.
@@ -160,7 +201,7 @@ export function spawnCruise(w: World, n: number, bearing: number, rangeM: number
 }
 
 export function spawnBombers(w: World, n: number, bearing: number, rangeM: number, from?: LaunchFrom): void {
-  const aims = targetsByName(w, ['Airbase', 'CRC', 'Power plant', 'LR radar']);
+  const aims = smartAims(w, ['Airbase', 'CRC', 'Power plant', 'LR radar'], 'bomber', n * 4);
   const base = launchPoint(w, 'bomber', bearing, from);
   for (let i = 0; i < n; i++) {
     const start = add(base ?? polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 6000));
@@ -172,9 +213,10 @@ export function spawnBombers(w: World, n: number, bearing: number, rangeM: numbe
 
 /** Strike fighters: take off, come in high, down to treetop height for the last 95 km, pop up and glide-bomb. */
 export function spawnStrike(w: World, n: number, bearing: number, rangeM: number, targets?: Target[], from?: LaunchFrom): void {
-  const aims = targets ? targetsByName(w, targets) : targetsByName(w, ['Airbase', 'Power plant', 'CRC', 'MR radar']);
+  const aims = targets ? targetsByName(w, targets) : smartAims(w, ['Airbase', 'Power plant', 'CRC', 'MR radar'], 'strike', n);
   const first = w.rng.int(0, aims.length - 1);
   const base = launchPoint(w, 'strike', bearing, from);
+  const jets: Striker[] = [];
   for (let i = 0; i < n; i++) {
     const aim = aims[(first + i) % aims.length];
     if (base) {
@@ -185,12 +227,15 @@ export function spawnStrike(w: World, n: number, bearing: number, rangeM: number
       const off = Math.abs(wrap180(bearingDeg(aim.pos, start) - bearing));
       if (off > 40 && off < 110) s.waypoints = [add(aim.pos, polar(bearing, 60000))];
       w.spawnLater(s, i * 8);
+      jets.push(s);
     } else {
       const start = add(polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 3000));
       start.z = 8000;
       w.spawn(new Striker(w.nextName('STK'), start, aim));
     }
   }
+  // From day 5 the package brings fighter escorts along.
+  if (base) escortStrike(w, jets, base, 0);
 }
 
 /**
@@ -207,15 +252,30 @@ export function spawnHelos(w: World, n: number, bearing: number, rangeM: number,
   }
 }
 
+/** From which campaign day SEAD pairs send decoys ahead and fire from stand-off range at radars that keep radiating. */
+export const SEAD_DECOY_LEVEL = 5;
+
 export function spawnSead(w: World, n: number, bearing: number, rangeM: number, from?: LaunchFrom, aims?: Target[]): void {
   const base = launchPoint(w, 'sead', bearing, from);
   // Aimed at a battery their recon found: go for the radars there first.
   const a = aims?.find((x) => typeof x !== 'string');
   const focus = a && typeof a !== 'string' ? v3(a.x, a.y) : undefined;
+  // From day 5 decoys fly ahead of the shooters to make our radars light up and fire.
+  if (base && w.exposure.level >= SEAD_DECOY_LEVEL) {
+    const aim = focus ?? v3();
+    for (let i = 0; i < 3; i++) {
+      const start = add(base, polar(w.rng.range(0, 360), w.rng.range(200, 900)));
+      start.z = w.terrain.groundAt(start.x, start.y) + 3000;
+      const d = new Cruise(w.nextName('DCY'), start, [], v3(aim.x + w.rng.gauss() * 1500, aim.y + w.rng.gauss() * 1500, w.terrain.groundAt(aim.x, aim.y)), 'decoy');
+      d.warhead = null;
+      d.decoy = true;
+      w.spawnLater(d, i * 3);
+    }
+  }
   for (let i = 0; i < n; i++) {
     const start = add(base ?? polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 4000));
     start.z = base ? start.z + 800 : 7500;
-    w.spawn(new Sead(w.nextName('SEAD'), start, focus));
+    w.spawnLater(new Sead(w.nextName('SEAD'), start, focus), base && w.exposure.level >= SEAD_DECOY_LEVEL ? 40 : 0);
   }
 }
 

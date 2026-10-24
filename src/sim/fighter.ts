@@ -70,7 +70,7 @@ export class Fighter extends Air {
 
   toStation(w: World, st?: V3): void {
     if (st) this.station = clone(st);
-    if (!this.airborne) return;
+    if (!this.airborne || !this.alive) return;
     this.state = 'station';
     this.targetTrackId = null;
     w.log(`${this.name} returning to CAP station`, 'info');
@@ -161,6 +161,19 @@ export class Fighter extends Air {
     if (best && !w.fighters.some((f) => f !== this && f.targetTrackId === best!.id)) this.intercept(w, best.id);
   }
 
+  /** On CAP: take on a hostile fast jet that comes within 35 km (enemy fighters sweeping our CAP). */
+  private selfDefence(w: World): void {
+    if (this.state !== 'station' || !this.airborne || w.t < this.nextEscortLook || this.missiles === 0) return;
+    this.nextEscortLook = w.t + 2;
+    for (const tr of w.tracker.tracks) {
+      if (!tr.confirmed || tr.dropped || tr.ident !== 'HOS' || tr.cls !== 'FW') continue;
+      if (hdist(tr.predict(w.t), this.pos) < 35000 && !w.fighters.some((f) => f !== this && f.targetTrackId === tr.id)) {
+        this.intercept(w, tr.id);
+        return;
+      }
+    }
+  }
+
   /** Launch range: long against closing targets, short in a tail chase. */
   private aamRange(tgtPos: V3, tgtVel: V3): number {
     const los = norm(sub(tgtPos, this.pos));
@@ -190,6 +203,7 @@ export class Fighter extends Air {
     }
     if (this.aam && !this.aam.alive) this.aam = null;
     if (this.escort) this.stepEscort(w);
+    else this.selfDefence(w);
     if (this.state !== 'sweep') this.tfAgl = null;
     if (this.state !== 'hunt') this.huntKind = null;
 

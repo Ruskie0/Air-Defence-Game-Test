@@ -137,11 +137,16 @@ export class RedSam extends Entity {
   readonly side = 'red' as const;
   private readonly tgt: Fighter;
   private readonly t0: number;
+  private readonly pk: number;
+  /** What fired it, for the log: 'an enemy SAM' or 'an enemy fighter'. */
+  private readonly by: string;
 
-  constructor(name: string, pos: V3, tgt: Fighter, t0: number) {
+  constructor(name: string, pos: V3, tgt: Fighter, t0: number, pk = ENEMY_AD.samPk, by = 'an enemy SAM') {
     super(name, pos);
     this.tgt = tgt;
     this.t0 = t0;
+    this.pk = pk;
+    this.by = by;
     this.vel = scale(norm(sub(tgt.pos, pos)), 300);
     // Not for our radars to track: it is over in seconds and nothing of ours shoots at it.
     this.rcs = 0;
@@ -157,11 +162,11 @@ export class RedSam extends Entity {
     if (t.alive && t.airborne && dist(this.pos, t.pos) < 60) {
       this.alive = false;
       w.effect(clone(this.pos), 'blast');
-      if (w.rng.chance(ENEMY_AD.samPk)) {
+      if (w.rng.chance(this.pk)) {
         t.alive = false;
         w.setFate(t, 'missile', this.name);
-        w.log(`${t.name} SHOT DOWN by an enemy SAM`, 'damage');
-      } else w.log(`${t.name} defeated an enemy SAM with chaff and a hard turn`, 'info');
+        w.log(`${t.name} SHOT DOWN by ${this.by}`, 'damage');
+      } else w.log(`${t.name} defeated ${this.by.replace('an ', 'a missile from an ')} with chaff and a hard turn`, 'info');
       w.setFate(this, 'exit', t.name);
       return;
     }

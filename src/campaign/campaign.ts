@@ -369,10 +369,15 @@ export class Campaign {
   /** Plan the coming operation: what flies, from which installation, at what, and what intel makes of it. */
   private planPulse(): void {
     const slot = this.pulse!;
-    const idx = this.s.pulseIdx ?? 0;
     // Every package flies from a real installation, only as big as what it has ready: aircraft still being
     // turned round from an earlier sortie stay on the ground.
     this.s.plan = assignBases(this.pulsePlan(), this.theatre, this.busy(slot.at));
+    // An operation the enemy has nothing left to fly is called off: on to its next one today.
+    if (!this.s.plan.some((p) => p.kind !== 'dark') && (this.s.pulseIdx ?? 0) + 1 < (this.s.pulses?.length ?? 0)) {
+      this.s.pulseIdx = (this.s.pulseIdx ?? 0) + 1;
+      return this.planPulse();
+    }
+    const idx = this.s.pulseIdx ?? 0;
     const rng = new Rng(this.s.seed * 53 + this.s.day * 7 + idx * 131);
     const f = this.s.front;
     if (f) {
@@ -821,6 +826,7 @@ export class Campaign {
       budgetM: this.s.money,
       weather: this.s.weather,
       counterBattery: withRaids ? this.s.day : 0,
+      clockStart: withRaids ? this.clock : undefined,
     });
   }
 

@@ -13,6 +13,9 @@ import { CATALOG, RANKS } from '../sim/catalog';
 import { DayObjective, objectiveDesc, objectiveName, objectiveStatus } from '../campaign/objectives';
 import { MOBILITY, moveError, moveStatus } from '../sim/mobility';
 import { Exposure } from '../sim/exposure';
+import { ENEMY_AD } from '../sim/enemyad';
+import { avail } from '../sim/theatre';
+import type { Fighter } from '../sim/fighter';
 import type { Fielded } from '../sim/world';
 import { CONVOY_SPEED, Convoy, batteryPos, FIELD_REPAIR, QRA, RESUPPLY, callRepair, callResupply, depots, qraError, repairError, resupplyCost, resupplyError, scrambleQra } from '../sim/support';
 import { CLASS_NAME, IDENT_COLOR, IDENT_NAME, fmtTime } from './colors';
@@ -355,6 +358,9 @@ export class Hud {
         f.escortColumn(w, !f.escort);
         break;
       }
+      case 'cap-sweep':
+        w.fighters[Number(d.i)].sweep(w, d.name!);
+        break;
       case 'cap-rtb':
         w.fighters[Number(d.i)].rtb(w);
         break;
@@ -523,6 +529,20 @@ export class Hud {
   }
 
   /** Crew rank badge after a unit's name. */
+  /** Sweep buttons for a fighter: one per enemy-held town that still has a SAM or radar standing. */
+  private sweepRow(f: Fighter, i: number): string {
+    const w = this.w;
+    const sites = w.enemyAd.targets();
+    if (!sites.length || !f.alive) return '';
+    if (f.state === 'sweep') return `<div class="sys-b dim">Sweeping the ${esc(w.enemyAd.sites.find((a) => a.base.id === f.sweepId)?.base.name ?? '')}</div>`;
+    const btns = sites.map((a) => {
+      const why = f.sweepError(w, a.base.id);
+      return `<button data-act="cap-sweep" data-i="${i}" data-name="${esc(a.base.id)}" ${why ? 'disabled' : ''} title="${esc(why ?? `Run in low, pop up ${ENEMY_AD.sweepReleaseM / 1000} km out and fire stand-off weapons at the ${a.base.name}, then come home to rearm. Its SAM gets a look at the fighter while it is popped up.`)}">Sweep ${esc(a.base.town ?? a.base.name)}</button>`;
+    });
+    return `<div class="sys-b">${btns.join('')}</div>`;
+  }
+
+
   private badge(rank: number): string {
     return rank ? ` <span class="rank" title="${RANKS[rank].name} crew">${RANKS[rank].badge}</span>` : '';
   }
@@ -644,8 +664,17 @@ export class Hud {
       const st = !f.alive ? 'LOST' : f.state === 'ground' ? (f.oneSortie ? 'LANDED' : `REARM ${fmtTime(f.groundUntil - w.t)}`) : f.state === 'intercept' ? `INTERCEPT ${tr?.label ?? ''}` : f.state.toUpperCase();
       rows.push(`<div class="sys sel-able ${this.unitSel === `F${i}` ? 'focus' : ''}" data-act="unit" data-code="F${i}"><div class="sys-h"><b>${f.name}</b> <span class="st ${f.alive ? 'ok' : 'dead'}">${st}</span></div>
         <div class="sys-b">AAM <b>${f.missiles}</b> · Fuel ${Math.round((100 * f.fuel) / f.maxFuel)}%
-        <button data-act="cap-station" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>CAP</button><button data-act="cap-rtb" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>RTB</button>${w.column?.alive && f.alive ? `<button data-act="cap-escort" data-i="${i}" class="${f.escort ? 'on' : ''}" title="Escort the assault column: patrol just ahead of it and take on hostiles within 25 km of it">${f.escort ? 'Escorting' : 'Escort'}</button>` : ''}</div></div>`);
+        <button data-act="cap-station" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>CAP</button><button data-act="cap-rtb" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>RTB</button>${w.column?.alive && f.alive ? `<button data-act="cap-escort" data-i="${i}" class="${f.escort ? 'on' : ''}" title="Escort the assault column: patrol just ahead of it and take on hostiles within 25 km of it">${f.escort ? 'Escorting' : 'Escort'}</button>` : ''}</div>${this.sweepRow(f, i)}</div>`);
     });
+    const ad = w.enemyAd;
+    const known = ad.sites.filter((x) => x.base.known);
+    if (known.length) {
+      rows.push('<h3>Enemy air defences</h3>');
+      for (const a of known) {
+        const st = a.site.alive ? `<span class="st jam">SAM ${avail(a.base, 'sam')} · RADAR</span>` : '<span class="st dead">DESTROYED</span>';
+        rows.push(`<div class="sys"><div class="sys-h"><b>${esc(a.base.name)}</b> ${st}</div></div>`);
+      }
+    }
     rows.push('<h3>Defended assets</h3>');
     const hurt = w.sites.filter((s) => s.defended || s.hp < 100);
     rows.push(

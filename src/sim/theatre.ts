@@ -6,8 +6,8 @@ import type { Terrain } from './terrain';
  * enemy weapon starts at one of them and flies the whole way in, nothing appears near our units, and what
  * we shoot down stays lost. Game-level numbers, not a real order of battle.
  */
-export type Asset = 'strike' | 'sead' | 'recon' | 'helo' | 'drone' | 'cruise' | 'tbm' | 'bomber' | 'soj';
-export type BaseKind = 'airfield' | 'farp' | 'drones' | 'tbm' | 'glcm' | 'rear';
+export type Asset = 'strike' | 'sead' | 'recon' | 'helo' | 'drone' | 'cruise' | 'tbm' | 'bomber' | 'soj' | 'sam';
+export type BaseKind = 'airfield' | 'farp' | 'drones' | 'tbm' | 'glcm' | 'rear' | 'sam';
 
 export interface EnemyBase {
   id: string;
@@ -33,13 +33,13 @@ export const AIRCRAFT: Asset[] = ['strike', 'sead', 'recon', 'helo', 'bomber', '
 /** Which kinds of installation launch each asset. */
 export const HOSTS: Record<Asset, BaseKind[]> = {
   strike: ['airfield'], sead: ['airfield'], recon: ['airfield'], helo: ['farp'], drone: ['drones'],
-  cruise: ['glcm'], tbm: ['tbm'], bomber: ['rear'], soj: ['rear'],
+  cruise: ['glcm'], tbm: ['tbm'], bomber: ['rear'], soj: ['rear'], sam: ['sam'],
 };
 
 const ASSET_NAMES: Record<Asset, [string, string]> = {
   strike: ['strike jet', 'strike jets'], sead: ['SEAD fighter', 'SEAD fighters'], recon: ['recon drone', 'recon drones'],
   helo: ['attack helicopter', 'attack helicopters'], drone: ['attack drone', 'attack drones'], cruise: ['cruise missile', 'cruise missiles'],
-  tbm: ['ballistic missile', 'ballistic missiles'], bomber: ['bomber', 'bombers'], soj: ['stand-off jammer', 'stand-off jammers'],
+  tbm: ['ballistic missile', 'ballistic missiles'], bomber: ['bomber', 'bombers'], soj: ['stand-off jammer', 'stand-off jammers'], sam: ['SAM missile', 'SAM missiles'],
 };
 
 /** "3 strike jets", "1 bomber". */
@@ -68,6 +68,7 @@ export const BASE_DEFS: Record<BaseKind, BaseDef> = {
   drones: { name: 'Drone launch team', stock: { drone: 22 }, daily: { drone: 7 }, known: false },
   tbm: { name: 'Ballistic missile launch area', stock: { tbm: 8 }, daily: { tbm: 1.5 }, known: false },
   glcm: { name: 'Cruise missile battery', stock: { cruise: 24 }, daily: { cruise: 6 }, known: false },
+  sam: { name: 'SAM site', stock: { sam: 6 }, daily: { sam: 2 }, known: true },
   rear: { name: 'Rear air base (beyond the map)', stock: { bomber: 3, soj: 2 }, daily: { bomber: 0.4, soj: 0.3 }, known: true },
 };
 
@@ -132,6 +133,11 @@ export function makeTheatre(t: Terrain, seed: number, towns: TheatreTown[] = [],
     const name = side < 0 ? 'left' : 'right';
     if (sea) add('drones', sea(side * rng.range(22000, 32000), L.tipM! + rng.range(28000, 38000)), ` (${name} launch ship)`);
     else add('drones', landNear(t, side * rng.range(30000, 42000), Math.max(minV, 55000) + rng.range(0, 10000)), ` (${name} flank)`);
+  }
+  // A SAM site with its radar in every town the enemy holds, a little off the town on its far side.
+  for (const tn of enemyTowns) {
+    const away = Math.atan2(tn.x, tn.y);
+    add('sam', { x: Math.round(tn.x + Math.sin(away + 0.9) * 1800), y: Math.round(tn.y + Math.cos(away + 0.9) * 1800) }, ` at ${tn.name}`, tn.name);
   }
   for (const side of [-1, 1]) add('tbm', landNear(t, side * rng.range(20000, 35000), rng.range(118000, 135000)), side < 0 ? ' (west)' : ' (east)');
   add('glcm', landNear(t, rng.range(-15000, 15000), rng.range(105000, 120000)));

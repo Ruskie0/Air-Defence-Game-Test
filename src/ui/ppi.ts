@@ -238,6 +238,28 @@ export class Ppi {
       }
     }
 
+    // Enemy installations we have located: a red diamond and a name (crossed out once out of the war).
+    g.font = '9px sans-serif';
+    for (const b of w.theatre) {
+      if (!b.known || b.kind === 'rear') continue;
+      const [x, y] = this.toScreen(b.x, b.y);
+      g.strokeStyle = g.fillStyle = b.lost ? '#7a5a55' : '#ff7a5c';
+      g.beginPath();
+      g.moveTo(x, y - 6);
+      g.lineTo(x + 6, y);
+      g.lineTo(x, y + 6);
+      g.lineTo(x - 6, y);
+      g.closePath();
+      g.stroke();
+      if (b.lost) {
+        g.beginPath();
+        g.moveTo(x - 5, y - 5);
+        g.lineTo(x + 5, y + 5);
+        g.stroke();
+      }
+      g.fillText(b.name.replace(/ \((.*)\)$/, ''), x + 8, y + 3);
+    }
+
     // Batteries the enemy has located: a red cross on the spot until the strike lands.
     g.strokeStyle = '#ff4040';
     for (const l of w.exposure.located) {

@@ -186,6 +186,8 @@ export class View3D {
   private readonly missileObjs = new Map<number, { body: THREE.Object3D; trail: TrailObj }>();
   private readonly trackLabels = new Map<number, { obj: CSS2DObject; el: HTMLDivElement; last: string }>();
   private readonly siteObjs: { site: Site; root: THREE.Group; mats: { color: THREE.Color }[]; label: CSS2DObject; dead: boolean }[] = [];
+  /** Enemy installations our intel has located: placeholder models and labels, rebuilt when that set changes. */
+  private readonly baseObjs: { root: THREE.Group; label: CSS2DObject }[] = [];
   private readonly antennas: { radar: Radar; obj: THREE.Object3D }[] = [];
   private readonly turrets: { ciws: Ciws; yaw: THREE.Object3D; pitch: THREE.Object3D }[] = [];
   private readonly coverage = new THREE.Group();
@@ -378,6 +380,7 @@ export class View3D {
       s.label.element.remove();
     }
     this.siteObjs.length = 0;
+    this.clearBases();
     this.antennas.length = 0;
     this.turrets.length = 0;
     this.clearCoverage();
@@ -398,6 +401,7 @@ export class View3D {
     this.trackLabels.clear();
     this.selected = null;
     this.buildSites();
+    this.buildBases();
     this.buildCoverage();
     this.weather.apply(w, this.terrainMesh, this.fx);
   }
@@ -479,6 +483,58 @@ export class View3D {
     const o = new CSS2DObject(el);
     o.center.set(0.5, -0.4);
     return o;
+  }
+
+  private clearBases(): void {
+    for (const b of this.baseObjs) {
+      this.scene.remove(b.root);
+      b.label.element.remove();
+    }
+    this.baseObjs.length = 0;
+  }
+
+  /**
+   * Enemy installations we know about, as placeholder models: revetments and launch vehicles in the enemy's
+   * colours, with a red label. The rear air base is off the map and has none.
+   */
+  private buildBases(): void {
+    const w = this.world;
+    const shown = w.theatre.filter((b) => b.known && b.kind !== 'rear');
+    this.clearBases();
+    const tan = new THREE.MeshLambertMaterial({ color: 0x7a5a48 });
+    const dark = new THREE.MeshLambertMaterial({ color: 0x4a3a32 });
+    for (const b of shown) {
+      const root = new THREE.Group();
+      const ground = w.terrain.groundAt(b.x, b.y);
+      root.position.set(b.x, ground, -b.y);
+      const box = (sx: number, sy: number, sz: number, m: THREE.Material, x: number, z: number): void => {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), m);
+        mesh.position.set(x, w.terrain.groundAt(b.x + x, b.y - z) - ground + sy / 2, z);
+        root.add(mesh);
+      };
+      if (b.kind === 'airfield') {
+        box(2400, 0.6, 50, dark, 0, 0);
+        for (let i = 0; i < 6; i++) box(40, 12, 30, tan, -900 + i * 360, 160);
+      } else {
+        // Launch vehicles and reloads in a dispersed hide.
+        const n = b.kind === 'drones' ? 4 : 3;
+        for (let i = 0; i < n; i++) {
+          const a = (i / n) * Math.PI * 2;
+          box(12, 4, 4, tan, Math.cos(a) * 120, Math.sin(a) * 120);
+        }
+        box(20, 6, 10, dark, 0, 0);
+      }
+      if (b.lost) root.traverse((o) => o instanceof THREE.Mesh && (o.material = dark));
+      const el = document.createElement('div');
+      el.className = `site-label enemy${b.lost ? ' dead' : ''}`;
+      el.textContent = b.name;
+      const label = new CSS2DObject(el);
+      label.center.set(0.5, -0.4);
+      label.position.y = 40;
+      root.add(label);
+      this.scene.add(root);
+      this.baseObjs.push({ root, label });
+    }
   }
 
   /** Models for the world's sites from index `from` on (units that arrive mid-battle are added later). */
@@ -671,6 +727,8 @@ export class View3D {
     if (w.zones.length > 1) for (const z of w.zones) ring({ x: z.x, y: z.y, z: 0 }, z.r, 0xd8d8c0);
     // Spots the enemy has located, until the counter-battery strike has landed.
     for (const l of w.exposure.located) if (w.t < l.eta + 5) ring({ x: l.x, y: l.y, z: 0 }, 700, 0xff4040);
+    // Enemy installations we have located.
+    for (const b of w.theatre) if (b.known && !b.lost && b.kind !== 'rear') ring({ x: b.x, y: b.y, z: 0 }, 1500, 0xff6040);
     this.scene.add(this.coverage);
   }
 
@@ -841,6 +899,7 @@ export class View3D {
       t.yaw.rotation.y = Math.PI - t.ciws.aimAz * DEG;
       t.pitch.rotation.x = -t.ciws.aimEl * DEG;
     }
+    for (const b of this.baseObjs) b.label.visible = this.showLabels;
     for (const s of this.siteObjs) {
       // Mobile units move their site: keep the model on it.
       const p = s.site.pos;
@@ -855,10 +914,11 @@ export class View3D {
     this.coverage.visible = this.showCoverage;
     // Reinforcements arrived (Last Stand): build their models.
     if (this.siteObjs.length < this.world.sites.length) this.buildSites(this.siteObjs.length);
-    // A unit moved during the battle: redraw the rings.
+    // A unit moved during the battle, or an enemy base gave itself away: redraw the rings.
     if (this.world.layoutSeq !== this.coverageSeq) {
       this.clearCoverage();
       this.buildCoverage();
+      this.buildBases();
     }
   }
 

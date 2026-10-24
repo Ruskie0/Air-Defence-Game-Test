@@ -1,3 +1,4 @@
+import { reinforce } from '../sim/theatre';
 import { CATALOG, UnitType } from '../sim/catalog';
 import { Rng } from '../sim/rng';
 import { MapType, typeForSeed } from '../sim/terrain';
@@ -127,6 +128,8 @@ export class LastStand {
     w.scenario.doneMsg = `Wave ${this.wave} held.`;
     w.qraUsed = false;
     w.exposure.rearm(this.wave);
+    // The enemy's launch sites restock between waves, so it always has something to strike located batteries with.
+    reinforce(w.theatre, 1 + this.wave * 0.2);
     w.exposure.strikesLeft = 2 + Math.floor(this.wave / 2);
     w.exposure.cooldownS = cbCooldown(this.wave);
     w.log(`Wave ${this.wave}: ${plan.length} packages inbound`, 'raid');

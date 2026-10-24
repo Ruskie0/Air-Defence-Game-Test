@@ -1,6 +1,7 @@
-import { V3, add, clone, polar, v3 } from './math';
+import { V3, add, bearingDeg, clone, hdist, polar, v3, wrap180 } from './math';
 import { Airliner, Bomber, Cruise, Drone, Helo, ReconDrone, Sead, Soj, Striker, Tbm } from './entities';
 import type { World } from './world';
+import { type Asset, type EnemyBase, HOSTS } from './theatre';
 
 export type ThreatType = 'drones' | 'decoys' | 'recon' | 'cruise' | 'bomber' | 'strike' | 'helo' | 'sead' | 'soj' | 'tbm' | 'airliner' | 'airliner-dark';
 
@@ -42,12 +43,43 @@ function targetsByName(w: World, names: Target[]): Aim[] {
   return picked.length ? picked : all;
 }
 
-/** Recon drones: high, slow, orbiting 32 km out on their bearing and photographing our units. */
-export function spawnRecon(w: World, n: number, bearing: number): void {
+/**
+ * Where a raid launches from. Omitted: the enemy installation for that weapon best placed for the approach
+ * bearing (sandbox and Last Stand), so nothing appears near our units. A point: that installation (the
+ * campaign picks the base and draws on its stock). 'range': the old placement `rangeM` out on the bearing,
+ * kept for the scripted tutorial only.
+ */
+export type LaunchFrom = { x: number; y: number } | 'range' | undefined;
+
+/** The installation (of those that launch `a`) whose bearing from the airbase is closest to `bearing`. */
+export function launchBase(w: World, a: Asset, bearing: number): EnemyBase | null {
+  let best: EnemyBase | null = null;
+  let score = Infinity;
+  for (const b of w.theatre) {
+    if (b.lost || !HOSTS[a].includes(b.kind)) continue;
+    const d = Math.abs(wrap180(bearingDeg(v3(), v3(b.x, b.y)) - bearing));
+    if (d < score) {
+      score = d;
+      best = b;
+    }
+  }
+  return best;
+}
+
+/** Launch point for a weapon, or null for the legacy placement. */
+function launchPoint(w: World, a: Asset, bearing: number, from: LaunchFrom): V3 | null {
+  if (from === 'range') return null;
+  if (from) return v3(from.x, from.y, w.terrain.groundAt(from.x, from.y));
+  const b = launchBase(w, a, bearing);
+  return b ? v3(b.x, b.y, w.terrain.groundAt(b.x, b.y)) : null;
+}
+
+/** Recon drones: high, slow, orbiting 32 km out on their bearing and photographing our units, then home. */
+export function spawnRecon(w: World, n: number, bearing: number, from?: LaunchFrom): void {
+  const base = launchPoint(w, 'recon', bearing, from);
   for (let i = 0; i < n; i++) {
     const b = bearing + (i - (n - 1) / 2) * 25;
-    const start = polar(b, 85000);
-    start.z = 9000;
+    const start = base ? add(base, polar(b + 90, i * 1500, 900)) : polar(b, 85000, 9000);
     w.spawn(new ReconDrone(w.nextName('UAV'), start, polar(b, 32000)));
   }
 }
@@ -56,9 +88,9 @@ export function spawnRecon(w: World, n: number, bearing: number): void {
  * Cheap decoy drones: on radar they look like attack drones, but they carry no warhead. They exist to soak
  * up missiles and pull fire units into tying up their channels.
  */
-export function spawnDecoyDrones(w: World, n: number, bearing: number, rangeM: number): void {
+export function spawnDecoyDrones(w: World, n: number, bearing: number, rangeM: number, from?: LaunchFrom): void {
   const before = w.entities.length;
-  spawnDrones(w, n, bearing, rangeM);
+  spawnDrones(w, n, bearing, rangeM, undefined, undefined, from);
   for (const e of w.entities.slice(before)) {
     if (e.kind !== 'drone') continue;
     e.warhead = null;
@@ -66,34 +98,53 @@ export function spawnDecoyDrones(w: World, n: number, bearing: number, rangeM: n
   }
 }
 
-/** `origin` launches them from round that point instead of round the airbase (counter-attacks up the front). */
-export function spawnDrones(w: World, n: number, bearing: number, rangeM: number, targets?: Target[], origin?: { x: number; y: number }): void {
+/**
+ * One-way attack drones. From a launch site they fly out to an approach point on `bearing` and turn in from
+ * there; `origin` is a point they attack round instead of the airbase (a counter-attack on the assault force).
+ */
+export function spawnDrones(w: World, n: number, bearing: number, rangeM: number, targets?: Target[], origin?: { x: number; y: number }, from?: LaunchFrom): void {
   const aims = targets ? targetsByName(w, targets) : targetsByName(w, ['Airbase', 'Power plant', 'CRC']);
   const o = v3(origin?.x ?? 0, origin?.y ?? 0);
+  const base = launchPoint(w, 'drone', bearing, from);
   for (let i = 0; i < n; i++) {
     const lateral = (i - (n - 1) / 2) * 900 + w.rng.gauss() * 300;
-    const start = add(o, add(polar(bearing, rangeM + w.rng.range(-2000, 2000)), polar(bearing + 90, lateral)));
-    start.z = w.terrain.groundAt(start.x, start.y) + 250;
     const aim = aims[i % aims.length];
-    // One dogleg to approach from an off-axis direction.
-    const mid = add(o, add(polar(bearing + w.rng.range(-25, 25), rangeM * 0.45), polar(bearing + 90, lateral)));
-    const d = new Drone(w.nextName('DRN'), start, [mid], aim.pos, aim.name, w.rng.range(120, 380));
+    let start: V3;
+    let route: V3[];
+    if (base) {
+      // Launched a few seconds apart from the team's rails, then out to the approach point and in.
+      start = add(base, polar(w.rng.range(0, 360), w.rng.range(100, 600)));
+      const approach = add(o, add(polar(bearing + w.rng.range(-15, 15), origin ? 9000 : 22000), polar(bearing + 90, lateral)));
+      route = hdist(base, approach) > 8000 ? [approach] : [];
+    } else {
+      start = add(o, add(polar(bearing, rangeM + w.rng.range(-2000, 2000)), polar(bearing + 90, lateral)));
+      // One dogleg to approach from an off-axis direction.
+      route = [add(o, add(polar(bearing + w.rng.range(-25, 25), rangeM * 0.45), polar(bearing + 90, lateral)))];
+    }
+    start.z = w.terrain.groundAt(start.x, start.y) + (base ? 30 : 250);
+    const d = new Drone(w.nextName('DRN'), start, route, aim.pos, aim.name, w.rng.range(120, 380));
     if (w.rng.chance(0.3)) d.gnssDep = 0.15; // some airframes carry an anti-jam antenna
-    w.spawn(d);
+    if (base) w.spawnLater(d, i * 4);
+    else w.spawn(d);
   }
 }
 
-export function spawnCruise(w: World, n: number, bearing: number, rangeM: number, targets?: Target[]): void {
+export function spawnCruise(w: World, n: number, bearing: number, rangeM: number, targets?: Target[], from?: LaunchFrom): void {
   const aims = targets ? targetsByName(w, targets) : targetsByName(w, ['Airbase', 'CRC', 'LR radar', 'MR radar']);
   const t = w.terrain;
-  // From the mountain side they come down the passes; elsewhere straight in, low over the plain or the sea.
+  const base = launchPoint(w, 'cruise', bearing, from);
+  // From the mountain side they come down the passes; elsewhere in low over the plain or the sea.
   const viaPasses = t.mountainSide(bearing);
   for (let i = 0; i < n; i++) {
     const aim = aims[i % aims.length];
     let start: V3;
     let route: V3[];
-    if (viaPasses) {
-      const which = (i % 2) as 0 | 1;
+    const which = (i % 2) as 0 | 1;
+    if (base) {
+      start = add(base, polar(w.rng.range(0, 360), w.rng.range(200, 1500)));
+      const v = t.toLocal(start.x, start.y).v;
+      route = viaPasses ? [t.toWorld(t.passU(which, Math.min(v, rangeM)), Math.min(v, rangeM)), ...t.passRoute(which, Math.min(v, rangeM))] : [add(polar(bearing + w.rng.range(-30, 30), rangeM * 0.4), v3())];
+    } else if (viaPasses) {
       const v = rangeM + i * 2500;
       start = t.toWorld(t.passU(which, v) + w.rng.gauss() * 400, v);
       route = t.passRoute(which, v);
@@ -102,68 +153,97 @@ export function spawnCruise(w: World, n: number, bearing: number, rangeM: number
       route = [add(polar(bearing + w.rng.range(-30, 30), rangeM * 0.4), v3())];
     }
     start.z = w.terrain.groundAt(start.x, start.y) + 60;
-    w.spawn(new Cruise(w.nextName('CM'), start, route, aim.pos, aim.name));
+    const cm = new Cruise(w.nextName('CM'), start, route, aim.pos, aim.name);
+    if (base) w.spawnLater(cm, i * 6);
+    else w.spawn(cm);
   }
 }
 
-export function spawnBombers(w: World, n: number, bearing: number, rangeM: number): void {
+export function spawnBombers(w: World, n: number, bearing: number, rangeM: number, from?: LaunchFrom): void {
   const aims = targetsByName(w, ['Airbase', 'CRC', 'Power plant', 'LR radar']);
+  const base = launchPoint(w, 'bomber', bearing, from);
   for (let i = 0; i < n; i++) {
-    const start = add(polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 6000));
+    const start = add(base ?? polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 6000));
     start.z = 9500;
     const rot = aims.slice(i % aims.length).concat(aims.slice(0, i % aims.length));
     w.spawn(new Bomber(w.nextName('BMR'), start, rot));
   }
 }
 
-/** Strike fighters: in high, down to treetop height for the last 75 km, pop up and glide-bomb their target. */
-export function spawnStrike(w: World, n: number, bearing: number, rangeM: number, targets?: Target[]): void {
+/** Strike fighters: take off, come in high, down to treetop height for the last 95 km, pop up and glide-bomb. */
+export function spawnStrike(w: World, n: number, bearing: number, rangeM: number, targets?: Target[], from?: LaunchFrom): void {
   const aims = targets ? targetsByName(w, targets) : targetsByName(w, ['Airbase', 'Power plant', 'CRC', 'MR radar']);
   const first = w.rng.int(0, aims.length - 1);
+  const base = launchPoint(w, 'strike', bearing, from);
   for (let i = 0; i < n; i++) {
-    const start = add(polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 3000));
-    start.z = 8000;
-    w.spawn(new Striker(w.nextName('STK'), start, aims[(first + i) % aims.length]));
+    const aim = aims[(first + i) % aims.length];
+    if (base) {
+      const start = add(base, polar(bearing + 90, (i - (n - 1) / 2) * 3000, 600));
+      start.z += w.terrain.groundAt(start.x, start.y);
+      const s = new Striker(w.nextName('STK'), start, aim);
+      // Swing out to come in on the planned bearing when it is well off the line from the airfield.
+      const off = Math.abs(wrap180(bearingDeg(aim.pos, start) - bearing));
+      if (off > 40 && off < 110) s.waypoints = [add(aim.pos, polar(bearing, 60000))];
+      w.spawnLater(s, i * 8);
+    } else {
+      const start = add(polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 3000));
+      start.z = 8000;
+      w.spawn(new Striker(w.nextName('STK'), start, aim));
+    }
   }
 }
 
 /**
- * Attack helicopters, starting `rangeM` out at treetop height, a few km apart. With an `origin` they start
- * round that point and creep towards it (a counter-attack on the assault force) instead of the airbase.
+ * Attack helicopters at treetop height, a few km apart. With an `origin` they creep towards that point
+ * (a counter-attack on the assault force) instead of the airbase.
  */
-export function spawnHelos(w: World, n: number, bearing: number, rangeM: number, origin?: { x: number; y: number }): void {
+export function spawnHelos(w: World, n: number, bearing: number, rangeM: number, origin?: { x: number; y: number }, from?: LaunchFrom): void {
   const o = v3(origin?.x ?? 0, origin?.y ?? 0);
+  const base = launchPoint(w, 'helo', bearing, from);
   for (let i = 0; i < n; i++) {
-    const start = add(o, add(polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 2500)));
+    const start = base ? add(base, polar(bearing + 90, (i - (n - 1) / 2) * 800)) : add(o, add(polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 2500)));
     start.z = w.terrain.groundAt(start.x, start.y) + 25;
     w.spawn(new Helo(w.nextName('HEL'), start, origin ? o : undefined));
   }
 }
 
-export function spawnSead(w: World, n: number, bearing: number, rangeM: number): void {
+export function spawnSead(w: World, n: number, bearing: number, rangeM: number, from?: LaunchFrom): void {
+  const base = launchPoint(w, 'sead', bearing, from);
   for (let i = 0; i < n; i++) {
-    const start = add(polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 4000));
-    start.z = 7500;
+    const start = add(base ?? polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 4000));
+    start.z = base ? start.z + 800 : 7500;
     w.spawn(new Sead(w.nextName('SEAD'), start));
   }
 }
 
-export function spawnSoj(w: World, bearing: number, rangeM: number): void {
-  w.spawn(new Soj(w.nextName('SOJ'), polar(bearing, rangeM, 9500), bearing));
+/** Stand-off jammer: enters from the rear and flies a racetrack 125 km out on its bearing. */
+export function spawnSoj(w: World, bearing: number, rangeM: number, from?: LaunchFrom): void {
+  const base = launchPoint(w, 'soj', bearing, from);
+  w.spawn(new Soj(w.nextName('SOJ'), polar(bearing, rangeM, 9500), bearing, base ? v3(base.x, base.y, 9500) : undefined));
 }
 
-export function spawnTbm(w: World, n: number, bearing: number, targets?: Target[]): void {
+/** Ballistic missiles, fired from a launch area at targets; CEP round each aim point. */
+export function spawnTbm(w: World, n: number, bearing: number, targets?: Target[], from?: LaunchFrom): void {
   const aims = targets ? targetsByName(w, targets) : targetsByName(w, ['Airbase', 'LR radar', 'CRC']);
+  const base = launchPoint(w, 'tbm', bearing, from);
   for (let i = 0; i < n; i++) {
     const aim = aims[i % aims.length];
-    // Ballistic CEP around the aim point.
     const impact = add(aim.pos, v3(w.rng.gauss() * 60, w.rng.gauss() * 60, 0));
     impact.z = w.terrain.groundAt(impact.x, impact.y);
-    const s = Tbm.solve(impact, bearing + w.rng.gauss() * 2, 175000 + w.rng.range(-10000, 10000), 85000, 105 + w.rng.range(-5, 5));
-    const tbm = new Tbm(w.nextName('TBM'), s.pos, s.vel, impact, aim.name);
-    w.spawnLater(tbm, i * 7);
+    w.spawnLater(tbmFrom(w, impact, aim.name, base, bearing), i * 7);
   }
 }
+
+/** One ballistic missile from a launch point (or the old fixed 175 km on a bearing) to an impact point. */
+export function tbmFrom(w: World, impact: V3, aimName: string, base: V3 | null, bearing: number): Tbm {
+  const range = base ? Math.max(40000, hdist(base, impact)) : 175000 + w.rng.range(-10000, 10000);
+  const b = base ? bearingDeg(impact, base) : bearing + w.rng.gauss() * 2;
+  const s = Tbm.solve(impact, b, range, range * 0.48, tbmFlightS(range) + w.rng.range(-5, 5));
+  return new Tbm(w.nextName('TBM'), s.pos, s.vel, impact, aimName);
+}
+
+/** Time of flight of a short-range ballistic missile over a ground range (s): 105 s at 175 km. */
+export const tbmFlightS = (rangeM: number): number => Math.max(55, rangeM * 0.0006);
 
 const AIRWAYS: [V3, V3][] = [
   [v3(-210000, -28000), v3(210000, -20000)],

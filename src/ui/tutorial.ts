@@ -52,7 +52,7 @@ export class Tutorial {
       {
         title: 'Tracks',
         text: 'Three attack drones are coming in low. As radars see them they appear as <b>tracks</b> in the table on the right, in red once identified hostile. <b>Click a track</b> in the table, on the PPI or on its label in the 3D view.',
-        enter: (w) => spawnDrones(w, 3, enemy, 32000),
+        enter: (w) => spawnDrones(w, 3, enemy, 32000, undefined, undefined, 'range'),
         done: (_w, hud) => hud.selected !== null,
       },
       {
@@ -71,7 +71,7 @@ export class Tutorial {
         enter: (w) => {
           w.setWcs('HOLD');
           this.firedAtStart = firedTotal(w);
-          spawnCruise(w, 2, enemy, 60000, ['Airbase']);
+          spawnCruise(w, 2, enemy, 60000, ['Airbase'], 'range');
         },
         done: (w) => firedTotal(w) > this.firedAtStart,
       },
@@ -83,7 +83,7 @@ export class Tutorial {
       {
         title: 'SEAD: radars are targets too',
         text: 'Two SEAD fighters are hunting radiating radars with anti-radiation missiles (ARMs). Radars with <b>ARM auto</b> on go silent when an ARM is seen coming; you can also select a radar in the left panel and press <b>EMCON</b> to silence it yourself. An MR battery can still fire on tracks from the early warning radar. <b>Survive the attack.</b>',
-        enter: (w) => spawnSead(w, 2, enemy, 150000),
+        enter: (w) => spawnSead(w, 2, enemy, 150000, 'range'),
         done: leaving,
       },
       {

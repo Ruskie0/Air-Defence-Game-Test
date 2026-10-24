@@ -926,3 +926,23 @@ li.warn {
   padding: 0 6px;
   font-size: 11px;
 }
+
+.enemy-oob .eb {
+  display: grid;
+  grid-template-columns: 1fr 90px;
+  gap: 6px;
+  align-items: center;
+  margin: 3px 0;
+}
+.enemy-oob .eb small {
+  color: #c9a9a0;
+}
+.enemy-oob .eb.dead b {
+  text-decoration: line-through;
+  color: #888;
+}
+
+.site-label.enemy {
+  color: #ff8a70;
+  border-color: rgba(255, 110, 80, 0.5);
+}

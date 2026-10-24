@@ -426,7 +426,7 @@ export class Hud {
       'speed',
       `<button data-act="pause" class="${this.ctl.paused ? 'on warn' : ''}">${this.ctl.paused ? '▶' : '❚❚'}</button>` +
         SPEEDS.map((s) => `<button data-act="speed" data-v="${s}" class="${!this.ctl.paused && this.ctl.speed === s ? 'on' : ''}">${s}×</button>`).join('') +
-        `<button data-act="skipquiet" class="${this.ctl.skipQuiet ? 'on' : ''}" title="Auto tempo: while the nearest threat is still minutes away, time runs up to 16× faster, slowing back to your speed as it closes, whenever a missile is in the air, and while a located battery is under threat">${this.ctl.fastForward ? `Auto ▸▸ ${this.ctl.tempo}×` : 'Auto tempo'}</button>`,
+        `<button data-act="skipquiet" class="${this.ctl.skipQuiet ? 'on' : ''}" title="Auto tempo: while the nearest threat is still minutes away, time runs up to 16× faster, slowing back to your speed as it closes, and whenever a missile is in the air or a battery has just been located">${this.ctl.fastForward ? `Auto ▸▸ ${this.ctl.tempo}×` : 'Auto tempo'}</button>`,
     );
     this.set(
       'wcs',

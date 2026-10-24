@@ -2,7 +2,9 @@ import { DoctrineId, doctrineOf } from './doctrine';
 import { Rng } from '../sim/rng';
 import type { Raid } from '../sim/scenario';
 import type { Sighting } from '../sim/entities';
-import { type Target, spawnBombers, spawnCruise, spawnDarkAirliner, spawnDecoyDrones, spawnDrones, spawnHelos, spawnRecon, spawnSead, spawnSoj, spawnStrike, spawnTbm } from '../sim/threats';
+import { AIRCRAFT, type Asset, type EnemyBase, avail, draw } from '../sim/theatre';
+import { bearingDeg, v3, wrap180 } from '../sim/math';
+import { type LaunchFrom, type Target, spawnBombers, spawnCruise, spawnDarkAirliner, spawnDecoyDrones, spawnDrones, spawnHelos, spawnRecon, spawnSead, spawnSoj, spawnStrike, spawnTbm } from '../sim/threats';
 
 export type PkgKind = 'drones' | 'decoys' | 'recon' | 'cruise' | 'strike' | 'helo' | 'sead' | 'soj' | 'bomber' | 'tbm' | 'dark';
 
@@ -21,8 +23,11 @@ export interface PlannedPkg {
   aims?: Sighting[];
   /** Aimed at one site by name (a front-line town, the assault force). */
   target?: string;
-  /** Launched from near this point rather than from the edge of the map (counter-attacks on the assault force). */
+  /** The point a counter-attack closes on (the assault force) instead of the airbase. */
   origin?: { x: number; y: number };
+  /** The enemy installation it launches from (id), and where that is. */
+  base?: string;
+  from?: { x: number; y: number };
   /** Part of the enemy's counter-attack on today's offensive. */
   counter?: boolean;
 }
@@ -48,69 +53,81 @@ interface PkgDef {
   size: (day: number, rng: Rng) => number;
   /** Approach sectors this kind may use. */
   sectors: number[];
-  spawn: (w: Parameters<Raid['spawn']>[0], bearing: number, size: number, aims?: Target[], origin?: { x: number; y: number }) => void;
+  spawn: (w: Parameters<Raid['spawn']>[0], bearing: number, size: number, aims?: Target[], origin?: { x: number; y: number }, from?: LaunchFrom) => void;
+  /** What it draws on at an enemy installation: aircraft on strength, or munitions used up. */
+  asset?: Asset;
   describe: (size: number) => string;
 }
 
 export const PKG: Record<PkgKind, PkgDef> = {
   drones: {
-    name: 'Drone swarm', cost: (n) => 1 + n * 0.9, minDay: 1, sectors: [0, 1, 2, 3, 4, 5, 6, 7],
+    name: 'Drone swarm', cost: (n) => 1 + n * 0.9, minDay: 1, sectors: [0, 1, 2, 6, 7],
     size: (d, r) => Math.min(14, 4 + d + r.int(0, 2)),
-    spawn: (w, b, n, aims, o) => spawnDrones(w, n, b, o ? 25000 : 50000, aims, o),
+    asset: 'drone',
+    spawn: (w, b, n, aims, o, f) => spawnDrones(w, n, b, o ? 25000 : 50000, aims, o, f),
     describe: (n) => `${n} one-way attack drones, low and slow`,
   },
   decoys: {
     name: 'Decoy drones', cost: (n) => 2 + n * 0.5, minDay: 3, sectors: [0, 1, 2, 6, 7],
     size: (d, r) => Math.min(16, 6 + d + r.int(0, 3)),
-    spawn: (w, b, n) => spawnDecoyDrones(w, n, b, 50000),
+    asset: 'drone',
+    spawn: (w, b, n, _a, _o, f) => spawnDecoyDrones(w, n, b, 50000, f),
     describe: (n) => `${n} drones that our intel thinks are mostly unarmed decoys, sent to drain our missiles`,
   },
   recon: {
     name: 'Recon drone', cost: () => 3, minDay: 2, sectors: [0, 1, 7, 2, 6],
     size: (d) => (d >= 6 ? 2 : 1),
-    spawn: (w, b, n) => spawnRecon(w, n, b),
+    asset: 'recon',
+    spawn: (w, b, n, _a, _o, f) => spawnRecon(w, n, b, f),
     describe: (n) => `${n > 1 ? `${n} high-flying reconnaissance drones` : 'a high-flying reconnaissance drone'} orbiting about 32 km out to photograph our positions. If it gets home, tomorrow's strikes will go for what it saw`,
   },
   cruise: {
     name: 'Cruise missiles', cost: (n) => 2 + n * 2, minDay: 1, sectors: [0, 2, 3, 4, 5, 6],
     size: (d, r) => Math.min(8, 2 + Math.floor(d / 2) + r.int(0, 1)),
-    spawn: (w, b, n, aims) => spawnCruise(w, n, b, 130000, aims),
+    asset: 'cruise',
+    spawn: (w, b, n, aims, _o, f) => spawnCruise(w, n, b, 130000, aims, f),
     describe: (n) => `${n} terrain-following cruise missiles`,
   },
   strike: {
     name: 'Strike jets', cost: (n) => 2 + n * 3.5, minDay: 4, sectors: [0, 1, 7, 2, 6, 3, 5],
     size: (d, r) => Math.min(4, 2 + (d >= 7 ? 1 : 0) + (d >= 9 ? r.int(0, 1) : 0)),
-    spawn: (w, b, n, aims) => spawnStrike(w, n, b, 150000, aims),
+    asset: 'strike',
+    spawn: (w, b, n, aims, _o, f) => spawnStrike(w, n, b, 150000, aims, f),
     describe: (n) => `${n} strike fighters that will come in at treetop height, pop up and glide-bomb a site. Low-flying jets with no IFF are declared hostile inside 45 km`,
   },
   helo: {
     name: 'Attack helicopters', cost: (n) => 2 + n * 2.5, minDay: 3, sectors: [0, 1, 7, 2, 6, 3, 5],
     size: (d) => Math.min(4, 2 + (d >= 6 ? 1 : 0) + (d >= 9 ? 1 : 0)),
-    spawn: (w, b, n, _aims, o) => spawnHelos(w, n, b, o ? 22000 : 40000, o),
+    asset: 'helo',
+    spawn: (w, b, n, _aims, o, f) => spawnHelos(w, n, b, o ? 22000 : 40000, o, f),
     describe: (n) => `${n} attack helicopters creeping in behind the hills to pop up and fire missiles at our nearest units. Guns and SHORAD are the answer`,
   },
   sead: {
     name: 'SEAD pair', cost: () => 10, minDay: 3, sectors: [7, 0, 1, 6, 2],
     size: () => 2,
-    spawn: (w, b, n) => spawnSead(w, n, b, 160000),
+    asset: 'sead',
+    spawn: (w, b, n, _a, _o, f) => spawnSead(w, n, b, 160000, f),
     describe: () => '2 SEAD fighters hunting radiating radars with anti-radiation missiles',
   },
   soj: {
     name: 'Stand-off jammer', cost: () => 7, minDay: 4, sectors: [7, 0, 1],
     size: () => 1,
-    spawn: (w, b) => spawnSoj(w, b, 125000),
+    asset: 'soj',
+    spawn: (w, b, _n, _a, _o, f) => spawnSoj(w, b, 125000, f),
     describe: () => 'a stand-off jammer orbiting 125 km out',
   },
   bomber: {
     name: 'Bomber strike', cost: (n) => 6 + n * 6, minDay: 5, sectors: [7, 0, 1, 2, 6],
     size: (d) => (d >= 8 ? 2 : 1),
-    spawn: (w, b, n) => spawnBombers(w, n, b, 195000),
+    asset: 'bomber',
+    spawn: (w, b, n, _a, _o, f) => spawnBombers(w, n, b, 195000, f),
     describe: (n) => `${n} bomber${n > 1 ? 's' : ''} launching cruise missiles from 115 km`,
   },
   tbm: {
     name: 'Ballistic missiles', cost: (n) => 4 + n * 4, minDay: 5, sectors: [7, 0, 1],
     size: (d, r) => Math.min(6, 2 + Math.floor((d - 5) / 2) + r.int(0, 1)),
-    spawn: (w, b, n, aims) => spawnTbm(w, n, b, aims),
+    asset: 'tbm',
+    spawn: (w, b, n, aims, _o, f) => spawnTbm(w, n, b, aims, f),
     describe: (n) => `${n} short-range ballistic missiles`,
   },
   dark: {
@@ -213,7 +230,66 @@ export function toRaids(plan: PlannedPkg[]): Raid[] {
       launched: false,
       pkg: p.id,
       unreported: !p.reported,
-      spawn: (w) => def.spawn(w, p.bearing, p.size, aims, p.origin),
+      spawn: (w) => {
+        const b = p.base ? w.theatre.find((x) => x.id === p.base) : undefined;
+        if (b) w.revealBase(b);
+        def.spawn(w, p.bearing, p.size, aims, p.origin, b ? { x: b.x, y: b.y } : p.from);
+      },
     };
   });
+}
+
+/**
+ * Give each package an enemy installation to launch from, and hold the plan to what the enemy actually has.
+ * Munitions are drawn from stock now; each aircraft flies one sortie a day. A package the enemy cannot fill
+ * goes in smaller or not at all. Counter-attacks launch from the base nearest to what they attack.
+ */
+/** Munitions a package drew from its base, as stock units (decoys are half a drone each). */
+const drawn = (p: PlannedPkg): number => p.size * (p.kind === 'decoys' ? 0.5 : 1);
+
+/** Put back the munitions packages drew when they are called off before launch (aircraft were never drawn). */
+export function refundBases(pkgs: PlannedPkg[], bases: EnemyBase[]): void {
+  for (const p of pkgs) {
+    const a = PKG[p.kind].asset;
+    const b = p.base ? bases.find((x) => x.id === p.base) : undefined;
+    if (!a || !b || b.lost || AIRCRAFT.includes(a)) continue;
+    b.stock[a] = (b.stock[a] ?? 0) + drawn(p);
+  }
+}
+
+/** Aircraft already flying today's sorties from each base ("base:asset" -> count), so a later plan does not reuse them. */
+export function sortiesOf(plan: PlannedPkg[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const p of plan) {
+    const a = PKG[p.kind].asset;
+    if (a && p.base && AIRCRAFT.includes(a)) m.set(`${p.base}:${a}`, (m.get(`${p.base}:${a}`) ?? 0) + p.size);
+  }
+  return m;
+}
+
+export function assignBases(plan: PlannedPkg[], bases: EnemyBase[], sorties = new Map<string, number>()): PlannedPkg[] {
+  const out: PlannedPkg[] = [];
+  for (const p of plan) {
+    const a = PKG[p.kind].asset;
+    if (!a) {
+      out.push(p);
+      continue;
+    }
+    // Decoys are cheap airframes: two to a drone's worth of stock.
+    const per = p.kind === 'decoys' ? 0.5 : 1;
+    const free = (b: EnemyBase): number => avail(b, a) - (AIRCRAFT.includes(a) ? sorties.get(`${b.id}:${a}`) ?? 0 : 0);
+    const cands = bases.filter((b) => free(b) >= per);
+    if (!cands.length) continue;
+    const near = p.origin ?? null;
+    const score = (b: EnemyBase): number =>
+      near ? Math.hypot(b.x - near.x, b.y - near.y) : Math.abs(wrap180(bearingDeg(v3(), v3(b.x, b.y)) - p.bearing)) * 1000 - Math.min(free(b), p.size * per) * 5000;
+    const b = cands.sort((x, y) => score(x) - score(y))[0];
+    p.size = Math.max(1, Math.min(p.size, Math.floor(free(b) / per)));
+    p.base = b.id;
+    p.from = { x: b.x, y: b.y };
+    if (AIRCRAFT.includes(a)) sorties.set(`${b.id}:${a}`, (sorties.get(`${b.id}:${a}`) ?? 0) + p.size);
+    else draw(b, a, p.size * per);
+    out.push(p);
+  }
+  return out;
 }

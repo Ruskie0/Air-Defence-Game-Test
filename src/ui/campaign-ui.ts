@@ -10,7 +10,8 @@ import type { Ppi } from './ppi';
 import { UPGRADES, UPGRADE_ORDER, UpgradeId } from '../campaign/upgrades';
 import { objectiveDesc, objectiveName } from '../campaign/objectives';
 import { EVENTS } from '../campaign/events';
-import { DEEP_STRIKES, DeepStrikeId, deepStrike, deepStrikeError } from '../campaign/deepstrike';
+import { DEEP_STRIKES, DeepStrikeId, deepStrike, deepStrikeError, strikeTargets } from '../campaign/deepstrike';
+import { type Asset, BASE_DEFS, assetCount, stockText } from '../sim/theatre';
 import { ASSAULT_HOLD, OFFENSIVE_COST_M, TOWN_THREAT_CUT, TOWN_ZONE_M, nextObjective } from '../campaign/front';
 
 const SAVE_KEY = 'air-defence-campaign-v1';
@@ -230,24 +231,25 @@ export class CampaignUi {
         : '';
     const strikes = s.deepStrike
       ? `<div class="event ${s.deepStrike.ok ? '' : 'dim'}">${esc(s.deepStrike.text)}</div>`
-      : (Object.keys(DEEP_STRIKES) as DeepStrikeId[])
-          .map((id) => {
-            const d = DEEP_STRIKES[id];
-            const why = deepStrikeError(c, id);
+      : strikeTargets(c)
+          .map((b) => {
+            const d = DEEP_STRIKES[b.kind]!;
+            const why = deepStrikeError(c, b.id);
             const locked = s.day < d.unlockDay;
             return `<div class="shop-item ${locked ? 'locked' : ''}">
-              <div class="shop-h"><b>${d.name}</b><span class="mono">${money(d.costM)} · ${Math.round(d.chance * 100)}%</span></div>
-              <div class="dim">${esc(d.desc)}</div>
-              <div class="row">${locked ? `<span class="st emcon">Day ${d.unlockDay}</span>` : `<button data-cui="deepstrike" data-id="${id}" ${why ? 'disabled' : ''} title="${esc(why ?? `${Math.round(d.chance * 100)}% chance. If it works, today's packages of this kind are cut and fewer come for two more days`)}">Strike</button>`}</div>
+              <div class="shop-h"><b>${esc(b.name)}</b><span class="mono">${money(d.costM)} · ${Math.round(d.chance * 100)}%</span></div>
+              <div class="dim">${esc(d.desc)} Holds ${esc(stockText(b))}.</div>
+              <div class="row">${locked ? `<span class="st emcon">Day ${d.unlockDay}</span>` : `<button data-cui="deepstrike" data-id="${b.id}" ${why ? 'disabled' : ''} title="${esc(why ?? `${Math.round(d.chance * 100)}% chance. If it works, half of what it holds is destroyed for good, and today's packages from it are cut`)}">Strike</button>`}</div>
             </div>`;
           })
-          .join('');
+          .join('') || '<div class="dim">No enemy installation is located yet. Bases show up once they launch something.</div>';
     $('plan-left').innerHTML = `
       ${event}
       ${this.frontPanel()}
       <h3>Intelligence briefing, day ${s.day}</h3>
       <p class="dim">${esc(this.mapLine())}</p>
       <ul class="intel">${intel.map((l) => `<li>${esc(l)}</li>`).join('') || '<li class="dim">Nothing reported.</li>'}</ul>
+      ${this.enemyPanel()}
       <h3>Bonus objectives</h3>
       <ul class="intel">${(s.objectives ?? []).map((o) => `<li><b>${esc(objectiveName(o))}</b> <span class="mono">+${money(o.rewardM)}</span>: ${esc(objectiveDesc(o))}</li>`).join('') || '<li class="dim">None today.</li>'}</ul>
       <h3>Deep strike <span class="dim">one a day, before the battle</span></h3>
@@ -324,6 +326,31 @@ export class CampaignUi {
       ${this.note ? `<div class="order">${esc(this.note)}</div>` : ''}
       <div class="oob">${units || '<div class="dim">No units. Buy some from the procurement list.</div>'}</div>
       <div class="plan-go"><button data-cui="start" class="go big-go">Start day ${s.day} ▶</button></div>`;
+  }
+
+  /** The enemy's installations as far as intel knows them, with what each has left, and what it has lost. */
+  private enemyPanel(): string {
+    const c = this.c!;
+    const bases = c.theatre;
+    const total = (b: { stock: Partial<Record<Asset, number>> }): number => (Object.keys(b.stock) as Asset[]).reduce((t, a) => t + Math.floor((b.stock[a] ?? 0) + 1e-6), 0);
+    const rows = bases
+      .filter((b) => b.known || b.lost)
+      .map((b) => {
+        const km = (Math.hypot(b.x, b.y) / 1000).toFixed(0);
+        if (b.lost) return `<div class="eb dead"><span><b>${esc(b.name)}</b></span><span class="dim">out of the war</span></div>`;
+        const full = b.start ? total({ stock: b.start }) : 0;
+        const pct = full ? Math.min(100, (100 * total(b)) / full) : 100;
+        const col = pct > 60 ? '#ff6b5b' : pct > 30 ? '#ffb05b' : '#8a8a8a';
+        return `<div class="eb"><span><b>${esc(b.name)}</b> <span class="dim">${b.kind === 'rear' ? 'beyond the map' : `${km} km`}</span><br><small>${esc(stockText(b))}</small></span><span class="bar" title="Strength left against what it started the war with"><i style="width:${pct}%;background:${col}"></i></span></div>`;
+      })
+      .join('');
+    const hidden = bases.filter((b) => !b.known && !b.lost);
+    const kinds = [...new Set(hidden.map((b) => BASE_DEFS[b.kind].name.toLowerCase()))];
+    const lost = Object.entries(c.s.enemyLost ?? {}).filter(([, n]) => n! >= 1) as [Asset, number][];
+    return `<h3>Enemy order of battle <span class="dim">as far as intel knows</span></h3>
+      <div class="enemy-oob">${rows || '<div class="dim">Nothing located yet.</div>'}</div>
+      ${hidden.length ? `<p class="dim">Not yet located: ${hidden.length} installation${hidden.length > 1 ? 's' : ''} (${esc(kinds.join(', '))}). Each one shows up once it launches.</p>` : ''}
+      <p class="dim">Destroyed so far: ${lost.length ? esc(lost.map(([a, n]) => assetCount(a, Math.floor(n))).join(', ')) : 'nothing yet'}. What the enemy loses stays lost; it gets a trickle of reinforcements each night.</p>`;
   }
 
   /** Today's big decision: hold the line, or push up the road to the next town. */
@@ -448,6 +475,7 @@ export class CampaignUi {
           : ''
       }
       ${r.front?.length ? `<h3>The front</h3><ul class="intel">${r.front.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
+      ${r.enemy?.length ? `<h3>The enemy</h3><ul class="intel">${r.enemy.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
       <h3>Damage</h3>
       <p>${dmg.length ? dmg.map((d) => `${d.name} −${d.lost} (now ${d.hp}%)`).join(', ') : 'No damage to the defended assets.'}</p>
       ${r.medals?.length ? `<h3>Medals</h3><p class="good">${r.medals.map(esc).join(', ')}</p>` : ''}

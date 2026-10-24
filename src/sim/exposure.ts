@@ -1,5 +1,7 @@
-import { Cruise, Drone, Tbm } from './entities';
-import { add, polar, v3 } from './math';
+import { Cruise, Drone } from './entities';
+import { add, hdist, polar, v3 } from './math';
+import { type Asset, type EnemyBase, basesWith, draw } from './theatre';
+import { tbmFrom, tbmFlightS } from './threats';
 import type { Fielded, World } from './world';
 
 /**
@@ -107,51 +109,66 @@ export class Exposure {
     return this.strikesLeft > 0 && w.t >= this.nextAt && !this.pending(w, f.unit.uid);
   }
 
+  /**
+   * The enemy has located a battery: it remembers the spot and tasks whatever it has ready and in range to
+   * hit it. The strike launches from that installation and flies the whole way, so its flight time is real.
+   */
   private locate(w: World, f: Fielded): void {
-    this.strikesLeft--;
     this.nextAt = w.t + this.cooldownS;
     f.heat = 0;
     const pos = f.sites[0].pos;
     const name = w.unitName(f);
     const aim = v3(pos.x, pos.y, w.terrain.groundAt(pos.x, pos.y));
-    const bearing = w.terrain.layout.rot + w.rng.range(-35, 35);
     const lv = this.level;
+    const near = (a: Asset, n: number, maxM: number): EnemyBase | undefined => basesWith(w.theatre, a, n, pos).find((b) => Math.hypot(b.x - pos.x, b.y - pos.y) < maxM);
+    // Ballistic missiles from day 5, cruise missiles from day 3, drones always: the fastest it has ready.
+    const nTbm = lv >= 8 ? 2 : 1;
+    const nCm = Math.min(4, 2 + Math.floor(lv / 4));
+    const tbm = lv >= 5 ? near('tbm', nTbm, 300000) : undefined;
+    const glcm = !tbm && lv >= 3 ? near('cruise', nCm, 300000) : undefined;
+    const team = !tbm && !glcm ? near('drone', 3, 110000) : undefined;
+    const base = tbm ?? glcm ?? team;
+    if (!base) {
+      w.log(`The enemy has located ${name}, but has nothing ready in range to strike it`, 'info');
+      return;
+    }
+    this.strikesLeft--;
+    w.revealBase(base);
+    const from = v3(base.x, base.y, w.terrain.groundAt(base.x, base.y));
+    const d = hdist(from, aim);
     let weapon: string;
     let eta: number;
-    if (lv >= 5 && w.rng.chance(0.5)) {
-      const n = lv >= 8 ? 2 : 1;
-      weapon = n > 1 ? `${n} ballistic missiles` : 'a ballistic missile';
-      const tof = 75;
-      for (let i = 0; i < n; i++) {
+    if (tbm) {
+      draw(tbm, 'tbm', nTbm);
+      weapon = nTbm > 1 ? `${nTbm} ballistic missiles` : 'a ballistic missile';
+      for (let i = 0; i < nTbm; i++) {
         const impact = add(aim, v3(w.rng.gauss() * 50, w.rng.gauss() * 50, 0));
         impact.z = w.terrain.groundAt(impact.x, impact.y);
-        const s = Tbm.solve(impact, bearing + w.rng.gauss() * 2, 120000, 60000, tof);
-        w.spawnLater(new Tbm(w.nextName('TBM'), s.pos, s.vel, impact, name), i * 5);
+        w.spawnLater(tbmFrom(w, impact, name, from, 0), i * 5);
       }
-      eta = w.t + tof;
-    } else if (lv >= 3) {
-      const n = Math.min(4, 2 + Math.floor(lv / 4));
-      weapon = `${n} strike missiles`;
-      const range = 20000;
-      for (let i = 0; i < n; i++) {
-        const start = add(aim, polar(bearing + (i - (n - 1) / 2) * 8, range + i * 600));
+      eta = w.t + tbmFlightS(d);
+    } else if (glcm) {
+      draw(glcm, 'cruise', nCm);
+      weapon = `${nCm} cruise missiles`;
+      for (let i = 0; i < nCm; i++) {
+        const start = add(from, polar(w.rng.range(0, 360), w.rng.range(200, 1200)));
         start.z = w.terrain.groundAt(start.x, start.y) + 60;
-        w.spawn(new Cruise(w.nextName('CM'), start, [], aim, name));
+        w.spawnLater(new Cruise(w.nextName('CM'), start, [], aim, name), i * 6);
       }
-      eta = w.t + range / 240;
+      eta = w.t + d / 240;
     } else {
-      const n = 3;
-      weapon = `${n} loitering munitions`;
-      const range = 4500;
-      for (let i = 0; i < n; i++) {
-        const start = add(aim, polar(bearing + (i - 1) * 20, range));
-        start.z = w.terrain.groundAt(start.x, start.y) + 150;
-        w.spawn(new Drone(w.nextName('LM'), start, [], aim, name, 150));
+      draw(team!, 'drone', 3);
+      weapon = '3 attack drones';
+      for (let i = 0; i < 3; i++) {
+        const start = add(from, polar(w.rng.range(0, 360), w.rng.range(100, 500)));
+        start.z = w.terrain.groundAt(start.x, start.y) + 30;
+        w.spawnLater(new Drone(w.nextName('LM'), start, [], aim, name, 150), i * 4);
       }
-      eta = w.t + range / 50;
+      eta = w.t + d / 50;
     }
     this.located.push({ uid: f.unit.uid, unit: name, x: pos.x, y: pos.y, t: w.t, eta, weapon, moved: false });
     w.layoutSeq++;
-    w.log(`${name} LOCATED: counter-battery strike of ${weapon} inbound, about ${Math.round(eta - w.t)} s. Move it, or defend it.`, 'alert');
+    const mins = Math.round((eta - w.t) / 60);
+    w.log(`${name} LOCATED: the enemy has fired ${weapon} at it from the ${base.name.toLowerCase()}, ${Math.round(d / 1000)} km away; impact in about ${mins >= 2 ? `${mins} min` : `${Math.round(eta - w.t)} s`}. Move it, or defend it.`, 'alert');
   }
 }

@@ -34,8 +34,8 @@ export function timeToContact(w: World): number {
 /** How fast time may run right now, before hysteresis: 1 whenever something needs watching or deciding. */
 export function tempoFor(w: World): number {
   if (w.missiles.length) return 1;
-  // A located battery is a decision with a clock on it: move it, or defend it.
-  if (w.exposure.located.some((l) => !l.moved && !l.over && w.t < l.eta)) return 1;
+  // A battery just located is a decision: hold normal speed long enough for the player to take it in.
+  if (w.exposure.located.some((l) => !l.moved && w.t - l.t < 20)) return 1;
   const tti = timeToContact(w);
   const raw = tti / TEMPO.perStepS;
   let lv = 1;

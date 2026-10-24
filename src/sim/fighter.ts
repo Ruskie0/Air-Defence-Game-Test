@@ -18,6 +18,8 @@ export class Fighter extends Air {
   readonly maxFuel = 3600;
   fuel = 3600;
   state: CapState = 'station';
+  /** Quick reaction alert: flies one sortie and stays down once it lands. */
+  oneSortie = false;
   targetTrackId: number | null = null;
   groundUntil = 0;
   aam: Interceptor | null = null;
@@ -145,10 +147,10 @@ export class Fighter extends Air {
         if (hdist(this.pos, this.base) < 3000) {
           this.state = 'ground';
           this.airborne = false;
-          this.groundUntil = w.t + 240;
+          this.groundUntil = this.oneSortie ? Infinity : w.t + 240;
           this.pos = clone(this.base);
           this.vel = v3();
-          w.log(`${this.name} landed, rearming and refuelling (4 min)`, 'info');
+          w.log(this.oneSortie ? `${this.name} landed, alert sortie over` : `${this.name} landed, rearming and refuelling (4 min)`, 'info');
           return;
         }
         break;

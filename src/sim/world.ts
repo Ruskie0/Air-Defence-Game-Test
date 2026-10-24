@@ -109,6 +109,8 @@ export class World {
   /** Support calls budget ($M) and what has been spent from it. */
   readonly budgetM: number;
   supportSpentM = 0;
+  /** The quick reaction alert pair has been scrambled this battle. */
+  qraUsed = false;
   /** Resupply convoys and repair teams on their way. */
   support: SupportCall[] = [];
   /** Bumped whenever a unit's position changes, so views can redraw coverage. */
@@ -326,6 +328,25 @@ export class World {
     if (f.radar && u.armWatch) f.radar.armWatch = true;
     this.fielded.push(f);
     return f;
+  }
+
+  /** Launch the quick reaction alert pair from the airbase, on station 20 km out towards the enemy. */
+  addQra(missiles: number, fuelS: number): void {
+    const ab = this.site('Airbase')!.pos;
+    const base = v3(ab.x, ab.y, ab.z);
+    const station = add(base, polar(this.terrain.layout.rot, 20000, 7000));
+    for (let i = 0; i < 2; i++) {
+      const n = this.fighters.length + 1;
+      const fi = new Fighter(`Alert ${i + 1}`, `F${n}`, base, station, add(base, v3(i * 400, 0, 300)));
+      fi.hdg = this.terrain.layout.rot;
+      fi.spd = 200;
+      fi.missiles = missiles;
+      fi.fuel = fuelS;
+      fi.oneSortie = true;
+      this.fighters.push(fi);
+      this.spawn(fi);
+    }
+    this.log('Quick reaction alert pair scrambled from the airbase', 'engage');
   }
 
   // ---------------------------------------------------------------- queries

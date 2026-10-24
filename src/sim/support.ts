@@ -77,3 +77,24 @@ export function stepSupport(w: World): void {
     }
   }
 }
+
+/** Quick reaction alert: a fighter pair kept on the airbase that can be scrambled once a battle. */
+export const QRA = { costM: 25, missiles: 2, fuelS: 1500 };
+
+/** Why the alert pair cannot be scrambled now, or null. */
+export function qraError(w: World): string | null {
+  if (w.qraUsed) return 'already scrambled today';
+  if (!w.site('Airbase')?.alive) return 'the airbase is out of action';
+  if (QRA.costM > budgetLeft(w)) return 'not enough budget';
+  return null;
+}
+
+/** Scramble the alert pair from the airbase. Returns why it cannot, or null. */
+export function scrambleQra(w: World): string | null {
+  const err = qraError(w);
+  if (err) return err;
+  w.qraUsed = true;
+  w.supportSpentM += QRA.costM;
+  w.addQra(QRA.missiles, QRA.fuelS);
+  return null;
+}

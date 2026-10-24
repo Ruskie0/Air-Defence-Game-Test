@@ -86,7 +86,7 @@ export function autoEngage(w: World): void {
     if (Math.hypot(tr.pos.x, tr.pos.y) < 25000) continue;
     if (w.fighters.some((f) => f.state === 'intercept' && f.targetTrackId === tr.id)) continue;
     const free = w.fighters
-      .filter((f) => f.alive && f.airborne && f.state === 'station' && f.missiles > 0 && f.fuel > 1200)
+      .filter((f) => f.alive && f.airborne && f.state === 'station' && f.missiles > 0 && f.fuel > 700)
       .sort((a, b) => dist(a.pos, tr.pos) - dist(b.pos, tr.pos))[0];
     if (free) free.intercept(w, tr.id);
   }

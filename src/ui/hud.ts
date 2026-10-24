@@ -11,7 +11,7 @@ import type { Ciws } from '../sim/ciws';
 import { CATALOG, RANKS } from '../sim/catalog';
 import { DayObjective, objectiveDesc, objectiveName, objectiveStatus } from '../campaign/objectives';
 import { MOBILITY, moveError, moveStatus } from '../sim/mobility';
-import { FIELD_REPAIR, RESUPPLY, callRepair, callResupply, repairError, resupplyCost, resupplyError } from '../sim/support';
+import { FIELD_REPAIR, QRA, RESUPPLY, callRepair, callResupply, qraError, repairError, resupplyCost, resupplyError, scrambleQra } from '../sim/support';
 import { CLASS_NAME, IDENT_COLOR, IDENT_NAME, fmtTime } from './colors';
 import type { Ppi } from './ppi';
 
@@ -302,6 +302,9 @@ export class Hud {
         w.log(`${j.name} ${j.on ? 'jamming' : 'off'}`, 'info');
         break;
       }
+      case 'qra':
+        this.lastOrder = scrambleQra(w) ?? 'Alert pair scrambled.';
+        break;
       case 'endday':
         this.campaign?.onEndDay();
         break;
@@ -536,10 +539,15 @@ export class Hud {
       rows.push(`<div class="sys"><div class="sys-h"><b>${j.name}</b> ${j.alive ? (j.isEmitting() ? '<span class="st jam">JAMMING</span>' : '<span class="st">OFF</span>') : '<span class="st dead">DESTROYED</span>'}
         <button data-act="ewj" data-i="${i}" ${j.alive ? '' : 'disabled'} title="Jamming blinds enemy SEAD, spoils bomb and missile aiming and stops recon pictures within 90 km, but SEAD can home on it">${j.on ? 'Off' : 'On'}</button></div><div class="sys-b dim">90 km: blinds SEAD and recon, spoils weapon aiming. Draws ARMs.</div></div>`);
     });
-    if (w.fighters.length) rows.push('<h3>Combat air patrol</h3>');
+    rows.push('<h3>Combat air patrol</h3>');
+    if (!w.qraUsed) {
+      const why = qraError(w);
+      rows.push(`<div class="sys"><div class="sys-h"><b>Quick reaction alert</b> <span class="st">ON ALERT</span>
+        <button data-act="qra" ${why ? 'disabled' : ''} title="${esc(why ?? `Scramble two fighters with ${QRA.missiles} missiles each from the airbase, for one sortie. Once a battle.`)}">Scramble $${QRA.costM}M</button></div></div>`);
+    }
     w.fighters.forEach((f, i) => {
       const tr = f.targetTrackId !== null ? w.tracker.get(f.targetTrackId) : undefined;
-      const st = !f.alive ? 'LOST' : f.state === 'ground' ? `REARM ${fmtTime(f.groundUntil - w.t)}` : f.state === 'intercept' ? `INTERCEPT ${tr?.label ?? ''}` : f.state.toUpperCase();
+      const st = !f.alive ? 'LOST' : f.state === 'ground' ? (f.oneSortie ? 'LANDED' : `REARM ${fmtTime(f.groundUntil - w.t)}`) : f.state === 'intercept' ? `INTERCEPT ${tr?.label ?? ''}` : f.state.toUpperCase();
       rows.push(`<div class="sys sel-able ${this.unitSel === `F${i}` ? 'focus' : ''}" data-act="unit" data-code="F${i}"><div class="sys-h"><b>${f.name}</b> <span class="st ${f.alive ? 'ok' : 'dead'}">${st}</span></div>
         <div class="sys-b">AAM <b>${f.missiles}</b> · Fuel ${Math.round((100 * f.fuel) / f.maxFuel)}%
         <button data-act="cap-station" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>CAP</button><button data-act="cap-rtb" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>RTB</button></div></div>`);

@@ -56,6 +56,43 @@ class Loop {
 const WIND_LEVEL: Partial<Record<WeatherId, number>> = { overcast: 1.3, rain: 1.6, fog: 0.4, wind: 4, storm: 5 };
 const RAIN_LEVEL: Partial<Record<WeatherId, number>> = { rain: 0.05, storm: 0.09 };
 
+/**
+ * Three seconds of noise that loops without a click: the end is crossfaded into the start, so the
+ * waveform runs on continuously where the buffer wraps (brown noise drifts, so a plain loop would pop).
+ */
+function loopBuffer(ctx: AudioContext, next: () => number): AudioBuffer {
+  const len = ctx.sampleRate * 3;
+  const fade = Math.floor(ctx.sampleRate * 0.25);
+  const x = new Float32Array(len + fade);
+  for (let i = 0; i < x.length; i++) x[i] = next();
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) {
+    const k = i < fade ? i / fade : 1;
+    d[i] = i < fade ? x[i] * k + x[len + i] * (1 - k) : x[i];
+  }
+  return buf;
+}
+
+/** Stereo reverb impulse: decaying noise that darkens as it fades, like echoes off open country. */
+function impulse(ctx: AudioContext, seconds: number): AudioBuffer {
+  const len = Math.floor(ctx.sampleRate * seconds);
+  const buf = ctx.createBuffer(2, len, ctx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    let lp = 0;
+    for (let i = 0; i < len; i++) {
+      const t = i / len;
+      const a = 1 - t * 0.97;
+      lp += (Math.random() * 2 - 1 - lp) * a * 0.6;
+      // A gap before the first echoes, then an exponential tail.
+      const env = i < ctx.sampleRate * 0.02 ? 0 : Math.exp(-5.5 * t);
+      d[i] = lp * env;
+    }
+  }
+  return buf;
+}
+
 const JET: Partial<Record<Kind, number>> = { fighter: 2500, strike: 2500, sead: 2500, bomber: 4000, soj: 3500, airliner: 3500 };
 
 export class SoundEngine {
@@ -69,13 +106,16 @@ export class SoundEngine {
   private ui!: GainNode;
   private white!: AudioBuffer;
   private brown!: AudioBuffer;
-  private loops!: { jet: Loop; drone: Loop; cruise: Loop; ciws: Loop; wind: Loop; rain: Loop; helo: Loop };
+  private loops!: { jet: Loop; drone: Loop; cruise: Loop; ciws: Loop; gun35: Loop; wind: Loop; rain: Loop; helo: Loop };
   private jetFilter!: BiquadFilterNode;
   private droneOsc: OscillatorNode[] = [];
   private cruiseFilter!: BiquadFilterNode;
   private voices = 0;
   private lastAlert = -10;
   private stillFor = 0;
+  private speedAvg = 1;
+  /** Sim time each gun last fired: a short hold bridges the steps where it is between bursts. */
+  private readonly lastShot = new WeakMap<object, number>();
   private suspendedByPause = false;
   private readonly btn: HTMLButtonElement;
   private readonly panel: HTMLDivElement;
@@ -217,17 +257,18 @@ export class SoundEngine {
     this.ui.gain.value = this.alerts * 0.8;
     this.ui.connect(this.master);
 
-    const len = ctx.sampleRate * 3;
-    this.white = ctx.createBuffer(1, len, ctx.sampleRate);
-    this.brown = ctx.createBuffer(1, len, ctx.sampleRate);
-    const w = this.white.getChannelData(0);
-    const b = this.brown.getChannelData(0);
+    this.white = loopBuffer(ctx, () => Math.random() * 2 - 1);
     let last = 0;
-    for (let i = 0; i < len; i++) {
-      w[i] = Math.random() * 2 - 1;
-      last = (last + 0.02 * w[i]) / 1.02;
-      b[i] = last * 3.5;
-    }
+    this.brown = loopBuffer(ctx, () => {
+      last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02;
+      return last * 3.5;
+    });
+
+    // A short room of hills: every effect sends a little to a reverb, which smooths and places the sound.
+    const verb = ctx.createConvolver();
+    verb.buffer = impulse(ctx, 2.6);
+    const wet = this.gain(0.32);
+    this.sfx.connect(verb).connect(wet).connect(this.master);
     this.buildLoops();
     this.paint();
   }
@@ -289,7 +330,7 @@ export class SoundEngine {
     const ctx = this.ctx!;
     const t = ctx.currentTime;
     const mk = (): Loop => new Loop(ctx, this.sfx);
-    this.loops = { jet: mk(), drone: mk(), cruise: mk(), ciws: mk(), wind: mk(), rain: mk(), helo: mk() };
+    this.loops = { jet: mk(), drone: mk(), cruise: mk(), ciws: mk(), gun35: mk(), wind: mk(), rain: mk(), helo: mk() };
 
     // Jet: broadband roar with a low rumble and a little turbine hiss.
     const L = this.loops;
@@ -341,6 +382,23 @@ export class SoundEngine {
     body.connect(this.filter('lowpass', 520)).connect(this.gain(0.55)).connect(L.ciws.input);
     body.start(t);
     this.noise(this.brown, t).connect(this.gain(0.35)).connect(L.ciws.input);
+
+    // 35 mm revolver cannon: about 17 heavy shots a second, each a deep thud with a sharp report.
+    const pulse = ctx.createOscillator();
+    // A falling sawtooth on the gain: each shot hits at full level and dies away before the next.
+    pulse.type = 'sawtooth';
+    pulse.frequency.value = 17;
+    const shot = this.gain(0.5);
+    const duty = this.gain(-0.5);
+    pulse.connect(duty).connect(shot.gain);
+    pulse.start(t);
+    this.noise(this.brown, t).connect(this.filter('lowpass', 380)).connect(this.gain(1.6)).connect(shot);
+    this.noise(this.white, t).connect(this.filter('bandpass', 1500, 0.8)).connect(this.gain(0.35)).connect(shot);
+    const thud = ctx.createOscillator();
+    thud.frequency.value = 52;
+    thud.connect(this.gain(0.5)).connect(shot);
+    thud.start(t);
+    shot.connect(this.filter('lowpass', 2600)).connect(L.gun35.input);
 
     // Wind bed, slowly gusting.
     const gust = this.gain(0.7);
@@ -428,38 +486,67 @@ export class SoundEngine {
     this.noise(this.brown, t, end).connect(this.filter('lowpass', 170)).connect(rum).connect(out);
   }
 
+  /**
+   * An explosion in layers: the shock-front crack, the fireball's roar (its low-pass sweeping down as it
+   * rolls away), a sub-bass thump, a crackle of debris and, for big ones, a rolling echo off the hills.
+   * Distance does the rest through the one-shot's air absorption and the reverb send.
+   */
   private boom(kind: Effect['kind'], s: Spatial): void {
     const p =
       kind === 'small'
-        ? { crack: 0.25, body: 1.1, sub: 0.8, subG: 0.6, cut: 3500, lvl: 0.8 }
+        ? { crack: 0.12, body: 1.3, sub: 0.8, subG: 0.55, cut: 4200, lvl: 0.75, debris: 0.9, echo: 0 }
         : kind === 'blast'
-          ? { crack: 0.35, body: 2.2, sub: 1.6, subG: 0.9, cut: 2600, lvl: 1 }
-          : { crack: 0.5, body: 4.5, sub: 3, subG: 1, cut: 1800, lvl: 1.3 };
-    const out = this.oneShot(s, p.lvl, p.body + 3);
+          ? { crack: 0.18, body: 2.6, sub: 1.6, subG: 0.9, cut: 3200, lvl: 1, debris: 2, echo: 0.6 }
+          : { crack: 0.25, body: 4.8, sub: 3, subG: 1.1, cut: 2400, lvl: 1.3, debris: 3.5, echo: 1 };
+    const out = this.oneShot(s, p.lvl, p.body + 6);
     if (!out) return;
     const ctx = this.ctx!;
     const t = ctx.currentTime + s.delay;
+    const jitter = 0.85 + Math.random() * 0.3;
+
     const cr = this.gain(0);
-    this.env(cr.gain, t, 0.002, 1, p.crack);
-    this.noise(this.white, t, t + p.crack + 0.1).connect(this.filter('lowpass', p.cut)).connect(cr).connect(out);
+    this.env(cr.gain, t, 0.001, 1.1, p.crack);
+    this.noise(this.white, t, t + p.crack + 0.1).connect(this.filter('highpass', 300)).connect(this.filter('lowpass', p.cut * jitter)).connect(cr).connect(out);
+
+    const sweep = this.filter('lowpass', 1500 * jitter);
+    sweep.frequency.setValueAtTime(1500 * jitter, t);
+    sweep.frequency.exponentialRampToValueAtTime(140, t + p.body);
     const bd = this.gain(0);
-    this.env(bd.gain, t, 0.01, 1.2, p.body);
-    this.noise(this.brown, t, t + p.body + 0.1).connect(this.filter('lowpass', 750)).connect(bd).connect(out);
+    this.env(bd.gain, t, 0.008, 1.3, p.body);
+    this.noise(this.brown, t, t + p.body + 0.1).connect(sweep).connect(bd).connect(out);
+
     const sub = ctx.createOscillator();
-    sub.frequency.setValueAtTime(62, t);
-    sub.frequency.exponentialRampToValueAtTime(24, t + p.sub);
+    sub.frequency.setValueAtTime(72 * jitter, t);
+    sub.frequency.exponentialRampToValueAtTime(22, t + p.sub);
     const sg = this.gain(0);
-    this.env(sg.gain, t, 0.008, p.subG, p.sub);
+    this.env(sg.gain, t, 0.006, p.subG, p.sub);
     sub.connect(sg).connect(out);
     sub.start(t);
     sub.stop(t + p.sub + 0.1);
-    if (kind === 'big' || kind === 'ground') {
-      // Rolling echo off the hills.
+
+    // Debris and secondary pops: bandpassed noise chopped by an irregular gate.
+    const chop = ctx.createOscillator();
+    chop.type = 'square';
+    chop.frequency.setValueAtTime(19 + Math.random() * 14, t);
+    chop.frequency.linearRampToValueAtTime(7, t + p.debris);
+    const gate = this.gain(0.5);
+    chop.connect(this.gain(0.5)).connect(gate.gain);
+    chop.start(t);
+    chop.stop(t + p.debris + 0.6);
+    const db = this.gain(0);
+    db.gain.setValueAtTime(0.0001, t + 0.05);
+    db.gain.exponentialRampToValueAtTime(0.28, t + 0.15);
+    db.gain.exponentialRampToValueAtTime(0.0001, t + 0.15 + p.debris);
+    this.noise(this.white, t, t + p.debris + 0.4).connect(this.filter('bandpass', 2600, 0.9)).connect(gate).connect(db).connect(out);
+
+    if (p.echo > 0) {
       const rl = this.gain(0);
-      rl.gain.setValueAtTime(0.0001, t);
-      rl.gain.exponentialRampToValueAtTime(0.7, t + 0.7);
-      rl.gain.exponentialRampToValueAtTime(0.0001, t + 5.5);
-      this.noise(this.brown, t, t + 5.6).connect(this.filter('lowpass', 260)).connect(rl).connect(out);
+      rl.gain.setValueAtTime(0.0001, t + 0.3);
+      rl.gain.exponentialRampToValueAtTime(0.6 * p.echo, t + 0.9);
+      rl.gain.exponentialRampToValueAtTime(0.25 * p.echo, t + 1.8);
+      rl.gain.exponentialRampToValueAtTime(0.45 * p.echo, t + 2.6);
+      rl.gain.exponentialRampToValueAtTime(0.0001, t + 6);
+      this.noise(this.brown, t, t + 6.1).connect(this.filter('lowpass', 240)).connect(rl).connect(out);
     }
   }
 
@@ -503,7 +590,9 @@ export class SoundEngine {
       void ctx.resume();
     }
     if (ctx.state !== 'running') return;
-    const speed = Math.max(1, ev.simDt / Math.max(realDt, 1e-3));
+    // Time compression, smoothed: frames alternate between zero and two sim steps, which would jitter it.
+    this.speedAvg += (Math.max(1, ev.simDt / Math.max(realDt, 1e-3)) - this.speedAvg) * Math.min(1, realDt * 4);
+    const speed = Math.max(1, this.speedAvg);
     this.right.setFromMatrixColumn(cam.matrixWorld, 0);
 
     for (const m of ev.launches) {
@@ -558,12 +647,19 @@ export class SoundEngine {
     if (cruise) this.cruiseFilter.frequency.setTargetAtTime(2300 * this.doppler(cam, cruise.e), t, 0.1);
 
     let gun: Spatial | null = null;
+    let gun35: Spatial | null = null;
     for (const c of w.ciws) {
-      if (!c.firing || !c.site.alive) continue;
-      const s = this.spatialSim(cam, c.gun, 1800, speed);
-      if (!gun || s.gain > gun.gain) gun = s;
+      if (!c.site.alive || c.spec.kind === 'laser') continue;
+      if (c.firing) this.lastShot.set(c, w.t);
+      if (w.t - (this.lastShot.get(c) ?? -1e9) > 0.15) continue;
+      const big = c.spec.kind === 'gun35';
+      const s = this.spatialSim(cam, c.gun, big ? 2600 : 1800, speed);
+      if (big) {
+        if (!gun35 || s.gain > gun35.gain) gun35 = s;
+      } else if (!gun || s.gain > gun.gain) gun = s;
     }
-    L.ciws.set(gun, 1.1, 0.02);
+    L.ciws.set(gun, 1.1, 0.03);
+    L.gun35.set(gun35, 1.2, 0.03);
     // Wind is louder near the ground and fades as the camera climbs.
     const alt = cam.position.y - w.terrain.groundAt(cam.position.x, -cam.position.z);
     const near = 1 / (1 + Math.max(0, alt) / 3000);

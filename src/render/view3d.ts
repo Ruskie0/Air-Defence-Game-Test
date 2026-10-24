@@ -17,7 +17,7 @@ import { IDENT_COLOR } from '../ui/colors';
 import { CameraRig } from './camera';
 import { Effects } from './effects';
 import { type FrameEvents, WorldEvents } from './events';
-import { airModel, groundGeometry, interceptorModel } from './models';
+import { MODEL_LEN, airModel, groundGeometry, interceptorModel } from './models';
 import { Scenery, type SkyRig, buildScenery, buildSky, terrainSeed, updateHaze } from './terrain3d';
 import { WeatherView } from './weather';
 import { Wrecks } from './wrecks';
@@ -246,7 +246,11 @@ export class View3D {
       this.down = null;
       if (moved > 5) return;
       if (!this.onGroundClick) {
-        this.onEmptyClick();
+        const id = this.pickTrack(e.clientX, e.clientY);
+        if (id !== null) {
+          this.onSelect(id);
+          this.focusTrack(id);
+        } else this.onEmptyClick();
         return;
       }
       const p = this.pickGround(e.clientX, e.clientY);
@@ -258,6 +262,43 @@ export class View3D {
 
     window.addEventListener('resize', () => this.resize());
     this.resize();
+  }
+
+  /** The confirmed track drawn nearest a screen position, within 30 px. */
+  pickTrack(clientX: number, clientY: number): number | null {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    let best: number | null = null;
+    let bd = 30;
+    for (const [id, l] of this.trackLabels) {
+      const p = this.tmp.copy(l.obj.position).project(this.camera);
+      if (p.z > 1) continue;
+      const d = Math.hypot(r.left + ((p.x + 1) / 2) * r.width - clientX, r.top + ((1 - p.y) / 2) * r.height - clientY);
+      if (d < bd) {
+        bd = d;
+        best = id;
+      }
+    }
+    return best;
+  }
+
+  /** Fly in to a track and follow it: close enough to see the aircraft, keeping the current viewing direction. */
+  focusTrack(id: number): void {
+    const l = this.trackLabels.get(id);
+    if (!l) return;
+    const t = l.obj.position.clone();
+    const dir = this.tmp.copy(this.camera.position).sub(this.controls.target);
+    const dist = clamp(dir.length(), 900, 3000);
+    dir.normalize();
+    // Look from at least 15 degrees above the horizon.
+    if (dir.y < 0.26) {
+      dir.y = 0.26;
+      dir.normalize();
+    }
+    const pos = t.clone().addScaledVector(dir, dist);
+    const g = this.world.terrain.groundAt(pos.x, -pos.z);
+    if (pos.y < g + 80) pos.y = g + 80;
+    this.follow = true;
+    this.rig.flyTo(pos, t, 1);
   }
 
   /** Ground point under a screen position, in sim coordinates. */
@@ -609,8 +650,10 @@ export class View3D {
       const visible = this.isVisible(e);
       o.root.visible = visible;
       toThree(e.pos, o.root.position);
+      // Grow with distance so aircraft span about 1.2 degrees and munitions 0.8 on screen, never smaller than real.
       const d = camPos.distanceTo(o.root.position);
-      o.body.scale.setScalar(clamp(d / 1400, 1, 80));
+      const len = MODEL_LEN[e.recon ? 'recon' : e.kind] ?? (e.munition ? 6 : 16);
+      o.body.scale.setScalar(clamp((d * (e.munition ? 0.014 : 0.021)) / len, 1, 800));
       if (e.kind === 'helo') this.flyHelo(e, o, ev.simDt);
       else if (e.speed > 1) {
         this.tmp.set(e.pos.x + e.vel.x, e.pos.z + e.vel.z, -(e.pos.y + e.vel.y));
@@ -655,7 +698,7 @@ export class View3D {
       }
       toThree(m.pos, o.body.position);
       const d = camPos.distanceTo(o.body.position);
-      o.body.scale.setScalar(clamp(d / 1400, 1, 80));
+      o.body.scale.setScalar(clamp((d * 0.012) / 4, 1, 500));
       this.tmp.set(m.pos.x + m.vel.x, m.pos.z + m.vel.z, -(m.pos.y + m.vel.y));
       o.body.lookAt(this.tmp);
       setTrail(o.trail, m.trail, m.pos);
@@ -684,6 +727,7 @@ export class View3D {
         el.addEventListener('pointerdown', (ev) => {
           ev.stopPropagation();
           this.onSelect(tr.id);
+          this.focusTrack(tr.id);
         });
         const obj = new CSS2DObject(el);
         obj.center.set(-0.1, 0.5);

@@ -439,6 +439,24 @@ export function interceptorModel(code: string): THREE.Mesh {
   );
 }
 
+/** Overall length of each air model in metres, so View3D can keep every kind a readable size on screen. */
+export const MODEL_LEN: Record<string, number> = {
+  fighter: 16,
+  sead: 17,
+  strike: 21,
+  bomber: 42,
+  soj: 36,
+  airliner: 40,
+  recon: 10,
+  helo: 17,
+  drone: 3.5,
+  cruise: 6,
+  tbm: 12,
+  arm: 4.2,
+  bomb: 3.4,
+  atgm: 1.6,
+};
+
 /** Rough size of each kind, for wreck fires and crash effects (1 = a cruise missile). */
 export const WRECK_SIZE: Record<string, number> = {
   helo: 1.5,

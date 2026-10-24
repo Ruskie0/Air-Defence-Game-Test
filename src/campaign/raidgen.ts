@@ -44,7 +44,7 @@ export const PKG: Record<PkgKind, PkgDef> = {
     describe: (n) => `${n} one-way attack drones, low and slow`,
   },
   decoys: {
-    name: 'Decoy drones', cost: (n) => 1 + n * 0.3, minDay: 3, sectors: [0, 1, 2, 6, 7],
+    name: 'Decoy drones', cost: (n) => 2 + n * 0.5, minDay: 3, sectors: [0, 1, 2, 6, 7],
     size: (d, r) => Math.min(16, 6 + d + r.int(0, 3)),
     spawn: (w, b, n) => spawnDecoyDrones(w, n, b, 50000),
     describe: (n) => `${n} drones that our intel thinks are mostly unarmed decoys, sent to drain our missiles`,
@@ -118,7 +118,9 @@ export function planDay(day: number, seed: number, enemy: EnemyModel, firstId: n
     const affordable = kinds.filter((k) => PKG[k].cost(PKG[k].size(day, rng)) <= budget + 2);
     if (!affordable.length) break;
     // Weighted pick of a kind, then of an approach sector that kind can use.
-    const kind = pick(rng, affordable, (k) => enemy.kindW[k]);
+    // At most two decoy packages a day: they are there to thin out a real attack, not to be the attack.
+    const decoys = out.filter((p) => p.kind === 'decoys').length;
+    const kind = pick(rng, affordable, (k) => (k === 'decoys' && decoys >= 2 ? 0 : enemy.kindW[k]));
     const def = PKG[kind];
     const sector = (pick(rng, def.sectors, (s) => enemy.axisW[(s + k) % 8]) + k) % 8;
     const bearing = (sector * 45 + rng.range(-18, 18) + 360) % 360;
@@ -148,9 +150,9 @@ function pick<T>(rng: Rng, items: T[], weight: (x: T) => number): T {
   let r = rng.next() * total;
   for (const x of items) {
     r -= weight(x);
-    if (r <= 0) return x;
+    if (r <= 0 && weight(x) > 0) return x;
   }
-  return items[items.length - 1];
+  return items.filter((x) => weight(x) > 0).pop() ?? items[items.length - 1];
 }
 
 /** Turn a plan into scenario raids the world can run. */

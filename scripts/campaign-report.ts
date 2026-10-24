@@ -24,6 +24,7 @@ function shop(): string[] {
     ['MR', () => count('MR') < 2],
     ['SH', () => count('SH') < 3],
     ['CIWS', () => count('CIWS') < 3],
+    ['GUN', () => count('GUN') < 2],
     ['DECOY', () => count('DECOY') < 1 && c.s.day >= 4],
     ['MR', () => count('MR') < 3],
     ['SH', () => count('SH') < 4],
@@ -40,6 +41,7 @@ function shop(): string[] {
     if (c.replaceAircraft(u)) bought.push('replacement fighter');
   }
   const saving = c.unlocked('LR') && count('LR') < 1;
+  for (const id of ['pdfuze', 'hardened'] as const) if (!saving && c.s.money > 150 && c.upgrade(id)) bought.push(id);
   for (const u of c.units) if (!saving && (u.type === 'LR' || u.type === 'MR') && c.s.money > 250 && c.addLauncher(u)) bought.push(`launcher ${u.type}`);
   return bought;
 }

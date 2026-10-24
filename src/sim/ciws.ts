@@ -47,7 +47,7 @@ export interface GunSpec {
 export const GUNS: Record<GunKind, GunSpec> = {
   ciws: {
     kind: 'ciws', label: 'CIWS', rangeM: 2500, ammo: 1550, reloadS: 90, rof: 75, muzzle: 1100, slew: 115,
-    killRate: { drone: 1.6, cruise: 1.4, arm: 1.0, sead: 0.5, bomber: 0.3, fighter: 0.5 },
+    killRate: { drone: 1.6, cruise: 1.4, arm: 1.0, tbm: 0.8, sead: 0.5, bomber: 0.3, fighter: 0.5 },
   },
   gun35: {
     kind: 'gun35', label: 'Skyburst', rangeM: 4500, ammo: 240, reloadS: 45, rof: 18, muzzle: 1050, slew: 80,
@@ -181,8 +181,11 @@ export class Ciws {
     let tof = spec.muzzle ? R / spec.muzzle : 0;
     let p = this.est.pos;
     if (spec.muzzle) {
+      // A diving target reaches the ground first: aim a barrage just above the ground in its path.
+      const e = this.est;
+      const tHit = e.vel.z < -1 ? Math.max(0, (e.pos.z - w.terrain.groundAt(e.pos.x, e.pos.y) - 30) / -e.vel.z) : Infinity;
       for (let i = 0; i < 6; i++) {
-        p = addScaled(this.est.pos, this.est.vel, tof);
+        p = addScaled(e.pos, e.vel, Math.min(tof, tHit));
         const arg = K * dist(gun, p);
         tof = arg < 0.95 ? (Math.exp(arg) - 1) / (K * spec.muzzle) : 99;
       }

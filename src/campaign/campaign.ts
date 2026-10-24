@@ -451,7 +451,7 @@ export class Campaign {
     // Decoys work if they drew missiles.
     if (s.plan.some((p) => p.kind === 'decoys')) {
       const n = w.stats.decoyMissiles;
-      s.enemy.kindW.decoys = clamp(s.enemy.kindW.decoys * (n >= 4 ? 1.3 : n >= 2 ? 1 : 0.8));
+      s.enemy.kindW.decoys = Math.min(2, clamp(s.enemy.kindW.decoys * (n >= 4 ? 1.2 : n >= 2 ? 1 : 0.8)));
       if (n >= 2) lessons.push(`We spent ${n} missiles on decoy drones. The enemy will send more of them.`);
     }
     const dayLen = Math.max(1, w.t);

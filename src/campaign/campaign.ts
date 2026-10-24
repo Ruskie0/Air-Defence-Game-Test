@@ -254,7 +254,7 @@ export class Campaign {
   }
 
   /** Add a unit at the first free default spot (the player moves it afterwards). */
-  private add(type: UnitType): DeployedUnit {
+  add(type: UnitType): DeployedUnit {
     const t = this.terrain;
     // Default spots are laid out for a threat from the north: turn them to face this map's mountains.
     const spots = DEFAULT_SPOTS[type].map(([u, v]) => t.toWorld(u, v));

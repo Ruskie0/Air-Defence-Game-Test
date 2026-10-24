@@ -395,9 +395,10 @@ export class View3D {
     return o;
   }
 
-  private buildSites(): void {
+  /** Models for the world's sites from index `from` on (units that arrive mid-battle are added later). */
+  private buildSites(from = 0): void {
     const w = this.world;
-    for (const s of w.sites) {
+    for (const s of w.sites.slice(from)) {
       const root = new THREE.Group();
       const ground = w.terrain.groundAt(s.pos.x, s.pos.y);
       root.position.set(s.pos.x, ground, -s.pos.y);
@@ -729,6 +730,8 @@ export class View3D {
       s.label.visible = this.showLabels && s.site.kind !== 'launcher';
     }
     this.coverage.visible = this.showCoverage;
+    // Reinforcements arrived (Last Stand): build their models.
+    if (this.siteObjs.length < this.world.sites.length) this.buildSites(this.siteObjs.length);
     // A unit moved during the battle: redraw the rings.
     if (this.world.layoutSeq !== this.coverageSeq) {
       this.clearCoverage();

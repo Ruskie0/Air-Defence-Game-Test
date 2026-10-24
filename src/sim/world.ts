@@ -107,7 +107,7 @@ export class World {
   readonly weatherId: WeatherId;
   readonly weather: Weather;
   /** Support calls budget ($M) and what has been spent from it. */
-  readonly budgetM: number;
+  budgetM: number;
   supportSpentM = 0;
   /** The quick reaction alert pair has been scrambled this battle. */
   qraUsed = false;
@@ -328,6 +328,18 @@ export class World {
     if (f.radar && u.armWatch) f.radar.armWatch = true;
     this.fielded.push(f);
     return f;
+  }
+
+  /** A unit that arrives during the battle (Last Stand reinforcements): field it as the constructor would. */
+  reinforce(u: DeployedUnit): void {
+    const n = this.sites.length;
+    const f = this.field(u);
+    if (f.radar && f.radar.spec.freqGHz >= 8) f.radar.wxLoss = Math.pow(10, this.weather.radarLossDb / 10);
+    for (const s of this.sites.slice(n)) {
+      s.vuln *= this.mods.damageMult;
+      this.startHp.set(s.name, s.hp);
+    }
+    this.layoutSeq++;
   }
 
   /** Launch the quick reaction alert pair from the airbase, on station 20 km out towards the enemy. */

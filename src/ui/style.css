@@ -794,3 +794,56 @@ td.link {
     top: 52px;
   }
 }
+
+/* Last Stand: the reinforcement pick between waves and the final result. */
+#stand {
+  left: 50%;
+  top: 64px;
+  transform: translateX(-50%);
+  width: 620px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 12px;
+  z-index: 7;
+  border-color: var(--accent);
+  box-shadow: 0 0 18px rgba(120, 255, 170, 0.15);
+}
+#stand .coach-h {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+}
+#stand .ok {
+  color: var(--accent);
+}
+#stand p {
+  margin: 6px 0 8px;
+  line-height: 1.45;
+}
+#stand .coach-b {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+#stand .cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+#stand .cards button {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  padding: 8px;
+  white-space: normal;
+}
+#stand .cards small {
+  color: var(--dim);
+  line-height: 1.35;
+}
+@media (max-width: 640px) {
+  #stand .cards {
+    grid-template-columns: 1fr;
+  }
+}

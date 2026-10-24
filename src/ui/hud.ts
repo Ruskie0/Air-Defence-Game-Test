@@ -32,6 +32,8 @@ export class Hud {
   private w: World;
   /** Campaign mode hides the sandbox spawn panel and offers to end the day once the raids are over. */
   campaign: { day: number; days: number; objectives: DayObjective[]; onEndDay: () => void } | null = null;
+  /** Last Stand: the wave counter and best score in the top bar. */
+  stand: { wave: number; best: number } | null = null;
   private readonly view: View3D;
   private readonly ppi: Ppi;
   private readonly ctl: GameControl;
@@ -66,7 +68,7 @@ export class Hud {
     this.cache.clear();
     this.lastLogLen = -1;
     this.clearSelection();
-    $('spawn').hidden = !!this.campaign;
+    $('spawn').hidden = !!this.campaign || !!this.stand;
   }
 
   private set(id: string, html: string): void {
@@ -403,7 +405,11 @@ export class Hud {
     const w = this.w;
     const r = w.scenario.next;
     const total = w.scenario.raids.length;
-    const day = this.campaign ? `<span class="lbl">DAY</span><b>${this.campaign.day}</b><span class="dim">/${this.campaign.days}</span> ` : '';
+    const day = this.campaign
+      ? `<span class="lbl">DAY</span><b>${this.campaign.day}</b><span class="dim">/${this.campaign.days}</span> `
+      : this.stand
+        ? `<span class="lbl">WAVE</span><b>${this.stand.wave}</b><span class="dim">best ${this.stand.best}</span> `
+        : '';
     if (!r) {
       const clear = w.scenario.done;
       this.set(
@@ -415,7 +421,7 @@ export class Hud {
       return;
     }
     const n = w.scenario.raids.filter((x) => x.launched).length;
-    if (this.campaign) {
+    if (this.campaign || this.stand) {
       // Only reported packages are known in advance.
       const known = w.scenario.raids.filter((x) => !x.launched && !x.unreported);
       const k = known[0];

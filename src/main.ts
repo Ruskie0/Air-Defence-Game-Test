@@ -9,6 +9,8 @@ import { GameControl, Hud } from './ui/hud';
 import { Ppi } from './ui/ppi';
 import { Tutorial } from './ui/tutorial';
 import { WEATHER, WeatherId } from './campaign/weather';
+import { LastStand } from './campaign/laststand';
+import { StandUi } from './ui/laststand-ui';
 
 const params = new URLSearchParams(location.search);
 const seed = Number(params.get('seed')) || MAP_SEED;
@@ -35,6 +37,9 @@ let world = backdrop();
 let running = false;
 /** The training mission's coach, while one is running. */
 let tutorial: Tutorial | null = null;
+/** The Last Stand run and its panel, while one is on. */
+let stand: LastStand | null = null;
+let standUi: StandUi | null = null;
 const view = new View3D(document.getElementById('view')!, world);
 const ppi = new Ppi(document.getElementById('ppi') as HTMLCanvasElement, world);
 const ctl: GameControl = { speed: Number(params.get('speed')) || 1, paused: false };
@@ -69,6 +74,7 @@ const cui = new CampaignUi({
   },
   toMenu() {
     endTraining();
+    endStand();
     running = false;
     hud.campaign = null;
     show(backdrop());
@@ -76,10 +82,12 @@ const cui = new CampaignUi({
   },
   startSandbox,
   startTraining,
+  startLastStand,
 });
 
 function startSandbox(type?: MapType): void {
   endTraining();
+  endStand();
   hud.campaign = null;
   terrain = sandboxTerrain(type);
   const wx = params.get('weather');
@@ -95,6 +103,7 @@ function startSandbox(type?: MapType): void {
 /** The guided training battle: the campaign's starting units plus an early warning radar, on a fixed map. */
 function startTraining(): void {
   endTraining();
+  endStand();
   hud.campaign = null;
   const c = Campaign.create(424242, 'normal', 'coastal');
   c.buy('EWR');
@@ -117,6 +126,39 @@ function startTraining(): void {
   });
 }
 
+/** Last Stand: endless waves on a new map, a reinforcement pick after each. */
+function startLastStand(type?: MapType): void {
+  endTraining();
+  endStand();
+  hud.campaign = null;
+  const st = new LastStand(params.has('seed') ? seed : Math.floor(Math.random() * 1e6) + 1, type);
+  stand = st;
+  hud.stand = st;
+  show(st.w);
+  hud.setWorld(st.w);
+  ctl.paused = false;
+  ctl.speed = Math.max(ctl.speed, 2);
+  running = true;
+  document.body.dataset.mode = 'battle';
+  view.setView('defended');
+  standUi = new StandUi(st, ctl, {
+    again: () => startLastStand(type),
+    menu: () => {
+      endStand();
+      running = false;
+      show(backdrop());
+      cui.showMenu();
+    },
+  });
+}
+
+function endStand(): void {
+  standUi?.close();
+  standUi = null;
+  stand = null;
+  hud.stand = null;
+}
+
 function endTraining(): void {
   tutorial?.close();
   tutorial = null;
@@ -126,6 +168,7 @@ function endTraining(): void {
 const mode = params.get('mode');
 if (mode === 'sandbox') startSandbox();
 else if (mode === 'training') startTraining();
+else if (mode === 'laststand') startLastStand();
 else if (mode === 'campaign') {
   const saved = params.has('seed') ? null : loadSaved();
   if (saved) cui.continueCampaign(saved);
@@ -141,6 +184,9 @@ else if (mode === 'campaign') {
   hud,
   ctl,
   cui,
+  get stand() {
+    return stand;
+  },
 };
 
 const MAX_STEPS_PER_FRAME = 64;
@@ -165,6 +211,7 @@ function frame(now: number): void {
   ppi.draw();
   if (running) hud.update();
   tutorial?.update();
+  if (running && stand?.update()) standUi?.render();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

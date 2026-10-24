@@ -1,3 +1,4 @@
+import { loadBest } from '../campaign/laststand';
 import { CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty } from '../campaign/campaign';
 import type { View3D } from '../render/view3d';
 import { CATALOG, DeployedUnit, RANKS, UnitType, rankOf } from '../sim/catalog';
@@ -31,6 +32,7 @@ export interface CampaignHost {
   /** Start the sandbox on a new map (of this type, or a random one). */
   startSandbox(type?: MapType): void;
   startTraining(): void;
+  startLastStand(type?: MapType): void;
 }
 
 /** Saved campaign in this browser, if any. Storage can be unavailable, so every access is guarded. */
@@ -85,6 +87,7 @@ export class CampaignUi {
     this.stopPlacing();
     document.body.dataset.mode = 'menu';
     const saved = loadSaved();
+    const best = loadBest();
     $('menu-body').innerHTML = `
       <h2>AIR DEFENCE</h2>
       <p>Command the integrated air defence of an airbase, its command and reporting centre (CRC) and a power plant. Every radar, missile and gun round is simulated.</p>
@@ -105,6 +108,10 @@ export class CampaignUi {
             ? `<button data-cui="continue" class="big"><b>Continue campaign</b><small>Day ${saved.s.day} of ${CAMPAIGN_DAYS}, budget ${money(saved.s.money)}, ${saved.units.length} units deployed.</small></button>`
             : ''
         }
+        <button data-cui="laststand" class="big">
+          <b>Last Stand</b>
+          <small>One battle against endless waves that grow each time. Hold a wave, pick one of three reinforcements, go again. How long can the airbase last?${best ? ` Your best: ${best} wave${best === 1 ? '' : 's'}.` : ''}</small>
+        </button>
         <button data-cui="sandbox" class="big">
           <b>Sandbox</b>
           <small>A fully equipped defence against six scripted raids on a new map, with a panel to spawn any threat. Good for learning the systems.</small>
@@ -427,6 +434,9 @@ export class CampaignUi {
         return;
       case 'training':
         this.host.startTraining();
+        return;
+      case 'laststand':
+        this.host.startLastStand(this.mapPick);
         return;
       case 'map':
         this.mapPick = (d.map || undefined) as MapType | undefined;

@@ -69,7 +69,7 @@ export class SoundEngine {
   private ui!: GainNode;
   private white!: AudioBuffer;
   private brown!: AudioBuffer;
-  private loops!: { jet: Loop; drone: Loop; cruise: Loop; ciws: Loop; wind: Loop; rain: Loop };
+  private loops!: { jet: Loop; drone: Loop; cruise: Loop; ciws: Loop; wind: Loop; rain: Loop; helo: Loop };
   private jetFilter!: BiquadFilterNode;
   private droneOsc: OscillatorNode[] = [];
   private cruiseFilter!: BiquadFilterNode;
@@ -289,7 +289,7 @@ export class SoundEngine {
     const ctx = this.ctx!;
     const t = ctx.currentTime;
     const mk = (): Loop => new Loop(ctx, this.sfx);
-    this.loops = { jet: mk(), drone: mk(), cruise: mk(), ciws: mk(), wind: mk(), rain: mk() };
+    this.loops = { jet: mk(), drone: mk(), cruise: mk(), ciws: mk(), wind: mk(), rain: mk(), helo: mk() };
 
     // Jet: broadband roar with a low rumble and a little turbine hiss.
     const L = this.loops;
@@ -349,6 +349,16 @@ export class SoundEngine {
     g2.connect(this.gain(0.3)).connect(gust.gain);
     g2.start(t);
     this.noise(this.brown, t).connect(this.filter('lowpass', 650)).connect(gust).connect(L.wind.input);
+
+    // Attack helicopter: the thump of the blades over a turbine whine.
+    const slap = this.gain(0.5);
+    const blade = ctx.createOscillator();
+    blade.type = 'sawtooth';
+    blade.frequency.value = 19;
+    blade.connect(this.gain(0.5)).connect(slap.gain);
+    blade.start(t);
+    this.noise(this.brown, t).connect(this.filter('lowpass', 500)).connect(slap).connect(L.helo.input);
+    this.noise(this.white, t).connect(this.filter('bandpass', 2400, 3)).connect(this.gain(0.05)).connect(L.helo.input);
 
     // Rain: a soft broadband hiss with a little low patter.
     this.noise(this.white, t).connect(this.filter('bandpass', 2600, 0.4)).connect(L.rain.input);
@@ -516,8 +526,14 @@ export class SoundEngine {
     let jet: { e: Entity; s: Spatial } | null = null;
     let drone: { e: Entity; s: Spatial } | null = null;
     let cruise: { e: Entity; s: Spatial } | null = null;
+    let helo: Spatial | null = null;
     for (const e of w.entities) {
       if (!e.alive || !visible(e)) continue;
+      if (e.kind === 'helo') {
+        const s = this.spatialSim(cam, e.pos, 1600, speed);
+        if (!helo || s.gain > helo.gain) helo = s;
+        continue;
+      }
       const ref = JET[e.kind] ?? (e.kind === 'drone' ? 1100 : e.kind === 'cruise' || e.kind === 'arm' ? 1500 : 0);
       if (!ref) continue;
       const s = this.spatialSim(cam, e.pos, ref, speed);
@@ -538,6 +554,7 @@ export class SoundEngine {
       this.droneOsc[1].frequency.setTargetAtTime(210 * f, t, 0.1);
     }
     L.cruise.set(cruise?.s ?? null, 0.7, 0.15);
+    L.helo.set(helo, 0.9, 0.15);
     if (cruise) this.cruiseFilter.frequency.setTargetAtTime(2300 * this.doppler(cam, cruise.e), t, 0.1);
 
     let gun: Spatial | null = null;

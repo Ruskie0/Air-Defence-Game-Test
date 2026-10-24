@@ -586,6 +586,18 @@ export class View3D {
     return o;
   }
 
+  /** Helicopters face their heading even in a hover, dip the nose with speed, and spin their rotors. */
+  private flyHelo(e: Entity, o: EntityObj, dt: number): void {
+    const hdg = ((e as { hdg?: number }).hdg ?? 0) * DEG;
+    this.tmp.set(e.pos.x + Math.sin(hdg), e.pos.z, -(e.pos.y + Math.cos(hdg)));
+    o.body.lookAt(this.tmp);
+    o.body.rotateX(0.14 * clamp(e.speed / 70, 0, 1.2));
+    const rotor = o.body.getObjectByName('rotor');
+    if (rotor) rotor.rotation.y += dt * 30;
+    const tail = o.body.getObjectByName('tailrotor');
+    if (tail) tail.rotation.x += dt * 140;
+  }
+
   private syncEntities(ev: FrameEvents): void {
     const w = this.world;
     const seen = new Set<number>();
@@ -599,7 +611,8 @@ export class View3D {
       toThree(e.pos, o.root.position);
       const d = camPos.distanceTo(o.root.position);
       o.body.scale.setScalar(clamp(d / 1400, 1, 80));
-      if (e.speed > 1) {
+      if (e.kind === 'helo') this.flyHelo(e, o, ev.simDt);
+      else if (e.speed > 1) {
         this.tmp.set(e.pos.x + e.vel.x, e.pos.z + e.vel.z, -(e.pos.y + e.vel.y));
         o.body.lookAt(this.tmp);
       }

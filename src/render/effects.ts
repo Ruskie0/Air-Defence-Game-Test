@@ -415,20 +415,22 @@ export class Effects {
       if (!e.alive || !visible(e)) continue;
       const contrail = CONTRAIL_KINDS.has(e.kind) && e.pos.z > 7800;
       const tbm = e.kind === 'tbm' && e.pos.z < 70000 && e.speed > 900;
-      if (!contrail && !tbm) continue;
+      const atgm = e.kind === 'atgm';
+      if (!contrail && !tbm && !atgm) continue;
       const key = -e.id;
       seen.add(key);
       const x = e.pos.x;
       const y = e.pos.z;
       const z = -e.pos.y;
       if (tbm) this.fire.spawn({ x, y, z, life: Math.max(0.05, dt * 1.5), size0: 14, size1: 14, c0: [12, 6, 2.5], minPx: 4, windK: 0 });
+      if (atgm) this.fire.spawn({ x, y, z, life: Math.max(0.05, dt * 1.5), size0: 1.2, size1: 1.2, c0: [12, 7, 3], minPx: 2.5, windK: 0 });
       const last = this.lastEmit.get(key);
       if (!last) {
         this.lastEmit.set(key, { x, y, z });
         continue;
       }
       const seg = Math.hypot(x - last.x, y - last.y, z - last.z);
-      const spacing = Math.max(tbm ? 150 : 70, seg / 10);
+      const spacing = Math.max(tbm ? 150 : atgm ? 8 : 70, seg / 10);
       const n = Math.floor(seg / spacing);
       if (n === 0) continue;
       for (let k = 1; k <= n; k++) {
@@ -437,10 +439,10 @@ export class Effects {
           x: last.x + (x - last.x) * f,
           y: last.y + (y - last.y) * f,
           z: last.z + (z - last.z) * f,
-          life: tbm ? 20 : 70,
-          size0: tbm ? 10 : 6,
-          size1: tbm ? 50 : 75,
-          alpha: tbm ? 0.3 : 0.32,
+          life: tbm ? 20 : atgm ? 6 : 70,
+          size0: tbm ? 10 : atgm ? 1.5 : 6,
+          size1: tbm ? 50 : atgm ? 9 : 75,
+          alpha: tbm ? 0.3 : atgm ? 0.5 : 0.32,
           c0: [0.98, 0.98, 1],
           c1: [0.9, 0.92, 0.96],
           drag: 0.2,
@@ -497,10 +499,42 @@ export class Effects {
     }
   }
 
+  /** A low helicopter's rotor wash kicks up a ring of dust below it. */
+  private downwash(w: World, e: Entity, dt: number): void {
+    const g = w.terrain.groundAt(e.pos.x, e.pos.y);
+    const agl = e.pos.z - g;
+    if (agl > 60 || g <= 0.5) return;
+    const k = 1 - agl / 60;
+    const n = Math.round(dt * 8 * k + rnd());
+    for (let i = 0; i < n; i++) {
+      const a = rnd() * Math.PI * 2;
+      const r = 6 + rnd() * 10;
+      this.puff({
+        x: e.pos.x + Math.cos(a) * r,
+        y: g + 1.5,
+        z: -e.pos.y + Math.sin(a) * r,
+        vx: Math.cos(a) * 9,
+        vy: 0.5 + rnd(),
+        vz: Math.sin(a) * 9,
+        life: 3 + rnd() * 3,
+        size0: 5,
+        size1: 24 + rnd() * 12,
+        alpha: 0.32 * k,
+        c0: [0.5, 0.45, 0.35],
+        c1: [0.6, 0.57, 0.5],
+        drag: 0.5,
+      });
+    }
+  }
+
   /** Jets at treetop height whip up a thin trail of dust and leaves behind them. */
   private lowFlyers(w: World, dt: number, visible: (e: Entity) => boolean): void {
     if (dt <= 0) return;
     for (const e of w.entities) {
+      if (e.kind === 'helo' && e.alive && visible(e)) {
+        this.downwash(w, e, dt);
+        continue;
+      }
       if (!e.alive || e.munition || e.speed < 180 || !visible(e)) continue;
       const g = w.terrain.groundAt(e.pos.x, e.pos.y);
       const agl = e.pos.z - g;

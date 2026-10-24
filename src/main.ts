@@ -2,6 +2,7 @@ import { Tempo } from './sim/tempo';
 import './ui/style.css';
 import { CAMPAIGN_DAYS, Campaign } from './campaign/campaign';
 import { View3D } from './render/view3d';
+import { IDLE_FPS, gfx } from './render/gfx';
 import { DT } from './sim/constants';
 import { MAP_TYPE_LIST, MapType, Terrain, typeForSeed } from './sim/terrain';
 import { MAP_SEED, World } from './sim/world';
@@ -42,6 +43,7 @@ let tutorial: Tutorial | null = null;
 let stand: LastStand | null = null;
 let standUi: StandUi | null = null;
 const view = new View3D(document.getElementById('view')!, world);
+gfx.mount();
 const ppi = new Ppi(document.getElementById('ppi') as HTMLCanvasElement, world);
 const ctl: GameControl = { speed: Number(params.get('speed')) || 1, paused: false, skipQuiet: params.get('skipquiet') !== '0' };
 const hud = new Hud(world, view, ppi, ctl);
@@ -196,8 +198,20 @@ const tempo = new Tempo();
 const MAX_STEPS_PER_FRAME = 64;
 let acc = 0;
 let last = performance.now();
+let nextDraw = 0;
+/** Last pointer, wheel or key input: the camera may be moving, so idle screens draw at the full rate for a moment. */
+let lastInput = 0;
+for (const ev of ['pointerdown', 'pointermove', 'wheel', 'keydown']) window.addEventListener(ev, () => (lastInput = performance.now()), { passive: true, capture: true });
 
 function frame(now: number): void {
+  requestAnimationFrame(frame);
+  // Frame-rate cap (Graphics menu), and a lower rate while nothing moves: paused, in menus or planning.
+  const idle = (!running || ctl.paused) && now - lastInput > 1000;
+  const fps = idle ? Math.min(IDLE_FPS, gfx.fps || IDLE_FPS) : gfx.fps;
+  if (fps) {
+    if (now < nextDraw - 1) return;
+    nextDraw = Math.max(nextDraw + 1000 / fps, now);
+  }
   const real = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (running && !ctl.paused) {
@@ -221,6 +235,5 @@ function frame(now: number): void {
   if (running) hud.update();
   tutorial?.update();
   if (running && stand?.update()) standUi?.render();
-  requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

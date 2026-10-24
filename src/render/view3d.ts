@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
+import { gfx } from './gfx';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -191,12 +192,14 @@ export class View3D {
   private readonly selRing: THREE.Sprite;
   private readonly siteRing: THREE.Sprite;
   private readonly tmp = new THREE.Vector3();
+  private sceneryRes = 1;
 
   constructor(container: HTMLElement, world: World) {
     this.container = container;
     this.world = world;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // No canvas antialiasing: the scene is drawn off-screen and multisampled there (see the composer below).
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, gfx.spec.pixelRatio));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.9;
     container.appendChild(this.renderer.domElement);
@@ -228,10 +231,12 @@ export class View3D {
     this.weather.apply(world, this.terrainMesh, this.fx);
 
     // The composer renders off-screen, so the canvas's own antialiasing does not apply: multisample the target.
-    this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+    this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: gfx.spec.samples }));
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.55, 0.5, 1.6);
+    this.bloom.enabled = gfx.spec.bloom;
     this.composer.addPass(this.bloom);
+    gfx.onChange(() => this.applyGraphics());
     this.composer.addPass(new OutputPass());
 
     this.selRing = new THREE.Sprite(new THREE.SpriteMaterial({ map: MARKERS.sel, depthTest: false, transparent: true }));
@@ -289,6 +294,17 @@ export class View3D {
   }
 
   /** Fly in to a track and follow it: close enough to see the aircraft, keeping the current viewing direction. */
+  /** Fly the camera to look down on a ground position (sim x, y) from about 2.5 km off, keeping the bearing. */
+  flyToGround(x: number, y: number): void {
+    const t = new THREE.Vector3(x, this.world.terrain.groundAt(x, y), -y);
+    const dir = this.tmp.copy(this.camera.position).sub(this.controls.target).setY(0);
+    if (dir.lengthSq() < 1) dir.set(0, 0, 1);
+    dir.normalize().multiplyScalar(0.8).setY(0.6).normalize();
+    const pos = t.clone().addScaledVector(dir, 2500);
+    this.follow = false;
+    this.rig.flyTo(pos, t, 1);
+  }
+
   focusTrack(id: number): void {
     const l = this.trackLabels.get(id);
     if (!l) return;
@@ -386,6 +402,26 @@ export class View3D {
     this.weather.apply(w, this.terrainMesh, this.fx);
   }
 
+  /** The graphics quality changed: resolution, antialiasing, bloom, scatter density and the terrain mesh. */
+  private applyGraphics(): void {
+    const q = gfx.spec;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, q.pixelRatio));
+    for (const rt of [this.composer.renderTarget1, this.composer.renderTarget2]) {
+      if (rt.samples !== q.samples) {
+        rt.samples = q.samples;
+        rt.dispose();
+      }
+    }
+    this.bloom.enabled = q.bloom;
+    if (q.terrain !== this.sceneryRes) {
+      this.scenery.dispose();
+      this.buildTerrain();
+      this.clearedKey = '';
+      this.weather.apply(this.world, this.terrainMesh, this.fx);
+    } else this.scenery.setDensity(q.scatter);
+    this.resize();
+  }
+
   resize(): void {
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
@@ -420,7 +456,9 @@ export class View3D {
   }
 
   private buildTerrain(): void {
-    this.scenery = buildScenery(this.scene, this.world.terrain, terrainSeed(this.world.terrain, MAP_SEED));
+    this.sceneryRes = gfx.spec.terrain;
+    this.scenery = buildScenery(this.scene, this.world.terrain, terrainSeed(this.world.terrain, MAP_SEED), this.sceneryRes);
+    this.scenery.setDensity(gfx.spec.scatter);
     this.sceneryTerrain = this.world.terrain;
     this.rig.limit = this.world.terrain.half * 0.95;
     this.controls.maxDistance = 420000 * Math.max(1, this.world.terrain.half / 80000);

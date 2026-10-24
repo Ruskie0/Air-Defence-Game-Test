@@ -112,7 +112,7 @@ export function newEnemy(rot = 0): EnemyModel {
 }
 
 /** Threat points the enemy can spend on a given day. */
-export const threatBudget = (day: number, scale = 1): number => (8 + day * 7) * scale;
+export const threatBudget = (day: number, scale = 1): number => (8 + day * 10.5) * scale;
 
 /**
  * Build a day's raid plan from the enemy's budget and what it has learned. Package sectors are listed

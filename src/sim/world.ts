@@ -223,7 +223,7 @@ export class World {
       });
       const info = CATALOG[type];
       const rank = rankOf(u.xp);
-      const reloadS = info.reloadS! * this.mods.reloadMult * (1 - 0.1 * rank);
+      const reloadS = info.reloadS! * this.mods.reloadMult * (1 - 0.07 * rank);
       const fu = new FireUnit(type, id.code, u.uid, id.name, missile, r, launchers, info.channels!, reloadS, type === 'MR');
       fu.spares = u.spares;
       fu.hold = !!u.holdFire;
@@ -478,7 +478,7 @@ export class World {
     if (tr) tr.kaUntil = this.t + 5;
     const label = tr?.label ?? tgt.name;
     // Experienced crews squeeze a kill out of some near misses.
-    if (!kill && m.fu && m.fu.rank > 0 && this.rng.chance(0.12 * m.fu.rank)) kill = true;
+    if (!kill && m.fu && m.fu.rank > 0 && this.rng.chance(0.08 * m.fu.rank)) kill = true;
     if (kill) this.killEntity(tgt, `${m.spec.name} (${label}, miss ${miss.toFixed(0)} m)`, m.unit);
     else this.log(`${m.spec.name} detonated ${miss.toFixed(0)} m from ${label}: target survived`, 'engage');
   }

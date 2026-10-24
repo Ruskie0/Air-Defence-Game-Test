@@ -559,6 +559,16 @@ export class Effects {
         this.puff({ x, y: g + 2, z: -y, vx: sym(1.5), vy: 1, vz: sym(1.5), life: 8 + rnd() * 4, size0: 8, size1: 40, alpha: 0.28, c0: [0.55, 0.49, 0.38], c1: [0.62, 0.59, 0.52], windK: 0.6 });
         continue;
       }
+      if (e.kind === 'column' && e.alive && e.speed > 1 && visible(e) && rnd() < dt * 6) {
+        // Tracks churn up dust all along the column, thickest behind the tail.
+        const sp = e.speed;
+        const back = 20 + rnd() * 170;
+        const x = e.pos.x - (e.vel.x / sp) * back;
+        const y = e.pos.y - (e.vel.y / sp) * back;
+        const g = w.terrain.groundAt(x, y);
+        this.puff({ x, y: g + 2, z: -y, vx: sym(2), vy: 1.2, vz: sym(2), life: 10 + rnd() * 5, size0: 10, size1: 55, alpha: 0.3, c0: [0.55, 0.49, 0.38], c1: [0.62, 0.59, 0.52], windK: 0.6 });
+        continue;
+      }
       if (e.kind === 'helo' && e.alive && visible(e)) {
         this.downwash(w, e, dt);
         continue;

@@ -279,17 +279,12 @@ export function assignBases(plan: PlannedPkg[], bases: EnemyBase[], sorties = ne
     const per = p.kind === 'decoys' ? 0.5 : 1;
     const free = (b: EnemyBase): number => avail(b, a) - (AIRCRAFT.includes(a) ? sorties.get(`${b.id}:${a}`) ?? 0 : 0);
     const cands = bases.filter((b) => free(b) >= per);
-    if (!cands.length) {
-      if (typeof process !== 'undefined' && process.env?.TRIM_LOG) console.log(`DROP ${p.kind} ${p.size}`);
-      continue;
-    }
+    if (!cands.length) continue;
     const near = p.origin ?? null;
     const score = (b: EnemyBase): number =>
       near ? Math.hypot(b.x - near.x, b.y - near.y) : Math.abs(wrap180(bearingDeg(v3(), v3(b.x, b.y)) - p.bearing)) * 1000 - Math.min(free(b), p.size * per) * 5000;
     const b = cands.sort((x, y) => score(x) - score(y))[0];
-    const want = p.size;
     p.size = Math.max(1, Math.min(p.size, Math.floor(free(b) / per)));
-    if (typeof process !== 'undefined' && process.env?.TRIM_LOG && p.size < want) console.log(`TRIM ${p.kind} ${want}->${p.size} at ${b.id}`);
     p.base = b.id;
     p.from = { x: b.x, y: b.y };
     if (AIRCRAFT.includes(a)) sorties.set(`${b.id}:${a}`, (sorties.get(`${b.id}:${a}`) ?? 0) + p.size);

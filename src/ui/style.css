@@ -908,6 +908,24 @@ li.warn {
   font-size: 11px;
   color: var(--dim);
 }
+#clock .rate {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: #08140e;
+  background: var(--accent);
+}
+#clock .rate.auto {
+  background: #ffb84d;
+}
+#clock .rate.paused {
+  background: #ff6b6b;
+}
+#log .log-fly {
+  padding: 0 6px;
+  font-size: 11px;
+}
 
 .enemy-oob .eb {
   display: grid;

@@ -15,7 +15,7 @@ import { World } from '../sim/world';
 import { doctrineOf, pickDoctrine } from './doctrine';
 import { award, battleMedals } from './medals';
 import { EnemyModel, PKG, PkgKind, PlannedPkg, SECTOR_NAMES, assignBases, newEnemy, planDay, refundBases, sectorOf, sortiesOf, toRaids } from './raidgen';
-import { ASSAULT_HOLD, FrontState, OFFENSIVE_COST_M, TAKEN_HP, TOWN_THREAT_CUT, assaultSpot, deployZones, frontTown, newFront, nextObjective, townIncome, townsHeld } from './front';
+import { ASSAULT_HOLD, FrontState, OFFENSIVE_COST_M, TAKEN_HP, TOWN_THREAT_CUT, assaultSpot, columnStart, deployZones, frontTown, newFront, nextObjective, townIncome, townsHeld } from './front';
 import { type Asset, type EnemyBase, TALLY_ASSET, assetCount, avail, draw, fallBack, makeTheatre, overrun, reinforce } from '../sim/theatre';
 import { Rng } from '../sim/rng';
 import { DeployZone, inZones } from '../sim/deploy';
@@ -619,7 +619,7 @@ export class Campaign {
     const off = f && f.offensive !== null ? f.towns[f.offensive] : null;
     return new World({
       towns: f?.towns.filter((t) => t.ours).map((t) => ({ name: t.name, x: t.x, y: t.y, hp: t.hp })),
-      assault: off ? { ...assaultSpot(this.terrain, f!, f!.offensive!), target: off.name } : undefined,
+      assault: off ? { ...assaultSpot(this.terrain, f!, f!.offensive!), target: off.name, from: columnStart(this.terrain, f!, f!.offensive!) } : undefined,
       zones: this.zones,
       seed: this.s.seed * 31 + this.s.day,
       terrain: this.terrain,
@@ -742,7 +742,9 @@ export class Campaign {
       if (f.offensive !== null) {
         const tn = f.towns[f.offensive];
         const hp = Math.round(w.site('Assault force')?.hp ?? 0);
-        if (hp >= ASSAULT_HOLD && (fallen < 0 || fallen > f.offensive)) {
+        // The column has to reach its start line first; then the force has to hold.
+        const arrived = !w.column || w.assaultOutcome === 'arrived';
+        if (hp >= ASSAULT_HOLD && arrived && (fallen < 0 || fallen > f.offensive)) {
           tn.ours = true;
           tn.hp = TAKEN_HP;
           frontLines.push(`The assault force held (${hp}%) and took ${tn.name}: +$${tn.incomeM}M a day, and units can now deploy round it.`);
@@ -755,7 +757,7 @@ export class Campaign {
             }
           });
         } else {
-          frontLines.push(`The offensive on ${tn.name} failed: the assault force was ${hp > 0 ? `down to ${hp}%` : 'destroyed'}.`);
+          frontLines.push(`The offensive on ${tn.name} failed: ${hp > 0 && !arrived ? 'the assault column never reached its start line' : `the assault force was ${hp > 0 ? `down to ${hp}%` : 'destroyed'}`}.`);
         }
       }
       // Units left outside the ground we hold pull back overnight.

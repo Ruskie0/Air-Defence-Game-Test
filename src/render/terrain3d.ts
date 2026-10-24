@@ -533,11 +533,13 @@ export interface Scenery {
   /** Hide trees and buildings within r metres of a sim position, so units placed there stay visible. */
   clearAround(x: number, y: number, r: number): void;
   update(dt: number): void;
+  /** Draw this share (0 to 1) of the scattered trees and buildings. */
+  setDensity(k: number): void;
   /** Remove everything from the scene and free GPU memory, before building a new map. */
   dispose(): void;
 }
 
-export function buildScenery(parent: THREE.Scene, t: Terrain, seed: number): Scenery {
+export function buildScenery(parent: THREE.Scene, t: Terrain, seed: number, res = 1): Scenery {
   const scene = new THREE.Group();
   parent.add(scene);
   const lc = new LandCover(t, seed);
@@ -554,7 +556,7 @@ export function buildScenery(parent: THREE.Scene, t: Terrain, seed: number): Sce
   const detail = detailTexture();
 
   const size = t.half * 2;
-  const seg = t.n - 1;
+  const seg = Math.max(32, Math.round((t.n - 1) * res));
   const geo = new THREE.PlaneGeometry(size, size, seg, seg);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.getAttribute('position') as THREE.BufferAttribute;
@@ -610,15 +612,18 @@ export function buildScenery(parent: THREE.Scene, t: Terrain, seed: number): Sce
 
   const trees = buildTrees(scene, lc);
   const buildings = buildBuildings(scene, lc);
+  const sets = [...trees, ...buildings];
+  // Scatter positions are random over the map, so drawing the first part of each set thins it evenly.
+  const full = sets.map((st) => st.mesh.count);
 
   let time = 0;
   return {
     terrainMesh,
     towns: lc.towns,
     clearAround(x, y, r) {
-      for (const set of [...trees, ...buildings]) {
+      sets.forEach((set, k) => {
         let changed = false;
-        for (let i = 0; i < set.mesh.count; i++) {
+        for (let i = 0; i < full[k]; i++) {
           if (set.hidden[i]) continue;
           if (Math.hypot(set.xy[i * 2] - x, set.xy[i * 2 + 1] - y) < r) {
             set.hidden[i] = 1;
@@ -627,7 +632,10 @@ export function buildScenery(parent: THREE.Scene, t: Terrain, seed: number): Sce
           }
         }
         if (changed) set.mesh.instanceMatrix.needsUpdate = true;
-      }
+      });
+    },
+    setDensity(k) {
+      sets.forEach((set, i) => (set.mesh.count = Math.round(full[i] * Math.min(1, Math.max(0, k)))));
     },
     update(dt) {
       time += dt;

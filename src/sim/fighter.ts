@@ -23,6 +23,11 @@ export class Fighter extends Air {
   targetTrackId: number | null = null;
   groundUntil = 0;
   aam: Interceptor | null = null;
+  /** Escorting the assault column: patrol over it and take on anything hostile that comes near it. */
+  escort = false;
+  private nextEscortLook = 0;
+  /** The CAP station to go back to after an escort. */
+  private home: V3 | null = null;
   private leg = 0;
 
   constructor(name: string, code: string, base: V3, station: V3, start: V3) {
@@ -63,11 +68,44 @@ export class Fighter extends Air {
     w.log(`${this.name} returning to CAP station`, 'info');
   }
 
+  /** Escort the assault column: patrol just ahead of it and engage hostiles closing on it. */
+  escortColumn(w: World, on = true): void {
+    if (on && (!w.column?.alive || !this.alive)) return;
+    if (on && !this.escort) this.home = clone(this.station);
+    if (!on && this.home) this.station = this.home;
+    this.escort = on;
+    if (on) {
+      w.log(`${this.name} escorting the assault column`, 'info');
+      if (this.airborne && this.state === 'station') this.leg = 0;
+    } else w.log(`${this.name} released from escort`, 'info');
+  }
+
   rtb(w: World): void {
     if (!this.airborne) return;
     this.state = 'rtb';
     this.targetTrackId = null;
     w.log(`${this.name} RTB`, 'info');
+  }
+
+  private stepEscort(w: World): void {
+    const col = w.column;
+    if (!col?.alive) {
+      this.escort = false;
+      if (this.home) this.station = this.home;
+      return;
+    }
+    // Patrol a few km ahead of the column, towards the enemy.
+    const ahead = add(col.pos, polar(w.terrain.layout.rot, 6000));
+    this.station = v3(ahead.x, ahead.y, Math.max(this.station.z, w.terrain.groundAt(ahead.x, ahead.y) + 4000));
+    if (this.state !== 'station' || w.t < this.nextEscortLook || this.missiles === 0) return;
+    this.nextEscortLook = w.t + 2;
+    let best: { id: number; d: number } | null = null;
+    for (const tr of w.tracker.tracks) {
+      if (!tr.confirmed || tr.dropped || tr.ident !== 'HOS' || tr.cls === 'TBM') continue;
+      const d = hdist(tr.predict(w.t), col.pos);
+      if (d < 25000 && (!best || d < best.d)) best = { id: tr.id, d };
+    }
+    if (best && !w.fighters.some((f) => f !== this && f.targetTrackId === best!.id)) this.intercept(w, best.id);
   }
 
   /** Launch range: long against closing targets, short in a tail chase. */
@@ -97,6 +135,7 @@ export class Fighter extends Air {
       w.log(`${this.name} bingo fuel, RTB`, 'info');
     }
     if (this.aam && !this.aam.alive) this.aam = null;
+    if (this.escort) this.stepEscort(w);
 
     switch (this.state) {
       case 'station': {

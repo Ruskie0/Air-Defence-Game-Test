@@ -110,8 +110,14 @@ while (!c.s.over) {
   let cb = 0;
   let realS = 0;
   const tempo = new Tempo();
+  let escorted = process.argv.includes('--no-escort');
   while (!w.scenario.done && w.t < last + 3600) {
     w.step();
+    // Fighters escort the assault column while it is on the road.
+    if (!escorted && w.column?.alive && w.t > 10) {
+      escorted = true;
+      for (const f of w.fighters) f.escortColumn(w);
+    }
     // Real time a player at 1x would spend on this battle with auto tempo on.
     realS += 1 / 60 / tempo.update(w);
     // Shoot and scoot: move a located battery out from under the strike once its missiles in the air are

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
+import { gfx } from './gfx';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -8,6 +9,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { SoundEngine } from '../audio/sound';
 import { DEG } from '../sim/constants';
 import type { Entity } from '../sim/entities';
+import type { Column } from '../sim/column';
 import { V3, clamp, polar } from '../sim/math';
 import type { Radar } from '../sim/radar';
 import type { Ciws } from '../sim/ciws';
@@ -193,12 +195,14 @@ export class View3D {
   private readonly selRing: THREE.Sprite;
   private readonly siteRing: THREE.Sprite;
   private readonly tmp = new THREE.Vector3();
+  private sceneryRes = 1;
 
   constructor(container: HTMLElement, world: World) {
     this.container = container;
     this.world = world;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // No canvas antialiasing: the scene is drawn off-screen and multisampled there (see the composer below).
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, gfx.spec.pixelRatio));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.9;
     container.appendChild(this.renderer.domElement);
@@ -230,10 +234,12 @@ export class View3D {
     this.weather.apply(world, this.terrainMesh, this.fx);
 
     // The composer renders off-screen, so the canvas's own antialiasing does not apply: multisample the target.
-    this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+    this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: gfx.spec.samples }));
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.55, 0.5, 1.6);
+    this.bloom.enabled = gfx.spec.bloom;
     this.composer.addPass(this.bloom);
+    gfx.onChange(() => this.applyGraphics());
     this.composer.addPass(new OutputPass());
 
     this.selRing = new THREE.Sprite(new THREE.SpriteMaterial({ map: MARKERS.sel, depthTest: false, transparent: true }));
@@ -291,6 +297,17 @@ export class View3D {
   }
 
   /** Fly in to a track and follow it: close enough to see the aircraft, keeping the current viewing direction. */
+  /** Fly the camera to look down on a ground position (sim x, y) from about 2.5 km off, keeping the bearing. */
+  flyToGround(x: number, y: number): void {
+    const t = new THREE.Vector3(x, this.world.terrain.groundAt(x, y), -y);
+    const dir = this.tmp.copy(this.camera.position).sub(this.controls.target).setY(0);
+    if (dir.lengthSq() < 1) dir.set(0, 0, 1);
+    dir.normalize().multiplyScalar(0.8).setY(0.6).normalize();
+    const pos = t.clone().addScaledVector(dir, 2500);
+    this.follow = false;
+    this.rig.flyTo(pos, t, 1);
+  }
+
   focusTrack(id: number): void {
     const l = this.trackLabels.get(id);
     if (!l) return;
@@ -390,6 +407,26 @@ export class View3D {
     this.weather.apply(w, this.terrainMesh, this.fx);
   }
 
+  /** The graphics quality changed: resolution, antialiasing, bloom, scatter density and the terrain mesh. */
+  private applyGraphics(): void {
+    const q = gfx.spec;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, q.pixelRatio));
+    for (const rt of [this.composer.renderTarget1, this.composer.renderTarget2]) {
+      if (rt.samples !== q.samples) {
+        rt.samples = q.samples;
+        rt.dispose();
+      }
+    }
+    this.bloom.enabled = q.bloom;
+    if (q.terrain !== this.sceneryRes) {
+      this.scenery.dispose();
+      this.buildTerrain();
+      this.clearedKey = '';
+      this.weather.apply(this.world, this.terrainMesh, this.fx);
+    } else this.scenery.setDensity(q.scatter);
+    this.resize();
+  }
+
   resize(): void {
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
@@ -424,7 +461,9 @@ export class View3D {
   }
 
   private buildTerrain(): void {
-    this.scenery = buildScenery(this.scene, this.world.terrain, terrainSeed(this.world.terrain, MAP_SEED));
+    this.sceneryRes = gfx.spec.terrain;
+    this.scenery = buildScenery(this.scene, this.world.terrain, terrainSeed(this.world.terrain, MAP_SEED), this.sceneryRes);
+    this.scenery.setDensity(gfx.spec.scatter);
     this.sceneryTerrain = this.world.terrain;
     this.rig.limit = this.world.terrain.half * 0.95;
     this.controls.maxDistance = 420000 * Math.max(1, this.world.terrain.half / 80000);
@@ -550,19 +589,23 @@ export class View3D {
             // A front-line town; every building sits on the ground under it.
             part('', root, 0, townGeometry(hashName(s.name), (x, z) => w.terrain.groundAt(s.pos.x + x, s.pos.y - z) - ground));
           } else if (s.role === 'assault') {
-            // The assault force in laager: two rows of tanks and fighting vehicles, and a command post.
+            // The assault force in laager: two rows of tanks and fighting vehicles, and a command post. While
+            // its column is on the road the column entity is drawn instead (see syncStatic).
+            const laager = new THREE.Group();
+            laager.name = 'laager';
+            root.add(laager);
             const yaw = -(w.terrain.layout.rot ?? 0) * DEG;
             for (let i = 0; i < 8; i++) {
               const lx = (i % 4) * 24 - 36;
               const lz = Math.floor(i / 4) * 22 - 11;
               const x = lx * Math.cos(yaw) + lz * Math.sin(yaw);
               const z = -lx * Math.sin(yaw) + lz * Math.cos(yaw);
-              const v = part(i < 4 ? 'tank' : 'ifv', root, w.terrain.groundAt(s.pos.x + x, s.pos.y - z) - ground);
+              const v = part(i < 4 ? 'tank' : 'ifv', laager, w.terrain.groundAt(s.pos.x + x, s.pos.y - z) - ground);
               v.position.x = x;
               v.position.z = z;
               v.rotation.y = yaw + (((i * 37) % 11) - 5) * 0.02;
             }
-            box(1, 14, 1, 0xdddddd, 0, 0, -30);
+            laager.add(box(1, 14, 1, 0xdddddd, 0, 0, -30));
           } else {
             box(30, 8, 22, 0x6a6e58);
             box(2, 25, 2, 0x999999, 12, 0, 8);
@@ -713,6 +756,13 @@ export class View3D {
     return o;
   }
 
+  /** The assault column faces along the road, even halted or forming up; in position it is the laager instead. */
+  private driveColumn(c: Column, o: EntityObj): void {
+    const to = c.speed > 1 ? { x: c.pos.x + c.vel.x, y: c.pos.y + c.vel.y } : c.dest;
+    if (Math.hypot(to.x - c.pos.x, to.y - c.pos.y) > 1) o.body.lookAt(this.tmp.set(to.x, o.root.position.y, -to.y));
+    if (c.state === 'arrived') o.root.visible = false;
+  }
+
   /** Helicopters face their heading even in a hover, dip the nose with speed, and spin their rotors. */
   private flyHelo(e: Entity, o: EntityObj, dt: number): void {
     const hdg = ((e as { hdg?: number }).hdg ?? 0) * DEG;
@@ -741,6 +791,7 @@ export class View3D {
       const len = MODEL_LEN[e.recon ? 'recon' : e.kind] ?? (e.munition ? 6 : 16);
       o.body.scale.setScalar(clamp((d * (e.munition ? 0.014 : 0.021)) / len, 1, 800));
       if (e.kind === 'helo') this.flyHelo(e, o, ev.simDt);
+      else if (e.kind === 'column') this.driveColumn(e as Column, o);
       else if (e.speed > 1) {
         this.tmp.set(e.pos.x + e.vel.x, e.pos.z + e.vel.z, -(e.pos.y + e.vel.y));
         o.body.lookAt(this.tmp);
@@ -872,6 +923,11 @@ export class View3D {
         s.label.element.classList.add('dead');
       }
       s.label.visible = this.showLabels && s.site.kind !== 'launcher';
+      if (s.site.role === 'assault') {
+        const laager = s.root.getObjectByName('laager');
+        const col = this.world.column;
+        if (laager) laager.visible = !col || !col.alive || col.state === 'arrived';
+      }
     }
     this.coverage.visible = this.showCoverage;
     // Reinforcements arrived (Last Stand): build their models.
@@ -898,7 +954,7 @@ export class View3D {
 
   /** What the player can see of an entity: own side, recent detections, or everything with "show undetected". */
   isVisible(e: Entity): boolean {
-    return (e.airborne || e.kind === 'convoy') && (this.showTruth || e.side === 'blue' || this.world.t - e.lastDetected < 12);
+    return (e.airborne || e.kind === 'convoy' || e.kind === 'column') && (this.showTruth || e.side === 'blue' || this.world.t - e.lastDetected < 12);
   }
 
   /** Clear trees and houses around every site whenever the set of sites changes, so nothing is buried in a forest. */

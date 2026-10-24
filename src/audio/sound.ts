@@ -133,6 +133,12 @@ export class SoundEngine {
     } catch {
       /* storage unavailable */
     }
+    // A hidden tab stops the frame loop and with it the sim: silence the loops rather than leave them droning.
+    document.addEventListener('visibilitychange', () => {
+      if (!this.ctx) return;
+      if (document.hidden) void this.ctx.suspend();
+      else void this.ctx.resume();
+    });
     const start = (): void => this.start();
     window.addEventListener('pointerdown', start, { capture: true });
     window.addEventListener('keydown', (e) => {

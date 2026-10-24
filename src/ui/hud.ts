@@ -347,8 +347,14 @@ export class Hud {
         this.campaign?.onEndDay();
         break;
       case 'cap-station':
+        if (w.fighters[Number(d.i)].escort) w.fighters[Number(d.i)].escortColumn(w, false);
         w.fighters[Number(d.i)].toStation(w);
         break;
+      case 'cap-escort': {
+        const f = w.fighters[Number(d.i)];
+        f.escortColumn(w, !f.escort);
+        break;
+      }
       case 'cap-rtb':
         w.fighters[Number(d.i)].rtb(w);
         break;
@@ -401,6 +407,9 @@ export class Hud {
         w.log(`Sandbox: spawned ${THREAT_LABELS[type]} from ${BEARINGS.find((b) => b[1] === brg)?.[0]}`, 'raid');
         break;
       }
+      case 'flyto':
+        this.view.flyToGround(Number(d.x), Number(d.y));
+        break;
       case 'view':
         this.view.setView(d.v as 'defended' | 'overview' | 'north');
         break;
@@ -415,7 +424,10 @@ export class Hud {
 
   update(): void {
     const w = this.w;
-    this.set('clock', `<span class="lbl">T+</span>${fmtTime(w.t)}`);
+    // Rate tag: the time compression actually running, so a glance at the clock says how fast the battle moves.
+    const rate = this.ctl.paused ? 0 : Math.max(this.ctl.speed, this.ctl.fastForward ? (this.ctl.tempo ?? 1) : 1);
+    const tag = rate === 0 ? '<span class="rate paused">PAUSED</span>' : rate > 1 ? `<span class="rate${this.ctl.fastForward ? ' auto' : ''}">▸▸ ${rate}×</span>` : '';
+    this.set('clock', `<span class="lbl">T+</span>${fmtTime(w.t)}${tag}`);
     this.set(
       'speed',
       `<button data-act="pause" class="${this.ctl.paused ? 'on warn' : ''}">${this.ctl.paused ? '▶' : '❚❚'}</button>` +
@@ -536,7 +548,7 @@ export class Hud {
     const w = this.w;
     if (!Exposure.tracked(f) || !f.sites[0]?.alive || w.exposure.level <= 0) return '';
     const l = w.exposure.pending(w, f.unit.uid);
-    if (l && !l.moved && w.t < l.eta) return ` <span class="st dead blink" title="The enemy has located this unit: ${esc(l.weapon)} on its spot. Move it (Scoot) or defend it.">LOCATED ${Math.round(l.eta - w.t)} s</span>`;
+    if (l && !l.moved && w.t < l.eta) return ` <span class="st dead blink" title="The enemy has located this unit: ${esc(l.weapon)} on its spot. Move it (Scoot) or defend it.">LOCATED ${Math.round(l.eta - w.t)} s</span><button data-act="flyto" data-x="${l.x}" data-y="${l.y}" title="Fly the camera to the located spot">Fly to</button>`;
     const h = Math.round(f.heat ?? 0);
     const col = h > 75 ? '#ff4d4d' : h > 45 ? '#ffb84d' : '#7fc1ff';
     return `<span class="heat" title="Exposure ${h}%: every launch and every minute of radiating gives the position away. At 100% the enemy locates it and fires a counter-battery strike. Silence lowers it; moving resets it. Strikes left today: ${w.exposure.strikesLeft}"><i style="width:${h}%;background:${col}"></i></span>`;
@@ -558,8 +570,22 @@ export class Hud {
         const left = Math.max(0, Math.round(l.eta - w.t));
         const state = l.moved ? '<span class="st ok">MOVED CLEAR</span>' : f?.move ? `<span class="st emcon">${esc(moveStatus(w, f))}</span>` : `<span class="st dead blink">STRIKE IN ${left} s</span>`;
         rows.push(`<div class="sys ${l.moved ? '' : 'located'}"><div class="sys-h"><b>${esc(l.unit)}</b> located ${state}</div>
-          <div class="sys-b">${esc(l.weapon)} on its spot${l.moved || f?.move ? '' : ` <button data-act="scoot" data-code="${code}" title="Pack up and move 2 to 4 km, out from under the strike">Scoot</button> <button data-act="unit" data-code="${code}">Select</button>`}</div></div>`);
+          <div class="sys-b">${esc(l.weapon)} on its spot${l.moved || f?.move ? '' : ` <button data-act="scoot" data-code="${code}" title="Pack up and move 2 to 4 km, out from under the strike">Scoot</button> <button data-act="unit" data-code="${code}">Select</button>`} <button data-act="flyto" data-x="${l.x}" data-y="${l.y}" title="Fly the camera to the located spot">Fly to</button></div></div>`);
       }
+    }
+    const col = w.column;
+    const aSite = w.sites.find((x) => x.role === 'assault');
+    if (aSite) {
+      const hp = Math.round(aSite.hp);
+      const st = !aSite.alive ? '<span class="st dead">DESTROYED</span>'
+        : !col || col.state === 'arrived' ? '<span class="st ok">IN POSITION</span>'
+        : col.state === 'halted' ? `<span class="st jam blink">HALTED: ${esc(col.haltWhy.toUpperCase())}</span>`
+        : col.state === 'forming' ? '<span class="st">FORMING UP</span>' : '<span class="st ok">MOVING</span>';
+      const pct = col ? Math.round(col.progress * 100) : 100;
+      const eta = col && aSite.alive && col.state !== 'arrived' ? ` · start line in about ${fmtTime(col.eta(w))}` : '';
+      rows.push(`<h3>Assault${col ? ` on ${esc(col.objective)}` : ''}</h3><div class="sys assault"><div class="sys-h"><b>Assault force</b> ${st} <button data-act="flyto" data-x="${Math.round(aSite.pos.x)}" data-y="${Math.round(aSite.pos.y)}" title="Fly the camera to the assault force">Fly to</button></div>
+        <div class="sys-b">Road <span class="heat" style="width:80px"><i style="width:${pct}%;background:#78ffaa"></i></span> ${pct}%${eta}</div>
+        <div class="sys-b">Health <span class="heat" style="width:80px"><i style="width:${hp}%;background:${hp >= 40 ? '#ffd84d' : '#ff4d4d'}"></i></span> ${hp}% <span class="dim">(must end the day above 40%)</span></div></div>`);
     }
     if (this.campaign?.objectives.length) {
       rows.push('<h3>Objectives</h3>');
@@ -618,7 +644,7 @@ export class Hud {
       const st = !f.alive ? 'LOST' : f.state === 'ground' ? (f.oneSortie ? 'LANDED' : `REARM ${fmtTime(f.groundUntil - w.t)}`) : f.state === 'intercept' ? `INTERCEPT ${tr?.label ?? ''}` : f.state.toUpperCase();
       rows.push(`<div class="sys sel-able ${this.unitSel === `F${i}` ? 'focus' : ''}" data-act="unit" data-code="F${i}"><div class="sys-h"><b>${f.name}</b> <span class="st ${f.alive ? 'ok' : 'dead'}">${st}</span></div>
         <div class="sys-b">AAM <b>${f.missiles}</b> · Fuel ${Math.round((100 * f.fuel) / f.maxFuel)}%
-        <button data-act="cap-station" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>CAP</button><button data-act="cap-rtb" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>RTB</button></div></div>`);
+        <button data-act="cap-station" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>CAP</button><button data-act="cap-rtb" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>RTB</button>${w.column?.alive && f.alive ? `<button data-act="cap-escort" data-i="${i}" class="${f.escort ? 'on' : ''}" title="Escort the assault column: patrol just ahead of it and take on hostiles within 25 km of it">${f.escort ? 'Escorting' : 'Escort'}</button>` : ''}</div></div>`);
     });
     rows.push('<h3>Defended assets</h3>');
     const hurt = w.sites.filter((s) => s.defended || s.hp < 100);
@@ -833,6 +859,13 @@ export class Hud {
     );
   }
 
+  /** A Fly to button on the counter-battery LOCATED alert, to look at the spot the strike is coming to. */
+  private logFlyTo(e: { t: number; msg: string }): string {
+    if (!e.msg.includes(' LOCATED:')) return '';
+    const l = this.w.exposure.located.find((x) => Math.abs(x.t - e.t) < 0.5 && e.msg.startsWith(x.unit));
+    return l ? ` <button class="log-fly" data-act="flyto" data-x="${l.x}" data-y="${l.y}" title="Fly the camera to the located spot">Fly to</button>` : '';
+  }
+
   private updateLog(): void {
     const w = this.w;
     if (w.logSeq === this.lastLogLen) return;
@@ -840,7 +873,7 @@ export class Hud {
     const items = w.logEntries
       .slice(-80)
       .reverse()
-      .map((e) => `<div class="log-${e.level}"><span class="mono">${fmtTime(e.t)}</span> ${esc(e.msg)}</div>`);
+      .map((e) => `<div class="log-${e.level}"><span class="mono">${fmtTime(e.t)}</span> ${esc(e.msg)}${this.logFlyTo(e)}</div>`);
     this.set('log', items.join(''));
   }
 }

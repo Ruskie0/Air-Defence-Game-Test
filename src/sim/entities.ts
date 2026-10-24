@@ -80,6 +80,8 @@ export abstract class Entity {
   iff: 'M5' | 'M3C' | null = null;
   /** Red munitions (drones, cruise missiles, ARMs, TBMs) as opposed to aircraft. */
   munition = false;
+  /** A decoy: looks like the real thing but has no warhead. */
+  decoy = false;
   warhead: Warhead | null = null;
   target: V3 | null = null;
   targetName = '';

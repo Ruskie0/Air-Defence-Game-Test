@@ -1,5 +1,7 @@
 import { DT } from './constants';
 import { Ciws, GUNS } from './ciws';
+import { MoveOrder, orderMove, stepMoves } from './mobility';
+import { Modifiers, modifiers } from '../campaign/upgrades';
 import { Arm, Cruise, Emitter, Entity, Fate } from './entities';
 import { Fighter } from './fighter';
 import { V3, add, bearingDeg, clone, dist, norm, scale, sub, v3 } from './math';
@@ -39,6 +41,8 @@ export interface Stats {
   civilian: number;
   /** Threats destroyed per shooter (fire unit, fighter or gun name). */
   killsBy: Record<string, number>;
+  /** Decoy drones shot down by missiles (missiles the enemy tricked us into spending). */
+  decoyMissiles: number;
 }
 
 export interface WorldOptions {
@@ -50,6 +54,8 @@ export interface WorldOptions {
   raids?: Raid[];
   /** Background civil traffic on the airways. */
   civil?: boolean;
+  /** Campaign upgrades in force (see src/campaign/upgrades.ts). */
+  upgrades?: readonly string[];
 }
 
 /** What a deployed unit became in this world, so the campaign can read back its state after the day. */
@@ -60,6 +66,8 @@ export interface Fielded {
   ciws?: Ciws;
   fighters?: Fighter[];
   radar?: Radar;
+  /** Set while the unit is packing up, moving or setting up again. */
+  move?: MoveOrder | null;
 }
 
 /** Terrain seed of the one map every mode is fought over. */
@@ -84,8 +92,10 @@ export class World {
   readonly tracker = new Tracker();
   readonly scenario: Scenario;
   wcs: Wcs = 'TIGHT';
-  /** Multiplier on point-defence kill rates (campaign upgrades). */
-  pdBonus = 1;
+  /** Game-stat multipliers from campaign upgrades. */
+  readonly mods: Modifiers;
+  /** Bumped whenever a unit's position changes, so views can redraw coverage. */
+  layoutSeq = 0;
   readonly logEntries: LogEntry[] = [];
   /** Total log entries ever written (the list itself is capped). */
   logSeq = 0;
@@ -99,6 +109,7 @@ export class World {
     fratricide: 0,
     civilian: 0,
     killsBy: {},
+    decoyMissiles: 0,
   };
   /** Hits on defended sites per campaign raid package. */
   readonly pkgHits = new Map<number, number>();
@@ -124,6 +135,7 @@ export class World {
     const o: WorldOptions = typeof opts === 'number' ? { seed: opts } : opts;
     this.seed = o.seed ?? MAP_SEED;
     this.rng = new Rng(this.seed);
+    this.mods = modifiers(o.upgrades);
     this.terrain = o.terrain ?? new Terrain(MAP_SEED);
     const dep = o.deployment ?? sandboxDeployment(this.terrain);
     for (const a of DEFENDED_ASSETS) {
@@ -134,6 +146,7 @@ export class World {
       s.alive = s.hp > 0;
     }
     for (const u of dep.units) this.field(u);
+    for (const s of this.sites) s.vuln *= this.mods.damageMult;
     this.scenario = new Scenario(o.raids, this.terrain.layout.rot);
     if (o.civil ?? true) this.scenario.start(this);
   }
@@ -188,11 +201,12 @@ export class World {
         return launcher;
       });
       const info = CATALOG[type];
-      const fu = new FireUnit(type, id.code, u.uid, id.name, missile, r, launchers, info.channels!, info.reloadS!, type === 'MR');
+      const reloadS = info.reloadS! * this.mods.reloadMult;
+      const fu = new FireUnit(type, id.code, u.uid, id.name, missile, r, launchers, info.channels!, reloadS, type === 'MR');
       fu.spares = u.spares;
       fu.hold = !!u.holdFire;
       // A launch with rounds already missing starts the reload clock straight away.
-      for (const l of launchers) if (l.rounds < l.max && fu.spares > 0) l.reloadAt = info.reloadS!;
+      for (const l of launchers) if (l.rounds < l.max && fu.spares > 0) l.reloadAt = reloadS;
       this.units.push(fu);
       f.fu = fu;
     };
@@ -379,6 +393,7 @@ export class World {
     e.alive = false;
     this.setFate(e, how, shooter);
     this.effect(e.pos, 'blast');
+    if (e.decoy && how === 'missile') this.stats.decoyMissiles++;
     if (e.side === 'red') {
       this.stats.kills++;
       this.stats.killsBy[shooter] = (this.stats.killsBy[shooter] ?? 0) + 1;
@@ -466,9 +481,31 @@ export class World {
   toggleEmcon(code: string): void {
     const r = this.radarByCode(code);
     if (!r) return;
+    if (r.stowed) {
+      this.log(`${r.name} is packed up for a move`, 'info');
+      return;
+    }
     r.emitting = !r.emitting;
     r.armSilent = false;
     this.log(`${r.name} ${r.emitting ? 'radiating' : 'EMCON (silent)'}`, 'info');
+  }
+
+  /** Order a unit (by any of its codes) to move to (x, y). Returns why it cannot, or null. */
+  moveUnit(code: string, x: number, y: number): string | null {
+    const f = this.fieldedByCode(code);
+    if (!f) return 'no such unit';
+    const err = orderMove(this, f, x, y);
+    if (!err) this.layoutSeq++;
+    return err;
+  }
+
+  /** The fielded unit a HUD code (fire unit, gun, radar, or F<index> for a fighter) belongs to. */
+  fieldedByCode(code: string): Fielded | undefined {
+    if (/^F\d+$/.test(code)) {
+      const fi = this.fighters[Number(code.slice(1))];
+      return this.fielded.find((f) => f.fighters?.includes(fi));
+    }
+    return this.fielded.find((f) => f.fu?.code === code || f.ciws?.code === code || f.radar?.code === code);
   }
 
   /** Hold fire on a SAM battery or gun (by code), or release it. */
@@ -573,6 +610,7 @@ export class World {
     this.jammerCache = this.entities.filter((e) => e.alive && e.jammer?.active);
 
     for (const e of this.entities) if (e.alive) e.update(this, dt);
+    if (stepMoves(this, dt)) this.layoutSeq++;
     this.stepGnss(dt);
     this.stepArmWatch();
 

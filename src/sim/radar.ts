@@ -83,6 +83,8 @@ export class Radar implements Emitter {
   /** Sector boresight for phased arrays / airborne radars (deg). */
   boresight = 0;
   platform: Entity | null = null;
+  /** Packed up for a move: cannot radiate until the unit has set up again. */
+  stowed = false;
   readonly lambda: number;
   readonly g0: number;
   readonly noiseW: number;
@@ -117,7 +119,7 @@ export class Radar implements Emitter {
   }
 
   isEmitting(): boolean {
-    if (!this.alive || !this.emitting) return false;
+    if (!this.alive || !this.emitting || this.stowed) return false;
     return !this.platform || (this.platform.alive && this.platform.airborne);
   }
 

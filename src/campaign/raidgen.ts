@@ -1,8 +1,8 @@
 import { Rng } from '../sim/rng';
 import type { Raid } from '../sim/scenario';
-import { spawnBombers, spawnCruise, spawnDarkAirliner, spawnDrones, spawnSead, spawnSoj, spawnTbm } from '../sim/threats';
+import { spawnBombers, spawnCruise, spawnDarkAirliner, spawnDecoyDrones, spawnDrones, spawnSead, spawnSoj, spawnTbm } from '../sim/threats';
 
-export type PkgKind = 'drones' | 'cruise' | 'sead' | 'soj' | 'bomber' | 'tbm' | 'dark';
+export type PkgKind = 'drones' | 'decoys' | 'cruise' | 'sead' | 'soj' | 'bomber' | 'tbm' | 'dark';
 
 /** One enemy package in a day's raid plan. */
 export interface PlannedPkg {
@@ -42,6 +42,12 @@ export const PKG: Record<PkgKind, PkgDef> = {
     size: (d, r) => Math.min(14, 4 + d + r.int(0, 2)),
     spawn: (w, b, n) => spawnDrones(w, n, b, 50000),
     describe: (n) => `${n} one-way attack drones, low and slow`,
+  },
+  decoys: {
+    name: 'Decoy drones', cost: (n) => 1 + n * 0.3, minDay: 3, sectors: [0, 1, 2, 6, 7],
+    size: (d, r) => Math.min(16, 6 + d + r.int(0, 3)),
+    spawn: (w, b, n) => spawnDecoyDrones(w, n, b, 50000),
+    describe: (n) => `${n} drones that our intel thinks are mostly unarmed decoys, sent to drain our missiles`,
   },
   cruise: {
     name: 'Cruise missiles', cost: (n) => 2 + n * 2, minDay: 1, sectors: [0, 2, 3, 4, 5, 6],
@@ -89,7 +95,7 @@ export function newEnemy(rot = 0): EnemyModel {
   const rel = [1.3, 1, 1, 0.8, 0.8, 0.7, 0.9, 1];
   const k = sectorOf(rot);
   return {
-    kindW: { drones: 1.4, cruise: 1, sead: 1, soj: 0.8, bomber: 0.9, tbm: 1, dark: 0.5 },
+    kindW: { drones: 1.4, decoys: 0.8, cruise: 1, sead: 1, soj: 0.8, bomber: 0.9, tbm: 1, dark: 0.5 },
     axisW: rel.map((_x, a) => rel[(a - k + 8) % 8]),
   };
 }

@@ -1,5 +1,7 @@
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, ROUND_COST, UnitType, launcherOffsets, newUnit } from '../sim/catalog';
 import { CAP_RADIUS, DEPLOY_RADIUS, nearestFree, placeError } from '../sim/deploy';
+import { finishMoves } from '../sim/mobility';
+import { UPGRADES, UpgradeId } from './upgrades';
 import { hdist, v3 } from '../sim/math';
 import { CLASSIC_LAYOUT, MapLayout, MapType, Terrain, legacyLayout, randomLayout, typeForSeed } from '../sim/terrain';
 import { MAP_SEED } from '../sim/world';
@@ -59,6 +61,8 @@ export interface CampaignState {
   /** Map type; absent in saves from before map types (their maps are rebuilt the old way). */
   mapType?: MapType;
   difficulty?: Difficulty;
+  /** Upgrades bought (UpgradeId); absent in old saves. */
+  upgrades?: string[];
 }
 
 /** Where new units go before the player moves them, in order of preference. */
@@ -100,6 +104,7 @@ export class Campaign {
       mapSeed: seed,
       mapType,
       difficulty,
+      upgrades: [],
     });
     // Starting order of battle: one MR battery, a SHORAD unit and a CIWS on the airbase.
     c.add('MR');
@@ -112,7 +117,11 @@ export class Campaign {
   static load(json: string): Campaign | null {
     try {
       const s = JSON.parse(json, (_k, v) => (v === 'Infinity' ? Infinity : v)) as CampaignState;
-      return s && s.version === 1 ? new Campaign(s) : null;
+      if (!s || s.version !== 1) return null;
+      // Saves from before decoy drones and upgrades.
+      s.enemy.kindW.decoys ??= 0.8;
+      s.upgrades ??= [];
+      return new Campaign(s);
     } catch {
       return null;
     }
@@ -157,7 +166,8 @@ export class Campaign {
   /** Budget the defended area earns at the start of the next day, from what is still standing. */
   income(): number {
     const hp = (n: string): number => (this.s.deployment.assets.find((a) => a.name === n)?.hp ?? 0) / 100;
-    return Math.round((50 + 65 * hp('Airbase') + 45 * hp('Power plant') + 25 * hp('CRC')) * this.diff.income);
+    const supply = this.has('supply') ? 15 : 0;
+    return Math.round((50 + 65 * hp('Airbase') + 45 * hp('Power plant') + 25 * hp('CRC')) * this.diff.income) + supply;
   }
 
   /** Price of restoring one hp point of an asset. */
@@ -181,6 +191,25 @@ export class Campaign {
     const cost = pts >= 100 - a.hp ? this.repairCost(name) : Math.ceil(pts * rate);
     this.s.money -= Math.min(cost, this.s.money);
     a.hp += pts;
+    return true;
+  }
+
+  has(id: UpgradeId): boolean {
+    return !!this.s.upgrades?.includes(id);
+  }
+
+  canUpgrade(id: UpgradeId): string | null {
+    const u = UPGRADES[id];
+    if (this.has(id)) return 'Bought';
+    if (this.s.day < u.unlockDay) return `Available from day ${u.unlockDay}`;
+    if (u.costM > this.s.money) return 'Not enough budget';
+    return null;
+  }
+
+  upgrade(id: UpgradeId): boolean {
+    if (this.canUpgrade(id)) return false;
+    this.s.money -= UPGRADES[id].costM;
+    (this.s.upgrades ??= []).push(id);
     return true;
   }
 
@@ -348,6 +377,7 @@ export class Campaign {
       deployment: dep,
       raids: withRaids ? toRaids(this.s.plan) : [],
       civil: withRaids,
+      upgrades: this.s.upgrades,
     });
   }
 
@@ -361,6 +391,7 @@ export class Campaign {
       w.detonate(e);
     }
 
+    finishMoves(w);
     const losses: string[] = [];
     const before = new Map(s.deployment.assets.map((a) => [a.name, a.hp]));
     s.deployment.assets = DEFENDED_ASSETS.map((a) => ({ name: a.name, hp: Math.round(w.site(a.name)?.hp ?? 0) }));
@@ -375,7 +406,7 @@ export class Campaign {
           continue;
         }
         u.launchers = f.fu.launchers
-          .map((l, i) => ({ ...u.launchers[i], rounds: l.rounds }))
+          .map((l, i) => ({ ...u.launchers[i], x: Math.round(l.site.pos.x), y: Math.round(l.site.pos.y), rounds: l.rounds }))
           .filter((_l, i) => {
             const alive = f.fu!.launchers[i].site.alive;
             if (!alive) losses.push(`${f.fu!.name} launcher ${i + 1}`);
@@ -391,6 +422,9 @@ export class Campaign {
         losses.push(main.name);
         continue;
       }
+      // Units moved during the battle stay where they ended up.
+      u.x = f.unit.x;
+      u.y = f.unit.y;
       if (f.radar) u.armWatch = f.radar.armWatch;
       if (f.fu) u.holdFire = f.fu.hold;
       if (f.ciws) u.holdFire = !f.ciws.auto;
@@ -402,7 +436,7 @@ export class Campaign {
     const lessons: string[] = [];
     const clamp = (x: number): number => Math.min(4, Math.max(0.3, x));
     for (const p of s.plan) {
-      if (p.kind === 'dark') continue;
+      if (p.kind === 'dark' || p.kind === 'decoys') continue;
       const hits = w.pkgHits.get(p.id) ?? 0;
       const sec = sectorOf(p.bearing);
       if (hits > 0) {
@@ -413,6 +447,12 @@ export class Campaign {
         s.enemy.kindW[p.kind] = clamp(s.enemy.kindW[p.kind] * 0.92);
         s.enemy.axisW[sec] = clamp(s.enemy.axisW[sec] * 0.9);
       }
+    }
+    // Decoys work if they drew missiles.
+    if (s.plan.some((p) => p.kind === 'decoys')) {
+      const n = w.stats.decoyMissiles;
+      s.enemy.kindW.decoys = clamp(s.enemy.kindW.decoys * (n >= 4 ? 1.3 : n >= 2 ? 1 : 0.8));
+      if (n >= 2) lessons.push(`We spent ${n} missiles on decoy drones. The enemy will send more of them.`);
     }
     const dayLen = Math.max(1, w.t);
     const loud = [...w.radiating].filter(([code, sec]) => /^(LR|MR|EW)/.test(code) && sec / dayLen > 0.8);

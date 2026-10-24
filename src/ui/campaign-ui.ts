@@ -5,8 +5,10 @@ import { bearingDeg, v3 } from '../sim/math';
 import { MAP_TYPES, MAP_TYPE_LIST, MapType } from '../sim/terrain';
 import type { World } from '../sim/world';
 import type { Ppi } from './ppi';
+import { UPGRADES, UPGRADE_ORDER, UpgradeId } from '../campaign/upgrades';
 
 const SAVE_KEY = 'air-defence-campaign-v1';
+
 const SHOP_ORDER: UnitType[] = ['MR', 'SH', 'CIWS', 'GUN', 'LASER', 'EWR', 'GAP', 'GNSS', 'DECOY', 'CAP', 'LR'];
 
 const $ = (id: string): HTMLElement => document.getElementById(id)!;
@@ -177,6 +179,18 @@ export class CampaignUi {
       </div>`;
     }).join('');
 
+    const upgrades = UPGRADE_ORDER.map((id) => {
+      const up = UPGRADES[id];
+      const why = c.canUpgrade(id);
+      const owned = c.has(id);
+      const locked = s.day < up.unlockDay;
+      return `<div class="shop-item ${locked ? 'locked' : ''}">
+        <div class="shop-h"><b>${up.name}</b><span class="mono">${owned ? 'owned' : money(up.costM)}</span></div>
+        <div class="dim">${esc(up.desc)}</div>
+        <div class="row">${owned ? '<span class="st ok">In service</span>' : locked ? `<span class="st emcon">Day ${up.unlockDay}</span>` : `<button data-cui="upgrade" data-id="${id}" ${why ? 'disabled' : ''} title="${esc(why ?? 'Buy this upgrade for the rest of the campaign')}">Buy</button>`}</div>
+      </div>`;
+    }).join('');
+
     const intel = c.intel();
     $('plan-left').innerHTML = `
       <h3>Intelligence briefing, day ${s.day}</h3>
@@ -184,7 +198,9 @@ export class CampaignUi {
       <ul class="intel">${intel.map((l) => `<li>${esc(l)}</li>`).join('') || '<li class="dim">Nothing reported.</li>'}</ul>
       ${last?.lessons.length ? `<h3>Enemy assessment</h3><ul class="intel">${last.lessons.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
       <h3>Procurement <span class="dim">budget ${money(s.money)}</span></h3>
-      <div class="shop">${shop}</div>`;
+      <div class="shop">${shop}</div>
+      <h3>Upgrades <span class="dim">one-off, for the rest of the campaign</span></h3>
+      <div class="shop">${upgrades}</div>`;
 
     const assets = s.deployment.assets
       .map((a) => {
@@ -388,6 +404,10 @@ export class CampaignUi {
         this.startPlacing(nu);
         return;
       }
+      case 'upgrade':
+        if (!c.upgrade(d.id as UpgradeId)) return;
+        this.note = `${UPGRADES[d.id as UpgradeId].name} bought.`;
+        break;
       case 'move':
         if (!u) return;
         if (this.placing === u) this.stopPlacing('Placement cancelled.');

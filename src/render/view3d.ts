@@ -163,6 +163,8 @@ export class View3D {
   /** The terrain the scenery was built for; a world on a different map rebuilds it. */
   private sceneryTerrain: World['terrain'] | null = null;
   private readonly preview = new THREE.Group();
+  /** World.layoutSeq the coverage rings were drawn for. */
+  private coverageSeq = -1;
   private readonly raycaster = new THREE.Raycaster();
   private down: { x: number; y: number } | null = null;
   /** Set while the planning screen wants map clicks: called with the ground point clicked. */
@@ -309,10 +311,7 @@ export class View3D {
     this.siteObjs.length = 0;
     this.antennas.length = 0;
     this.turrets.length = 0;
-    for (const c of [...this.coverage.children]) {
-      this.coverage.remove(c);
-      if (c instanceof THREE.Line) c.geometry.dispose();
-    }
+    this.clearCoverage();
     for (const o of this.entityObjs.values()) {
       this.scene.remove(o.root);
       if (o.trail) this.scene.remove(o.trail.line);
@@ -505,9 +504,17 @@ export class View3D {
     }
   }
 
+  private clearCoverage(): void {
+    for (const c of [...this.coverage.children]) {
+      this.coverage.remove(c);
+      if (c instanceof THREE.Line) c.geometry.dispose();
+    }
+  }
+
   /** Weapon engagement zones and the LR radar sector, draped over the terrain. */
   private buildCoverage(): void {
     const w = this.world;
+    this.coverageSeq = w.layoutSeq;
     const ring = (cx: V3, r: number, color: number, from = 0, to = 360): void => {
       const pts: THREE.Vector3[] = [];
       for (let a = from; a <= to + 0.01; a += 1) {
@@ -709,6 +716,11 @@ export class View3D {
       s.label.visible = this.showLabels && s.site.kind !== 'launcher';
     }
     this.coverage.visible = this.showCoverage;
+    // A unit moved during the battle: redraw the rings.
+    if (this.world.layoutSeq !== this.coverageSeq) {
+      this.clearCoverage();
+      this.buildCoverage();
+    }
   }
 
   /**

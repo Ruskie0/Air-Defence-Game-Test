@@ -233,7 +233,7 @@ export class Ciws {
 
   /** One step of fire on the target: a kill chance from the weapon's rate for its kind and the range. */
   private roll(w: World, tgt: Entity, R: number, dt: number): void {
-    const rate = (this.spec.killRate[tgt.kind] ?? 0) * falloff(R, this.spec.rangeM) * w.pdBonus;
+    const rate = (this.spec.killRate[tgt.kind] ?? 0) * falloff(R, this.spec.rangeM) * w.mods.pdBonus;
     if (w.rng.chance(1 - Math.exp(-rate * dt))) w.killEntity(tgt, this.name, this.name, this.spec.kind === 'laser' ? 'laser' : 'gun');
   }
 

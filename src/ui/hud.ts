@@ -8,6 +8,8 @@ import type { World } from '../sim/world';
 import type { Radar } from '../sim/radar';
 import type { Site } from '../sim/sites';
 import type { Ciws } from '../sim/ciws';
+import { CATALOG } from '../sim/catalog';
+import { MOBILITY, moveError, moveStatus } from '../sim/mobility';
 import { CLASS_NAME, IDENT_COLOR, IDENT_NAME, fmtTime } from './colors';
 import type { Ppi } from './ppi';
 
@@ -35,6 +37,8 @@ export class Hud {
   /** Selected friendly: a fire unit, CIWS or radar code, or F<index> for a fighter. */
   unitSel: string | null = null;
   private lastOrder = '';
+  /** Code of the unit waiting for a click on the map to say where it should move. */
+  private moving: string | null = null;
   private nextSlow = 0;
   private lastLogLen = -1;
   private cache = new Map<string, string>();
@@ -55,6 +59,7 @@ export class Hud {
 
   /** Point the HUD at a new world (a new campaign day, or the sandbox). */
   setWorld(w: World): void {
+    this.stopMove();
     this.w = w;
     this.cache.clear();
     this.lastLogLen = -1;
@@ -91,8 +96,56 @@ export class Hud {
   }
 
   clearSelection(): void {
+    this.stopMove();
     this.select(null);
     this.selectUnit(null);
+  }
+
+  /** Wait for a click on the map, then send the unit there. */
+  private startMove(code: string): void {
+    const w = this.w;
+    const f = w.fieldedByCode(code);
+    if (!f) return;
+    this.moving = code;
+    this.lastOrder = f.unit.type === 'CAP' ? 'Click the map for the new CAP station. Esc cancels.' : `Click the map where the unit should go. It packs up, drives there and sets up again (${Math.round((MOBILITY[f.unit.type].packS + MOBILITY[f.unit.type].setupS) * w.mods.moveMult)} s out of action plus the drive). Esc cancels.`;
+    const v = this.view;
+    const reach = CATALOG[f.unit.type].rangeKm;
+    v.onGroundHover = (p) => {
+      if (!p) return v.setPreview(null);
+      const err = moveError(this.w, f, p.x, p.y);
+      v.setPreview(p, reach, !err);
+      v.renderer.domElement.title = err ?? '';
+    };
+    v.onGroundClick = (p) => {
+      const err = this.w.moveUnit(code, p.x, p.y);
+      if (err) {
+        this.lastOrder = `Cannot move there: ${err}`;
+      } else {
+        this.stopMove();
+        this.lastOrder = 'Moving.';
+      }
+      this.nextSlow = 0;
+    };
+    this.nextSlow = 0;
+  }
+
+  private stopMove(): void {
+    if (!this.moving) return;
+    this.moving = null;
+    const v = this.view;
+    v.onGroundClick = null;
+    v.onGroundHover = null;
+    v.setPreview(null);
+    v.renderer.domElement.title = '';
+  }
+
+  /** Move button and status line for a unit's detail panel. */
+  private moveRow(code: string): string {
+    const f = this.w.fieldedByCode(code);
+    if (!f || !f.sites.length && f.unit.type !== 'CAP') return '';
+    const st = moveStatus(this.w, f);
+    const can = f.unit.type === 'CAP' ? f.fighters?.some((x) => x.alive) : f.sites[0].alive;
+    return `<div class="row"><button data-act="move" data-code="${code}" class="${this.moving === code ? 'on' : ''}" ${can ? '' : 'disabled'} title="Move (G): pick a new position on the map">${f.unit.type === 'CAP' ? 'Move station' : 'Move'}</button>${st ? `<span class="st jam">${esc(st)}</span>` : ''}</div>`;
   }
 
   private unitAtSite(site: Site): string | null {
@@ -138,10 +191,18 @@ export class Hud {
     } else if (/^Digit[1-5]$/.test(e.code)) {
       this.ctl.speed = SPEEDS[Number(e.code.slice(5)) - 1];
       this.ctl.paused = false;
+    } else if (e.code === 'KeyG' && this.unitSel) {
+      if (this.moving) this.stopMove();
+      else this.startMove(this.unitSel);
     } else if (e.code === 'KeyH' && this.unitSel) {
       this.w.toggleHold(this.unitSel);
       this.nextSlow = 0;
     } else if (e.code === 'Escape') {
+      if (this.moving) {
+        this.stopMove();
+        this.lastOrder = '';
+        return;
+      }
       this.clearSelection();
       $('help').classList.add('hidden');
     }
@@ -183,6 +244,10 @@ export class Hud {
       case 'ciws':
       case 'hold':
         w.toggleHold(d.code!);
+        break;
+      case 'move':
+        if (this.moving === d.code) this.stopMove();
+        else this.startMove(d.code!);
         break;
       case 'gnss': {
         const j = w.gnss[Number(d.i)];
@@ -343,6 +408,7 @@ export class Hud {
     const r = this.w.radarByCode(code);
     if (!r) return '';
     if (!r.alive) return '<span class="st dead">DESTROYED</span>';
+    if (r.stowed) return '<span class="st emcon" title="Packing up, on the move or setting up">MOVING</span>';
     if (!r.emitting) return r.armSilent ? '<span class="st jam" title="Shut down by the automatic ARM response">ARM SILENT</span>' : '<span class="st emcon">EMCON</span>';
     const j = r.sideJnrDb > 0 ? ` <span class="st jam" title="Sidelobe jam-to-noise">J/N ${r.sideJnrDb.toFixed(0)} dB</span>` : '';
     return `<span class="st ok">RADIATE</span>${j}`;
@@ -356,6 +422,7 @@ export class Hud {
 
   private gunState(c: Ciws): string {
     if (!c.site.alive) return '<span class="st dead">DESTROYED</span>';
+    if (c.radar.stowed) return '<span class="st emcon">MOVING</span>';
     if (c.coolUntil > 0) return '<span class="st emcon">COOLING</span>';
     if (c.ammo === 0) return '<span class="st emcon">RELOAD</span>';
     if (c.firing) return '<span class="st jam">FIRING</span>';
@@ -523,7 +590,7 @@ export class Hud {
           <span>Missile</span><b>${fu.spec.name}, ${(fu.spec.maxRangeM / 1000).toFixed(0)} km</b>
         </div>
         <div class="row">${this.holdButton(fu.code, fu.hold)}${this.radarButtons(r)}</div>
-        ${order}${this.targetTable(rows)}`;
+        ${this.moveRow(fu.code)}${order}${this.targetTable(rows)}`;
     }
     const c = w.ciws.find((x) => x.code === code);
     if (c) {
@@ -533,6 +600,7 @@ export class Hud {
           <span>State</span><b>${!c.site.alive ? 'destroyed' : c.firing || c.lasing ? `firing at ${c.target?.name ?? ''}` : c.target ? `tracking ${c.target.name}` : c.auto ? 'automatic' : 'hold'}</b>
         </div>
         <div class="row"><button data-act="ciws" data-code="${c.code}" ${c.site.alive ? '' : 'disabled'}>${c.auto ? 'Hold fire' : 'Automatic'}</button></div>
+        ${this.moveRow(c.code)}${order}
         <div class="dim">${c.spec.kind === 'laser' ? 'The laser burns down drones (and, slowly, cruise missiles) inside 3.5 km. It never runs out of ammunition but overheats after long bursts.' : `The gun engages anything inbound inside about ${(c.spec.rangeM / 1000).toFixed(1)} km on its own; it cannot be pointed at a track.`}</div>`;
     }
     if (code.startsWith('F')) {
@@ -554,7 +622,7 @@ export class Hud {
           <span>Target</span><b>${tr ? tr.label : 'none'}</b>
         </div>
         <div class="row"><button data-act="cap-station" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>Back to CAP</button><button data-act="cap-rtb" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>RTB</button></div>
-        ${order}${this.targetTable(rows)}`;
+        ${this.moveRow(code)}${order}${this.targetTable(rows)}`;
     }
     const r = w.radarByCode(code);
     if (r) {
@@ -564,7 +632,8 @@ export class Hud {
           <span>Firm tracks</span><b>${r.firm.size}</b>
           <span>Radiated</span><b>${fmtTime(w.radiating.get(r.code) ?? 0)} this day</b>
         </div>
-        <div class="row">${this.radarButtons(r)}</div>`;
+        <div class="row">${this.radarButtons(r)}</div>
+        ${this.moveRow(r.code)}${order}`;
     }
     return null;
   }

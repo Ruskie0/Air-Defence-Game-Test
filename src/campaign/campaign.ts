@@ -147,6 +147,7 @@ export class Campaign {
       s.upgrades ??= [];
       s.enemy.kindW.recon ??= 1;
       s.enemy.kindW.strike ??= 1;
+      s.enemy.kindW.helo ??= 1;
       s.objectives ??= pickObjectives(s.plan, s.day, s.seed);
       return new Campaign(s);
     } catch {

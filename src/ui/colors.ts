@@ -21,6 +21,7 @@ export const IDENT_NAME: Record<Ident, string> = {
 export const CLASS_NAME: Record<string, string> = {
   UNK: 'Unclassified',
   FW: 'Fixed wing',
+  RW: 'Helicopter',
   CIV: 'Civil airliner',
   UAV: 'Drone / UAV',
   CM: 'Cruise missile',

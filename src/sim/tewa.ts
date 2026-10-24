@@ -17,6 +17,7 @@ const PREFERENCE: Record<TrackClass, ('LR' | 'MR' | 'SH')[]> = {
   MSL: ['SH', 'MR', 'LR'],
   CM: ['SH', 'MR', 'LR'],
   UAV: ['SH', 'MR'],
+  RW: ['SH', 'MR'],
   FW: ['MR', 'LR', 'SH'],
   JAM: ['LR', 'MR'],
   CIV: ['MR', 'LR', 'SH'],

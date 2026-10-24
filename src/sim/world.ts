@@ -4,7 +4,7 @@ import { MoveOrder, orderMove, stepMoves } from './mobility';
 import { SupportCall, stepSupport } from './support';
 import { Modifiers, modifiers } from '../campaign/upgrades';
 import { WEATHER, Weather, WeatherId } from '../campaign/weather';
-import { Arm, Cruise, Drone, Emitter, Entity, Fate, GlideBomb, ReconDrone, Sighting } from './entities';
+import { Arm, Atgm, Cruise, Drone, Emitter, Entity, Fate, GlideBomb, ReconDrone, Sighting } from './entities';
 import { Fighter } from './fighter';
 import { V3, add, bearingDeg, clone, dist, norm, polar, scale, sub, v3 } from './math';
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, UnitType, rankOf } from './catalog';
@@ -546,6 +546,14 @@ export class World {
     b.pkg = from.pkg;
     if (delay > 0) this.spawnLater(b, delay);
     else this.spawn(b);
+    this.tracker.markHostileAct(this, from.pos);
+  }
+
+  /** An attack helicopter fires a guided missile at one of our sites. */
+  launchAtgm(from: Entity, target: Site): void {
+    const m = new Atgm(this.nextName('ATGM'), clone(from.pos), target, this.t);
+    m.pkg = from.pkg;
+    this.spawn(m);
     this.tracker.markHostileAct(this, from.pos);
   }
 

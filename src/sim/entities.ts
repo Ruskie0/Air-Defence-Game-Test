@@ -17,9 +17,10 @@ import {
   wrap180,
 } from './math';
 import type { World } from './world';
+import type { Site } from './sites';
 
 export type Side = 'blue' | 'red' | 'neutral';
-export type Kind = 'drone' | 'cruise' | 'bomber' | 'strike' | 'bomb' | 'sead' | 'soj' | 'tbm' | 'arm' | 'airliner' | 'fighter';
+export type Kind = 'drone' | 'cruise' | 'bomber' | 'strike' | 'bomb' | 'helo' | 'atgm' | 'sead' | 'soj' | 'tbm' | 'arm' | 'airliner' | 'fighter';
 
 export interface Warhead {
   lethalR: number;
@@ -484,6 +485,137 @@ export class Striker extends Air {
         break;
     }
     this.integrate(w, dt);
+  }
+}
+
+/**
+ * Attack helicopter: creeps in at treetop height behind the hills, rises just enough to see one of our units,
+ * fires two guided missiles at it and ducks back down. Two salvos, then it goes home.
+ */
+export class Helo extends Air {
+  readonly kind = 'helo' as const;
+  readonly side = 'red' as const;
+  missiles = 4;
+  phase: 'ingress' | 'popup' | 'egress' = 'ingress';
+  private readonly home: V3;
+  private nextLook = 0;
+  private phaseEnd = 0;
+  private shots = 0;
+  private aim: Site | null = null;
+  /** Earliest time of the next pop-up (it relocates between salvos). */
+  private readyAt = 0;
+
+  constructor(name: string, pos: V3) {
+    super(name, pos, bearingDeg(pos, v3()), 70);
+    this.home = clone(pos);
+    this.rcs = 6;
+    this.hitRadius = 8;
+    this.cmPk = 0.8;
+    this.tfAgl = 25;
+    this.turnRate = 12;
+    this.climb = 12;
+    this.accel = 8;
+  }
+
+  /** The nearest of our units' sites it could hit from a short pop-up here. */
+  private findTarget(w: World): Site | null {
+    const eye = v3(this.pos.x, this.pos.y, w.terrain.groundAt(this.pos.x, this.pos.y) + 70);
+    let best: Site | null = null;
+    let bd = HELO_RANGE;
+    for (const s of w.sites) {
+      if (!s.alive || s.kind === 'asset' || s.kind === 'gnss' || s.kind === 'decoy') continue;
+      const d = hdist(eye, s.pos);
+      if (d < bd && w.terrain.los(eye, s.pos)) {
+        bd = d;
+        best = s;
+      }
+    }
+    return best;
+  }
+
+  update(w: World, dt: number): void {
+    switch (this.phase) {
+      case 'ingress': {
+        const ab = w.site('Airbase')!.pos;
+        this.steer(ab.x, ab.y, dt);
+        if (w.t >= this.nextLook && w.t >= this.readyAt) {
+          this.nextLook = w.t + 2;
+          this.aim = this.findTarget(w);
+          // Nothing of ours in sight: the airbase itself, once close enough.
+          if (this.aim) {
+            this.phase = 'popup';
+            this.tfAgl = 70;
+            this.cmdSpd = 5;
+            this.phaseEnd = w.t + 14;
+            this.shots = 0;
+          }
+        }
+        if (hdist(this.pos, ab) < 5000) this.phase = 'egress';
+        break;
+      }
+      case 'popup': {
+        const t = this.aim!;
+        this.steer(t.pos.x, t.pos.y, dt);
+        // Fire once it has climbed clear, two missiles a few seconds apart.
+        const agl = this.pos.z - w.terrain.groundAt(this.pos.x, this.pos.y);
+        if (agl > 55 && this.missiles > 0 && this.shots < 2 && w.t >= this.nextLook) {
+          if (t.alive && w.terrain.los(this.pos, t.pos)) {
+            w.launchAtgm(this, t);
+            this.missiles--;
+            this.shots++;
+          }
+          this.nextLook = w.t + 3.5;
+        }
+        if (w.t >= this.phaseEnd || this.shots >= 2) {
+          this.tfAgl = 25;
+          this.cmdSpd = 70;
+          this.phase = this.missiles > 0 ? 'ingress' : 'egress';
+          this.readyAt = w.t + 40;
+          if (this.phase === 'egress') w.log(`${this.name} out of missiles, heading home`, 'info');
+        }
+        break;
+      }
+      case 'egress':
+        this.cmdSpd = 75;
+        this.steer(this.home.x * 2, this.home.y * 2, dt);
+        if (Math.hypot(this.pos.x, this.pos.y) > 90000) w.retire(this);
+        break;
+    }
+    this.integrate(w, dt);
+    // Down in the trees it hides in the ground clutter; popped up, the whole airframe shows.
+    this.rcs = this.pos.z - w.terrain.groundAt(this.pos.x, this.pos.y) < 45 ? HELO_LOW_RCS : 6;
+  }
+}
+
+/** Radar cross-section a helicopter shows down in the ground clutter (m²). */
+const HELO_LOW_RCS = 0.01;
+/** How far an attack helicopter's missiles reach (m). */
+export const HELO_RANGE = 7000;
+
+/** Anti-tank guided missile from a helicopter: fast, wire or laser guided (no GNSS), small warhead. */
+export class Atgm extends Entity {
+  readonly kind = 'atgm' as const;
+  readonly side = 'red' as const;
+  private readonly t0: number;
+
+  constructor(name: string, pos: V3, target: Site, t0: number) {
+    super(name, pos);
+    this.target = clone(target.pos);
+    this.targetName = target.name;
+    this.t0 = t0;
+    this.vel = scale(norm(sub(target.pos, pos)), 300);
+    this.rcs = 0.01;
+    this.hitRadius = 0.5;
+    this.munition = true;
+    this.warhead = { lethalR: 8, dmg: 45 };
+    this.gnssDep = 0;
+  }
+
+  update(w: World, dt: number): void {
+    const aim = this.target!;
+    this.vel = scale(norm(sub(aim, this.pos)), 300);
+    this.pos = addScaled(this.pos, this.vel, dt);
+    if (dist(this.pos, aim) < 6 || this.pos.z <= w.terrain.groundAt(this.pos.x, this.pos.y) || w.t - this.t0 > 40) w.detonate(this);
   }
 }
 

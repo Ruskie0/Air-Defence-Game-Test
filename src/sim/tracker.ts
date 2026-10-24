@@ -3,7 +3,7 @@ import { V3, addScaled, bearingDeg, clamp, clone, dist, hdist, len, lerp, sub, v
 import type { Report, Strobe } from './radar';
 import type { World } from './world';
 
-export type TrackClass = 'UNK' | 'FW' | 'CIV' | 'UAV' | 'CM' | 'MSL' | 'TBM' | 'JAM';
+export type TrackClass = 'UNK' | 'FW' | 'RW' | 'CIV' | 'UAV' | 'CM' | 'MSL' | 'TBM' | 'JAM';
 export type Ident = 'PEND' | 'UNK' | 'FRD' | 'NEU' | 'SUS' | 'HOS';
 
 export class Track {
@@ -268,6 +268,8 @@ export class Tracker {
     else if (tr.hits >= 6 && w.t - tr.born > 2.5 && (lo > 1300 || (alt > 22000 && lo > 600))) cls = 'TBM';
     else if (tr.hits >= 6 && w.t - tr.born > 2.5 && lo > 520) cls = 'MSL';
     else if (hi > 520) cls = tr.cls === 'TBM' || tr.cls === 'MSL' ? tr.cls : 'UNK';
+    // Slow, low and big on radar: a helicopter, not a drone.
+    else if (spd < 100 && agl < 300 && tr.rcsDb > 3) cls = 'RW';
     // Nothing with wings flies below ~75 m/s: slower than that is a drone, low (attack) or high (recon).
     else if (spd < 75 && hi < 140) cls = 'UAV';
     else if (agl < 350 && spd > 150 && tr.velSigma < 80 && tr.rcsDb < -6) cls = 'CM';
@@ -296,7 +298,7 @@ export class Tracker {
       id = 'HOS';
       w.log(`${tr.label} low-level fast mover inbound, no IFF: declared hostile`, 'alert');
     }
-    else if (tr.jam || tr.hostileAct || cls === 'TBM' || cls === 'MSL' || cls === 'CM' || cls === 'UAV') id = 'HOS';
+    else if (tr.jam || tr.hostileAct || cls === 'TBM' || cls === 'MSL' || cls === 'CM' || cls === 'UAV' || cls === 'RW') id = 'HOS';
     else if (cls === 'CIV') id = 'NEU';
     else if (tr.iffNone >= 3) id = 'SUS';
     else id = 'PEND';

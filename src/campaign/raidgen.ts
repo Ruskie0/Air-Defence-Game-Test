@@ -2,9 +2,9 @@ import { DoctrineId, doctrineOf } from './doctrine';
 import { Rng } from '../sim/rng';
 import type { Raid } from '../sim/scenario';
 import type { Sighting } from '../sim/entities';
-import { type Target, spawnBombers, spawnCruise, spawnDarkAirliner, spawnDecoyDrones, spawnDrones, spawnRecon, spawnSead, spawnSoj, spawnStrike, spawnTbm } from '../sim/threats';
+import { type Target, spawnBombers, spawnCruise, spawnDarkAirliner, spawnDecoyDrones, spawnDrones, spawnHelos, spawnRecon, spawnSead, spawnSoj, spawnStrike, spawnTbm } from '../sim/threats';
 
-export type PkgKind = 'drones' | 'decoys' | 'recon' | 'cruise' | 'strike' | 'sead' | 'soj' | 'bomber' | 'tbm' | 'dark';
+export type PkgKind = 'drones' | 'decoys' | 'recon' | 'cruise' | 'strike' | 'helo' | 'sead' | 'soj' | 'bomber' | 'tbm' | 'dark';
 
 /** One enemy package in a day's raid plan. */
 export interface PlannedPkg {
@@ -77,6 +77,12 @@ export const PKG: Record<PkgKind, PkgDef> = {
     spawn: (w, b, n, aims) => spawnStrike(w, n, b, 150000, aims),
     describe: (n) => `${n} strike fighters that will come in at treetop height, pop up and glide-bomb a site. Low-flying jets with no IFF are declared hostile inside 45 km`,
   },
+  helo: {
+    name: 'Attack helicopters', cost: (n) => 2 + n * 2.5, minDay: 3, sectors: [0, 1, 7, 2, 6, 3, 5],
+    size: (d) => Math.min(4, 2 + (d >= 6 ? 1 : 0) + (d >= 9 ? 1 : 0)),
+    spawn: (w, b, n) => spawnHelos(w, n, b, 40000),
+    describe: (n) => `${n} attack helicopters creeping in behind the hills to pop up and fire missiles at our nearest units. Guns and SHORAD are the answer`,
+  },
   sead: {
     name: 'SEAD pair', cost: () => 10, minDay: 3, sectors: [7, 0, 1, 6, 2],
     size: () => 2,
@@ -117,7 +123,7 @@ export function newEnemy(rot = 0, doctrine?: DoctrineId): EnemyModel {
   const rel = [1.3, 1, 1, 0.8, 0.8, 0.7, 0.9, 1];
   const k = sectorOf(rot);
   return {
-    kindW: { drones: 1.4, decoys: 0.8, recon: 1, cruise: 1, strike: 1, sead: 1, soj: 0.8, bomber: 0.9, tbm: 1, dark: 0.5 },
+    kindW: { drones: 1.4, decoys: 0.8, recon: 1, cruise: 1, strike: 1, helo: 1, sead: 1, soj: 0.8, bomber: 0.9, tbm: 1, dark: 0.5 },
     axisW: rel.map((_x, a) => rel[(a - k + 8) % 8]),
     doctrine,
   };

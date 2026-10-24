@@ -33,8 +33,8 @@ export const DEEP_STRIKES: Record<DeepStrikeId, DeepStrikeDef> = {
   },
   airfield: {
     name: 'Forward airfield',
-    desc: 'Crater the runway the SEAD, strike and jammer aircraft use.',
-    costM: 55, chance: 0.5, unlockDay: 4, kinds: ['sead', 'strike', 'soj', 'bomber'],
+    desc: 'Crater the runway and helipads the SEAD, strike, jammer and helicopter crews use.',
+    costM: 55, chance: 0.5, unlockDay: 4, kinds: ['sead', 'strike', 'soj', 'bomber', 'helo'],
   },
   tbm: {
     name: 'Missile launch sites',

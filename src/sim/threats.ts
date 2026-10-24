@@ -1,8 +1,8 @@
 import { V3, add, clone, polar, v3 } from './math';
-import { Airliner, Bomber, Cruise, Drone, ReconDrone, Sead, Soj, Striker, Tbm } from './entities';
+import { Airliner, Bomber, Cruise, Drone, Helo, ReconDrone, Sead, Soj, Striker, Tbm } from './entities';
 import type { World } from './world';
 
-export type ThreatType = 'drones' | 'decoys' | 'recon' | 'cruise' | 'bomber' | 'strike' | 'sead' | 'soj' | 'tbm' | 'airliner' | 'airliner-dark';
+export type ThreatType = 'drones' | 'decoys' | 'recon' | 'cruise' | 'bomber' | 'strike' | 'helo' | 'sead' | 'soj' | 'tbm' | 'airliner' | 'airliner-dark';
 
 export const THREAT_LABELS: Record<ThreatType, string> = {
   drones: 'Drone swarm (6)',
@@ -11,6 +11,7 @@ export const THREAT_LABELS: Record<ThreatType, string> = {
   cruise: 'Cruise missiles (4)',
   bomber: 'Strike bomber (4 ALCM)',
   strike: 'Strike jets, low level (2)',
+  helo: 'Attack helicopters (2)',
   sead: 'SEAD pair (ARMs)',
   soj: 'Stand-off jammer',
   tbm: 'Ballistic missiles (2)',
@@ -124,6 +125,15 @@ export function spawnStrike(w: World, n: number, bearing: number, rangeM: number
   }
 }
 
+/** Attack helicopters, starting `rangeM` out at treetop height, a few km apart. */
+export function spawnHelos(w: World, n: number, bearing: number, rangeM: number): void {
+  for (let i = 0; i < n; i++) {
+    const start = add(polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 2500));
+    start.z = w.terrain.groundAt(start.x, start.y) + 25;
+    w.spawn(new Helo(w.nextName('HEL'), start));
+  }
+}
+
 export function spawnSead(w: World, n: number, bearing: number, rangeM: number): void {
   for (let i = 0; i < n; i++) {
     const start = add(polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 4000));
@@ -181,6 +191,8 @@ export function spawnThreat(w: World, type: ThreatType, bearing: number): void {
       return spawnBombers(w, 1, bearing, 190000);
     case 'strike':
       return spawnStrike(w, 2, bearing, 150000);
+    case 'helo':
+      return spawnHelos(w, 2, bearing, 40000);
     case 'sead':
       return spawnSead(w, 2, bearing, 160000);
     case 'soj':

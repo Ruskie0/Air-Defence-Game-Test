@@ -8,6 +8,8 @@ export interface DeployedLauncher {
   y: number;
   rounds: number;
   max: number;
+  /** Health carried over from an earlier raid (100 when absent). */
+  hp?: number;
 }
 
 /** A unit as the campaign owns it between days: where it stands and what it has left. */
@@ -37,6 +39,8 @@ export interface DeployedUnit {
   loan?: boolean;
   /** Campaign clock (minutes) when a unit on order reaches the airbase depot; it sits out battles until then. */
   arrives?: number;
+  /** Health of the main site (radar, gun, emitter) carried over from an earlier raid (100 when absent). */
+  hp?: number;
   /** Exposure carried over from the last battle (the enemy still half remembers where it was firing from). */
   heat?: number;
 }

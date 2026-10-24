@@ -17,6 +17,7 @@ import { award, battleMedals } from './medals';
 import { EnemyModel, PKG, PkgKind, PlannedPkg, SECTOR_NAMES, aimAtSightings, assignBases, newEnemy, planDay, refundBases, sectorOf, sortiesOf, threatBudget, toRaids } from './raidgen';
 import { DAY_START_MIN, DELIVERY_H, PULSES, PulseSlot, PulseType, REPAIR_PER_H, TURNAROUND_H, hhmm, scheduleDay } from './clock';
 import { cbStrikes } from '../sim/exposure';
+import { ARMOUR } from '../sim/enemyarmour';
 import type { Sighting } from '../sim/entities';
 import { ASSAULT_HOLD, FrontState, OFFENSIVE_COST_M, TAKEN_HP, TOWN_THREAT_CUT, assaultSpot, columnStart, deployZones, frontTown, newFront, nextObjective, townIncome, townsHeld } from './front';
 import { AIRCRAFT, type Asset, type EnemyBase, TALLY_ASSET, assetCount, avail, draw, fallBack, makeTheatre, overrun, reinforce } from '../sim/theatre';
@@ -26,6 +27,8 @@ import { DeployZone, inZones } from '../sim/deploy';
 export const CAMPAIGN_DAYS = 10;
 /** Scale on the enemy's threat points for a whole day, shared between its operations (balance). */
 export const DAY_THREAT = 1.9;
+/** Our strike on the enemy's armour while it masses for an attack on one of our towns. */
+export const ARMOUR_STRIKE = { costM: 35, chance: 0.6 };
 /** What the enemy remembers of a position it photographed or located is good for this long (minutes). */
 const SIGHTING_MIN = 18 * 60;
 export { CAP_RADIUS, DEPLOY_RADIUS };
@@ -52,6 +55,8 @@ export interface DayReport {
   pulse?: PulseType;
   /** Paid at once for the raid's bonus objectives ($M). */
   bonusM?: number;
+  /** After action: each package, when it came, from where, and how what it sent ended. */
+  timeline?: { at: number; name: string; size: number; from: string; base?: string; spawned: number; down: number; hits: number; missed: number; home: number; counter?: boolean }[];
   kills: number;
   /** Kills per shooter. */
   killsBy?: Record<string, number>;
@@ -137,6 +142,8 @@ export interface CampaignState {
   repairs?: Record<string, number>;
   /** Day the last offensive went in (one a day). */
   offensiveDay?: number;
+  /** The enemy's own ground offensive today: on which of our towns, from which of theirs, in which operation. */
+  enemyPush?: { pulse: number; town: number; from: number; struck?: boolean; broken?: boolean } | null;
   /** How the war ended on the clock: a ceasefire after the last day, graded by the ground we hold. */
   grade?: 'Bronze' | 'Silver' | 'Gold';
 }
@@ -253,8 +260,8 @@ export class Campaign {
 
   /** Swap today's raid plan for a new one: munitions the old one had drawn go back to their bases. */
   replacePlan(plan: PlannedPkg[]): void {
-    const counters = this.s.plan.filter((p) => p.counter);
-    refundBases(this.s.plan.filter((p) => !p.counter), this.theatre);
+    const counters = this.s.plan.filter((p) => p.counter || p.push);
+    refundBases(this.s.plan.filter((p) => !p.counter && !p.push), this.theatre);
     this.s.plan = [...assignBases(plan, this.theatre, this.busy(this.pulse?.at, counters)), ...counters].sort((a, b) => a.t - b.t);
   }
 
@@ -313,6 +320,17 @@ export class Campaign {
         out.push(`Repairs to the ${name.toLowerCase()} are finished.`);
       }
     }
+    // Unit crews patch up their own equipment at the same rate, free.
+    for (const u of this.units) {
+      if (u.hp !== undefined) {
+        u.hp = Math.min(100, Math.floor(u.hp + pts));
+        if (u.hp >= 100) {
+          delete u.hp;
+          out.push(`${CATALOG[u.type].name} repaired.`);
+        }
+      }
+      for (const l of u.launchers) if (l.hp !== undefined && (l.hp = Math.min(100, Math.floor(l.hp + pts))) >= 100) delete l.hp;
+    }
     this.s.sorties = (this.s.sorties ?? []).filter((r) => r.until > t);
     return out;
   }
@@ -352,6 +370,50 @@ export class Campaign {
     this.s.pulses = scheduleDay(this.s.day, this.s.seed);
     this.s.pulseIdx = 0;
     if (this.s.front) this.s.front.offensive = null;
+    // From day 3 the enemy may throw its own armour at our front town in one of the day's combined strikes.
+    this.s.enemyPush = null;
+    const f = this.s.front;
+    const front = f ? frontTown(f) : null;
+    const ft = f && front ? f.towns.indexOf(front) : -1;
+    const rng = new Rng(this.s.seed * 7307 + this.s.day * 211);
+    const strikes = this.s.pulses.map((p, i) => (p.type === 'strike' ? i : -1)).filter((i) => i >= 0);
+    if (f && ft >= 0 && ft + 1 < f.towns.length && this.s.day >= 3 && strikes.length && rng.chance(Math.min(0.6, 0.2 + 0.04 * this.s.day))) {
+      this.s.enemyPush = { pulse: strikes[rng.int(0, strikes.length - 1)], town: ft, from: ft + 1 };
+    }
+  }
+
+  /** The enemy's ground offensive if it goes in with the coming raid (and has not been broken up). */
+  get pushNow(): { town: number; from: number } | null {
+    const p = this.s.enemyPush;
+    const f = this.s.front;
+    if (!p || !f || p.broken || p.pulse > (this.s.pulseIdx ?? 0) || !f.towns[p.town]?.ours || f.towns[p.from]?.ours) return null;
+    return p;
+  }
+
+  /** Why we cannot strike the enemy's massing armour now, or null. */
+  armourStrikeError(): string | null {
+    const p = this.s.enemyPush;
+    if (!p || p.broken) return 'No enemy armour is massing';
+    if (p.struck) return 'Already struck';
+    if (ARMOUR_STRIKE.costM > this.s.money) return 'Not enough budget';
+    return null;
+  }
+
+  /** Hit the armour while it masses: if it works, the attack is broken up before it starts. */
+  strikeArmour(): string | null {
+    if (this.armourStrikeError()) return null;
+    const p = this.s.enemyPush!;
+    this.s.money -= ARMOUR_STRIKE.costM;
+    p.struck = true;
+    const ok = new Rng(this.s.seed * 4513 + this.s.day * 97).chance(ARMOUR_STRIKE.chance);
+    const town = this.s.front!.towns[p.town].name;
+    if (ok) {
+      p.broken = true;
+      refundBases(this.s.plan.filter((x) => x.push), this.theatre);
+      this.s.plan = this.s.plan.filter((x) => !x.push);
+      return `Our strike caught the armour massing for ${town}: the attack has been broken up.`;
+    }
+    return `Our strike on the armour massing for ${town} missed. The attack is still coming.`;
   }
 
   /** A raid plan for the coming operation, its share of the day's threat (scaled down by a pre-emptive strike, say). */
@@ -380,6 +442,31 @@ export class Campaign {
     }
     const idx = this.s.pulseIdx ?? 0;
     const rng = new Rng(this.s.seed * 53 + this.s.day * 7 + idx * 131);
+    // The enemy's ground offensive goes in with air support aimed at the town: drones and missiles to knock it down.
+    const push = this.pushNow;
+    if (push && this.s.front) {
+      const town = this.s.front.towns[push.town];
+      const from = this.s.front.towns[push.from];
+      const day = this.s.day;
+      const support: PlannedPkg[] = (
+        [
+          ['drones', Math.min(14, 6 + Math.floor(day / 2))],
+          ['cruise', Math.min(6, 2 + Math.floor(day / 3))],
+          ['drones', Math.min(10, 4 + Math.floor(day / 3))],
+        ] as [PkgKind, number][]
+      ).map(([kind, size], i) => ({
+        id: this.s.nextPkg++,
+        kind,
+        bearing: (Math.atan2(from.x - town.x, from.y - town.y) * 180) / Math.PI,
+        size,
+        t: Math.round(60 + i * 150 + rng.range(0, 40)),
+        reported: true,
+        target: town.name,
+        origin: { x: from.x, y: from.y },
+        push: true,
+      }));
+      this.s.plan = [...this.s.plan, ...assignBases(support, this.theatre, this.busy(slot.at, this.s.plan))].sort((a, b) => a.t - b.t);
+    }
     const f = this.s.front;
     if (f) {
       // Some of the raids go for our most forward town.
@@ -454,6 +541,12 @@ export class Campaign {
     if (this.started) (this.s.repairs ??= {})[name] = this.repairing(name) + pts;
     else a.hp += pts;
     return true;
+  }
+
+  /** A unit's worst damaged site (main site or launcher), 100 when undamaged, and when its crew will have it repaired. */
+  unitDamage(u: DeployedUnit): { hp: number; done: number | null } {
+    const hp = Math.min(u.hp ?? 100, ...u.launchers.map((l) => l.hp ?? 100));
+    return { hp, done: hp < 100 ? this.clock + ((100 - hp) / REPAIR_PER_H) * 60 : null };
   }
 
   /** When the crews will have finished an asset's repairs (clock), or null if nothing is being repaired. */
@@ -774,6 +867,11 @@ export class Campaign {
       const left = (this.s.pulses?.length ?? 1) - (this.s.pulseIdx ?? 0) - 1;
       lines.push(`Next: ${PULSES[slot.type].name.toLowerCase()}, ${PULSES[slot.type].desc}. Expected about ${hhmm(warn.at)}, mainly from the ${SECTOR_NAMES[warn.sector]}. Timings from intel have been out by an hour or two before. ${left ? `${left === 1 ? 'One more operation' : `${left} more operations`} expected today.` : 'The last operation expected today.'}`);
     }
+    const push = this.pushNow;
+    if (push) {
+      const f = this.s.front!;
+      lines.push(`Enemy armour is massing at ${f.towns[push.from].name} to attack ${f.towns[push.town].name} with the next raid, with drones and missiles aimed at the town. Keep the town above ${ARMOUR.takeHp}% while the armour assaults it, or strike the armour before it moves.`);
+    }
     lines.push(`Weather: ${wx.desc}`);
     const doc = doctrineOf(this.s.enemy.doctrine);
     if (doc) lines.push(this.s.day >= 2 ? `Enemy commander: ${doc.name}. ${doc.desc}` : 'Enemy commander: not yet known. Watch what they send today; by tomorrow we will know who we are up against.');
@@ -815,6 +913,11 @@ export class Campaign {
     const off = f && f.offensive !== null ? f.towns[f.offensive] : null;
     return new World({
       towns: f?.towns.filter((t) => t.ours).map((t) => ({ name: t.name, x: t.x, y: t.y, hp: t.hp })),
+      enemyAssault: (() => {
+        const p = withRaids ? this.pushNow : null;
+        if (!p || !f) return undefined;
+        return { target: f.towns[p.town].name, from: { x: f.towns[p.from].x, y: f.towns[p.from].y }, to: { x: f.towns[p.town].x, y: f.towns[p.town].y } };
+      })(),
       assault: off ? { ...assaultSpot(this.terrain, f!, f!.offensive!), target: off.name, from: columnStart(this.terrain, f!, f!.offensive!) } : undefined,
       zones: this.zones,
       seed: this.s.seed * 31 + this.s.day * 7 + (this.s.pulseIdx ?? 0),
@@ -864,7 +967,7 @@ export class Campaign {
           continue;
         }
         u.launchers = f.fu.launchers
-          .map((l, i) => ({ ...u.launchers[i], x: Math.round(l.site.pos.x), y: Math.round(l.site.pos.y), rounds: l.rounds }))
+          .map((l, i) => ({ ...u.launchers[i], x: Math.round(l.site.pos.x), y: Math.round(l.site.pos.y), rounds: l.rounds, hp: l.site !== main && l.site.hp < 99.5 ? Math.round(l.site.hp) : undefined }))
           .filter((_l, i) => {
             const alive = f.fu!.launchers[i].site.alive;
             if (!alive) losses.push(`${f.fu!.name} launcher ${i + 1}`);
@@ -888,6 +991,9 @@ export class Campaign {
         const after = rankOf(u.xp);
         if (after > before) promotions.push(`${shooter} promoted to ${RANKS[after].name}`);
       }
+      // Damage stays until the crews have repaired it.
+      if (main && main.alive && main.hp < 99.5) u.hp = Math.round(main.hp);
+      else delete u.hp;
       // Units moved during the battle stay where they ended up.
       u.x = f.unit.x;
       u.y = f.unit.y;
@@ -941,6 +1047,15 @@ export class Campaign {
       for (const tn of f.towns) {
         const site = tn.ours ? w.site(tn.name) : undefined;
         if (site) tn.hp = Math.round(site.hp);
+      }
+      // The enemy's armour: a town knocked down while it was assaulted falls to it.
+      if (w.enemyArmour) {
+        const tn = f.towns.find((x) => x.name === w.enemyArmour!.target);
+        if (w.enemyArmour.endOfRaid(w) === 'taken') {
+          if (tn) tn.hp = 0;
+          frontLines.push(`Enemy armour overran ${w.enemyArmour.target} after the raids knocked it below ${ARMOUR.takeHp}%.`);
+        } else frontLines.push(`The enemy attack on ${w.enemyArmour.target} was beaten off: the town held${tn ? ` at ${tn.hp}%` : ''}.`);
+        s.enemyPush = null;
       }
       const fallen = f.towns.findIndex((tn) => tn.ours && tn.hp <= 0);
       if (fallen >= 0) {
@@ -1051,8 +1166,16 @@ export class Campaign {
     const lastToday = (s.pulseIdx ?? 0) + 1 >= (s.pulses?.length ?? 1);
     // The day's income is paid at 06:00, after the day's last raid.
     const income = lastToday ? this.income() : 0;
+    const timeline = s.plan
+      .filter((p) => p.kind !== 'dark')
+      .map((p) => {
+        const t = w.pkgTally.get(p.id) ?? { spawned: 0, down: 0, hits: 0, missed: 0, home: 0 };
+        const b = this.theatre.find((x) => x.id === p.base);
+        return { at: at + p.t / 60, name: PKG[p.kind].name, size: p.size, from: SECTOR_NAMES[sectorOf(p.bearing)], base: b?.known ? b.name : undefined, counter: p.counter, ...t };
+      });
     const report: DayReport = {
       day: s.day,
+      timeline,
       at,
       end,
       pulse: slot?.type,

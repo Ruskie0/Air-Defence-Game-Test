@@ -1,4 +1,5 @@
 import { EnemyBase, makeTheatre } from './theatre';
+import { EnemyArmour } from './enemyarmour';
 import { DT } from './constants';
 import { Ciws, GUNS } from './ciws';
 import { MoveOrder, orderMove, scoot, stepMoves } from './mobility';
@@ -78,6 +79,8 @@ export interface WorldOptions {
   towns?: { name: string; x: number; y: number; hp: number }[];
   /** Today's assault force: its start line, the town it goes for, and where its column sets off from (it starts on its start line when omitted). */
   assault?: { x: number; y: number; target: string; from?: { x: number; y: number } };
+  /** The enemy's ground offensive on one of our towns, if one is on: the town, and the enemy town it comes from. */
+  enemyAssault?: { target: string; from: { x: number; y: number }; to: { x: number; y: number } };
   /** Where ground units may stand (the sandbox's 60 km circle when omitted). */
   zones?: DeployZone[];
   /** The enemy's installations, which every enemy weapon launches from (a fresh default theatre when omitted). */
@@ -178,10 +181,14 @@ export class World {
   readonly startHp = new Map<string, number>();
   /** Hits on defended sites per campaign raid package. */
   readonly pkgHits = new Map<number, number>();
+  /** Per raid package, for the after-action timeline: what it put in the air and how each one ended. */
+  readonly pkgTally = new Map<number, { spawned: number; down: number; hits: number; missed: number; home: number }>();
   /** Seconds each radar spent radiating (by radar code). */
   readonly radiating = new Map<string, number>();
   /** Package tag given to everything spawned while it is set. */
   spawnTag = -1;
+  /** The enemy's armoured column, when it is attacking one of our towns in this raid. */
+  enemyArmour: EnemyArmour | null = null;
   /** Everything that died or left in the last 20 s, newest last (for wrecks and kill feeds). */
   deaths: Entity[] = [];
   /** Enemy aircraft shot down this battle, keyed "package|kind" (the campaign takes them off their bases' strength). */
@@ -247,6 +254,7 @@ export class World {
       this.startHp.set(s.name, s.hp);
     }
     if (this.column) this.spawn(this.column);
+    if (o.enemyAssault) this.enemyArmour = new EnemyArmour(o.enemyAssault.target, o.enemyAssault.from, o.enemyAssault.to);
     this.redSupport.launch(this, o.counterBattery ?? 0);
     sweepCap(this);
     this.scenario = new Scenario(o.raids, this.terrain.layout.rot);
@@ -395,6 +403,12 @@ export class World {
       }
     }
     if (f.radar && u.armWatch) f.radar.armWatch = true;
+    // Damage from an earlier raid that the crews have not yet repaired.
+    if (u.hp !== undefined && f.sites[0]) f.sites[0].hp = Math.max(1, u.hp);
+    f.fu?.launchers.forEach((l, i) => {
+      const hp = u.launchers[i]?.hp;
+      if (hp !== undefined && l.site !== f.sites[0]) l.site.hp = Math.max(1, hp);
+    });
     this.fielded.push(f);
     return f;
   }
@@ -524,6 +538,7 @@ export class World {
   spawn(e: Entity): void {
     if (this.spawnTag >= 0 && e.pkg < 0) e.pkg = this.spawnTag;
     if (e.side === 'red') this.stats.spawnedKind[World.tally(e)] = (this.stats.spawnedKind[World.tally(e)] ?? 0) + 1;
+    if (e.side === 'red' && e.pkg >= 0) this.tallyOf(e.pkg).spawned++;
     // A headwind slows the attack drones down.
     if (e instanceof Drone && this.weather.droneSpeed !== 1) {
       e.spd *= this.weather.droneSpeed;
@@ -546,11 +561,26 @@ export class World {
     this.log(`Launches detected from the ${b.name.toLowerCase()}: it is on the map now, and a deep strike can find it`, 'info');
   }
 
+  private tallyOf(pkg: number): { spawned: number; down: number; hits: number; missed: number; home: number } {
+    let t = this.pkgTally.get(pkg);
+    if (!t) this.pkgTally.set(pkg, (t = { spawned: 0, down: 0, hits: 0, missed: 0, home: 0 }));
+    return t;
+  }
+
   /** Record how an entity died or left, once. */
   setFate(e: Entity, how: Fate['how'], by: string, extra: Partial<Fate> = {}): void {
     if (e.fate) return;
     e.fate = { how, by, t: this.t, pos: clone(e.pos), vel: clone(e.vel), air: how === 'missile' || how === 'gun' || how === 'laser', ...extra };
     this.deaths.push(e);
+    if (e.side === 'red' && e.pkg >= 0) {
+      const t = this.tallyOf(e.pkg);
+      if (e.fate.air) t.down++;
+      else if (how === 'exit') t.home++;
+      else if (how === 'impact') {
+        if (e.fate.hit) t.hits++;
+        else t.missed++;
+      }
+    }
     // Enemy aircraft shot down are lost to their base for good.
     if (e.side === 'red' && !e.munition && e.fate.air) {
       const key = `${e.pkg}|${World.tally(e)}`;
@@ -870,6 +900,7 @@ export class World {
     for (const u of this.units) u.update(this);
     this.exposure.step(this);
     this.enemyAd.step(this);
+    this.enemyArmour?.step(this, dt);
     if (this.t >= this.nextTewa) {
       this.nextTewa = this.t + 1;
       autoEngage(this);

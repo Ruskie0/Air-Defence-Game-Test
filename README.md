@@ -6,8 +6,9 @@ SHORAD, two CIWS guns, EW (GNSS jammer, radar decoy, EMCON) and two CAP fighters
 against drones, cruise missiles, bombers, SEAD with anti-radiation missiles, a stand-off jammer and
 ballistic missiles.
 
-Two modes: a **ten-day campaign** (buy and deploy units between days on a budget earned from what
-still stands, against an enemy that learns from what worked) and the **sandbox** (a fixed defence
+Two modes: a **ten-day campaign** on one continuous clock (two to four enemy raids a day, each
+launched from a real enemy installation with finite stocks; buy, repair and redeploy in the lulls
+between them, on a budget earned from what still stands, against an enemy that learns from what worked) and the **sandbox** (a fixed defence
 against six scripted raids plus a spawn panel).
 
 ## Play

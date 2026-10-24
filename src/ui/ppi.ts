@@ -238,6 +238,24 @@ export class Ppi {
       }
     }
 
+    // The enemy's armoured column on one of our towns: a red chevron pointing down the road.
+    const arm = w.enemyArmour;
+    if (arm && !arm.over) {
+      const [x, y] = this.toScreen(arm.pos.x, arm.pos.y);
+      const a = Math.atan2(-(arm.dest.y - arm.pos.y), arm.dest.x - arm.pos.x);
+      g.strokeStyle = '#ff4d4d';
+      g.lineWidth = 2;
+      g.beginPath();
+      g.moveTo(x + Math.cos(a + 2.4) * 7, y + Math.sin(a + 2.4) * 7);
+      g.lineTo(x + Math.cos(a) * 7, y + Math.sin(a) * 7);
+      g.lineTo(x + Math.cos(a - 2.4) * 7, y + Math.sin(a - 2.4) * 7);
+      g.stroke();
+      g.lineWidth = 1;
+      g.fillStyle = '#ff4d4d';
+      g.font = '9px sans-serif';
+      g.fillText('ARMOUR', x + 9, y - 4);
+    }
+
     // Enemy installations we have located: a red diamond and a name (crossed out once out of the war).
     g.font = '9px sans-serif';
     for (const b of w.theatre) {

@@ -81,6 +81,8 @@ function shop(): string[] {
       if (r) bought.push(`deep strike ${best} (${c.s.deepStrike?.ok ? 'hit' : 'failed'})`);
     }
   }
+  // Break up an enemy attack on our front town while its armour masses, when there is money for it.
+  if (c.s.money > 80 && !c.armourStrikeError()) bought.push(`armour strike (${c.strikeArmour()?.includes('broken up') ? 'hit' : 'missed'})`);
   // Keep a SHORAD unit and a gun with the front town, unless they go forward with an offensive below.
   const ft = c.s.front?.towns.filter((t) => t.ours).pop();
   if (ft) {

@@ -1,6 +1,7 @@
 import { loadBest } from '../campaign/laststand';
 import { MEDALS, MedalId, earnedMedals } from '../campaign/medals';
-import { CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty } from '../campaign/campaign';
+import { ARMOUR_STRIKE, CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty } from '../campaign/campaign';
+import { ARMOUR } from '../sim/enemyarmour';
 import { DELIVERY_H, PULSES, REPAIR_PER_H, hhmm, stamp } from '../campaign/clock';
 import type { View3D } from '../render/view3d';
 import { CATALOG, DeployedUnit, RANKS, UnitType, rankOf } from '../sim/catalog';
@@ -114,7 +115,7 @@ export class CampaignUi {
         </div>
         ${
           saved
-            ? `<button data-cui="continue" class="big"><b>Continue campaign</b><small>Day ${saved.s.day} of ${CAMPAIGN_DAYS}, budget ${money(saved.s.money)}, ${saved.units.length} units deployed.</small></button>`
+            ? `<button data-cui="continue" class="big"><b>Continue campaign</b><small>${esc(stamp(saved.clock))} of ${CAMPAIGN_DAYS} days, budget ${money(saved.s.money)}, ${saved.units.length} units deployed. Saved automatically between raids.</small></button>`
             : ''
         }
         <button data-cui="laststand" class="big">
@@ -194,7 +195,7 @@ export class CampaignUi {
     if (!c) return;
     const s = c.s;
     const last = s.history[s.history.length - 1];
-    $('raid').innerHTML = `<span class="lbl">DAY</span><b>${s.day}</b><span class="dim">/${CAMPAIGN_DAYS}</span> <span class="lbl" style="margin-left:10px">PLANNING</span><span class="dim">${c.diff.name}</span>`;
+    $('raid').innerHTML = `<span class="lbl">DAY</span><b>${s.day}</b><span class="dim">/${CAMPAIGN_DAYS}</span> <span class="lbl" style="margin-left:10px">PLANNING</span><span class="dim">${c.diff.name} · saved</span>`;
     $('clock').innerHTML = `<b>${hhmm(c.clock)}</b> <span class="rate paused">CLOCK STOPPED</span>`;
     $('score').innerHTML = `<span class="chip">Budget <b>${money(s.money)}</b></span>`;
 
@@ -249,6 +250,8 @@ export class CampaignUi {
           })
           .join('') || '<div class="dim">No enemy installation is located yet. Bases show up once they launch something.</div>';
     $('plan-left').innerHTML = `
+      <h3>Situation, ${esc(stamp(c.clock))}</h3>
+      ${this.situationMap()}
       ${event}
       ${this.frontPanel()}
       <h3>Intelligence briefing, ${esc(stamp(c.clock))}</h3>
@@ -302,6 +305,8 @@ export class CampaignUi {
           const next = RANKS[rank + 1];
           rows.push(`Crew <b>${RANKS[rank].name} ${RANKS[rank].badge}</b> · ${u.xp ?? 0} kills${next ? `, ${next.xp - (u.xp ?? 0)} to ${next.name}` : ''}`);
         }
+        const dmg = c.unitDamage(u);
+        if (dmg.done !== null) rows.push(`<span class="${dmg.hp < 40 ? 'bad' : 'warn'}">Damaged in an earlier raid: down to ${Math.round(dmg.hp)}%. The crew has it repaired by ${hhmm(dmg.done)}; another hit before then could finish it.</span>`);
         if (u.arrives !== undefined) rows.push(`<span class="warn">On its way: reaches the depot about ${hhmm(u.arrives)}. It sits out raids until then; place it now and it deploys where you put it.</span>`);
         if (c.spotted(u)) rows.push(`<span class="bad">The enemy has a fix on this position (recon photographs or its launches). Strikes may be aimed here: move it to dodge them.</span>`);
         if (info.sector) rows.push(`Sector facing <b>${Math.round(u.facing).toString().padStart(3, '0')}°</b> (±60°)`);
@@ -344,6 +349,75 @@ export class CampaignUi {
     const waiting = c.started && (c.units.some((u) => u.arrives !== undefined) || c.s.deployment.assets.some((a) => c.repairing(a.name) > 0));
     return `<button data-cui="start" class="go big-go" title="The clock runs on to the enemy's next operation and the battle starts">Advance to the next raid ▶${when}</button>
       ${c.started ? `<button data-cui="wait" title="Let an hour pass, to let orders arrive and repairs go on before you reposition. Intel's timings can be out: the enemy may come during the hour">Wait 1 hour${waiting ? '' : ' <small class="dim">nothing pending</small>'}</button>` : ''}`;
+  }
+
+  /** The war at a glance: our ground, the road, located enemy installations with what they hold, and where the next raid is expected from. */
+  private situationMap(): string {
+    const c = this.c!;
+    const f = c.s.front;
+    const W = 340;
+    const H = 230;
+    const bases = c.theatre.filter((b) => (b.known || b.lost) && b.kind !== 'rear');
+    const pts = [{ x: 0, y: 0 }, ...(f?.towns ?? []), ...bases];
+    // Fit the airbase, the road and the located installations, at least 60 km across, with a margin for labels.
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const spanX = Math.max(60000, (Math.max(...xs) - Math.min(...xs)) * 1.3);
+    const spanY = Math.max(60000, (Math.max(...ys) - Math.min(...ys)) * 1.3);
+    const k = Math.min((W - 60) / spanX, (H - 30) / spanY);
+    const reach = Math.max(spanX, spanY) / 2;
+    const sx = (x: number): number => W / 2 - 20 + (x - cx) * k;
+    const sy = (y: number): number => H / 2 - (y - cy) * k;
+    const out: string[] = [];
+    for (const z of c.zones) out.push(`<circle cx="${sx(z.x).toFixed(1)}" cy="${sy(z.y).toFixed(1)}" r="${Math.max(3, z.r * k).toFixed(1)}" fill="rgba(70,209,138,0.12)" stroke="rgba(70,209,138,0.5)"/>`);
+    if (f?.towns.length) {
+      const road = [{ x: 0, y: 0 }, ...f.towns].map((t) => `${sx(t.x).toFixed(1)},${sy(t.y).toFixed(1)}`).join(' ');
+      out.push(`<polyline points="${road}" fill="none" stroke="#6b7a70" stroke-dasharray="3 3"/>`);
+      f.towns.forEach((t, i) => {
+        const col = t.ours ? '#5ee07a' : i === f.offensive ? '#ffd84d' : '#ff6b5b';
+        out.push(`<rect x="${(sx(t.x) - 4).toFixed(1)}" y="${(sy(t.y) - 4).toFixed(1)}" width="8" height="8" fill="${col}"><title>${esc(t.name)}${t.ours ? ' (ours)' : ''}</title></rect>`);
+        out.push(`<text x="${(sx(t.x) + 6).toFixed(1)}" y="${(sy(t.y) + 3).toFixed(1)}" fill="${col}" font-size="9">${esc(t.name)}${t.airfield ? ' ✈' : ''}</text>`);
+      });
+    }
+    out.push(`<circle cx="${sx(0)}" cy="${sy(0)}" r="4" fill="#46d18a"/><text x="${sx(0) + 6}" y="${sy(0) - 5}" fill="#46d18a" font-size="9">Airbase</text>`);
+    const total = (st: Partial<Record<Asset, number>>): number => (Object.keys(st) as Asset[]).reduce((t, a) => t + Math.floor((st[a] ?? 0) + 1e-6), 0);
+    for (const b of bases) {
+      const x = sx(b.x);
+      const y = sy(b.y);
+      const full = b.start ? total(b.start) : 0;
+      const pct = b.lost ? 0 : full ? Math.min(1, total(b.stock) / full) : 1;
+      out.push(`<g opacity="${b.lost ? 0.45 : 1}"><path d="M${x} ${y - 5} L${x + 5} ${y} L${x} ${y + 5} L${x - 5} ${y} Z" fill="none" stroke="#ff6b5b" stroke-width="1.5"><title>${esc(b.name)}: ${b.lost ? 'out of the war' : esc(stockText(b))}</title></path>`);
+      if (b.lost) out.push(`<path d="M${x - 5} ${y - 5} L${x + 5} ${y + 5} M${x + 5} ${y - 5} L${x - 5} ${y + 5}" stroke="#ff6b5b"/>`);
+      else out.push(`<rect x="${x - 8}" y="${y + 7}" width="16" height="3" fill="#3a2a2a"/><rect x="${x - 8}" y="${y + 7}" width="${(16 * pct).toFixed(1)}" height="3" fill="${pct > 0.6 ? '#ff6b5b' : pct > 0.3 ? '#ffb05b' : '#8a8a8a'}"/>`);
+      out.push('</g>');
+    }
+    // The warning: an arrow in from the expected axis, with the time.
+    const warn = c.s.warn;
+    if (warn) {
+      // From the map edge along the expected bearing, towards the airbase.
+      const a = (warn.sector * 45 * Math.PI) / 180;
+      const dx = Math.sin(a);
+      const dy = -Math.cos(a);
+      const bx = sx(0);
+      const by = sy(0);
+      const edge = Math.min(dx > 0 ? (W - 10 - bx) / dx : dx < 0 ? (10 - bx) / dx : 1e9, dy > 0 ? (H - 10 - by) / dy : dy < 0 ? (16 - by) / dy : 1e9);
+      const x0 = bx + dx * edge;
+      const y0 = by + dy * edge;
+      const x1 = bx + dx * Math.min(edge * 0.45, edge - 24);
+      const y1 = by + dy * Math.min(edge * 0.45, edge - 24);
+      out.push(`<defs><marker id="sit-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#ffd84d"/></marker></defs>`);
+      out.push(`<line x1="${x0.toFixed(1)}" y1="${y0.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${y1.toFixed(1)}" stroke="#ffd84d" stroke-width="2.5" marker-end="url(#sit-arrow)"/>`);
+      const tx = Math.min(W - 70, Math.max(4, x0 - 30));
+      const ty = Math.min(H - 4, Math.max(12, y0 + (y0 < H / 2 ? 14 : -6)));
+      out.push(`<text x="${tx.toFixed(1)}" y="${ty.toFixed(1)}" fill="#ffd84d" font-size="10">next raid ~${hhmm(warn.at)}</text>`);
+    }
+    const hidden = c.theatre.filter((b) => !b.known && !b.lost).length;
+    const scaleKm = reach > 120000 ? 50 : 25;
+    out.push(`<line x1="8" y1="${H - 8}" x2="${8 + scaleKm * 1000 * k}" y2="${H - 8}" stroke="#8a9a90"/><text x="8" y="${H - 12}" fill="#8a9a90" font-size="9">${scaleKm} km</text>`);
+    out.push(`<text x="${W - 4}" y="${H - 6}" fill="#8a9a90" font-size="9" text-anchor="end">N ↑${hidden ? ` · ${hidden} enemy site${hidden > 1 ? 's' : ''} not located` : ''}</text>`);
+    return `<div class="sitmap"><svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Situation map">${out.join('')}</svg></div>`;
   }
 
   /** The enemy's installations as far as intel knows them, with what each has left, and what it has lost. */
@@ -396,7 +470,23 @@ export class CampaignUi {
     return `<h3>The front</h3>
       <p class="dim">Towns we hold pay every day, let units deploy round them, and each one past the first cuts the enemy's raids by ${Math.round(TOWN_THREAT_CUT * 100)}%. Raids also go for our front town: one knocked flat falls.</p>
       <ul class="intel road">${road}</ul>
+      ${this.pushPanel()}
       ${action}`;
+  }
+
+  /** The enemy's own attack on one of our towns: when it is coming, and the chance to break it up first. */
+  private pushPanel(): string {
+    const c = this.c!;
+    const p = c.s.enemyPush;
+    const f = c.s.front;
+    if (!p || !f) return '';
+    const town = f.towns[p.town]?.name ?? '';
+    if (p.broken) return `<p class="good">The enemy attack on ${esc(town)} was broken up by our strike.</p>`;
+    const now = c.pushNow;
+    const why = c.armourStrikeError();
+    return `<div class="event"><h3>Enemy armour massing at ${esc(f.towns[p.from]?.name ?? '')}</h3>
+      <p>${now ? `It attacks ${esc(town)} with the next raid` : `Intel expects it to attack ${esc(town)} in a later raid today`}, behind drones and missiles aimed at the town. If the raids knock the town below ${ARMOUR.takeHp}% while the armour assaults it, the town falls. Cover it with air defence, or hit the armour before it moves.</p>
+      <div class="row"><button data-cui="armourstrike" ${why ? 'disabled' : ''} title="${esc(why ?? `${Math.round(ARMOUR_STRIKE.chance * 100)}% chance to break the attack up before it starts`)}">Strike the armour ${money(ARMOUR_STRIKE.costM)} · ${Math.round(ARMOUR_STRIKE.chance * 100)}%</button>${p.struck ? ' <span class="dim">Our strike missed.</span>' : ''}</div></div>`;
   }
 
   private showFocus(): void {
@@ -492,6 +582,7 @@ export class CampaignUi {
               .join('')}</ul>`
           : ''
       }
+      ${this.timeline(r)}
       ${r.front?.length ? `<h3>The front</h3><ul class="intel">${r.front.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
       ${r.enemy?.length ? `<h3>The enemy</h3><ul class="intel">${r.enemy.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
       <h3>Damage</h3>
@@ -511,6 +602,25 @@ export class CampaignUi {
              <div class="row"><button data-cui="plan" class="go">Plan for the next raid ▶</button><button data-cui="menu">Save and quit</button></div>`
       }`;
     $('debrief').classList.remove('hidden');
+  }
+
+  /** After action: every package in the order it came, and what became of it. */
+  private timeline(r: DayReport): string {
+    if (!r.timeline?.length) return '';
+    const rows = r.timeline
+      .map((p) => {
+        const out: string[] = [];
+        if (p.down) out.push(`${p.down} shot down`);
+        if (p.hits) out.push(`<span class="bad">${p.hits} hit${p.hits > 1 ? 's' : ''}</span>`);
+        if (p.missed) out.push(`${p.missed} missed`);
+        if (p.home) out.push(`${p.home} went home`);
+        const left = p.spawned - p.down - p.hits - p.missed - p.home;
+        if (left > 0) out.push(`${left} still out`);
+        const outcome = p.spawned ? out.join(', ') : '<span class="dim">never launched</span>';
+        return `<tr class="${p.hits ? 'tl-hit' : ''}"><td class="mono">${hhmm(p.at)}</td><td>${p.counter ? 'Counter-attack: ' : ''}${esc(p.name)} ×${p.size}</td><td>${esc(p.from)}${p.base ? ` <span class="dim">${esc(p.base.toLowerCase())}</span>` : ''}</td><td>${outcome}</td></tr>`;
+      })
+      .join('');
+    return `<h3>After action</h3><table class="timeline"><thead><tr><th>Time</th><th>Package</th><th>From</th><th>What became of it</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   // ------------------------------------------------------------- input
@@ -644,6 +754,12 @@ export class CampaignUi {
         if (!c.launchOffensive()) return;
         this.note = `Offensive on ${c.s.front!.towns[c.s.front!.offensive!].name} ordered. Move units up to cover the assault force (yellow on the scope).`;
         break;
+      case 'armourstrike': {
+        const r = c.strikeArmour();
+        if (!r) return;
+        this.note = r;
+        break;
+      }
       case 'offensive-cancel':
         c.cancelOffensive();
         this.note = 'Offensive called off.';

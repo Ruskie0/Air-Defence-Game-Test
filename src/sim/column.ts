@@ -39,6 +39,7 @@ export class Column extends Entity {
   private readonly t0: number;
   private lastHp: number;
   private hitAt = -1e9;
+  private haltedAt = -1e9;
 
   constructor(name: string, start: V3, dest: V3, site: Site, objective: string, t0: number) {
     super(name, start);
@@ -78,10 +79,12 @@ export class Column extends Entity {
     if (this.state === 'arrived') return;
     if (w.t < this.t0 + COLUMN.formUpS) return;
     const threat = w.entities.find((e) => e.alive && e.side === 'red' && (e.munition || e.airborne) && hdist(e.pos, this.pos) < COLUMN.haltR);
-    if (threat || w.t - this.hitAt < COLUMN.haltAfterHitS) {
+    // Once halted it stays down a little while before moving again, rather than stopping and starting.
+    if (threat || w.t - this.hitAt < COLUMN.haltAfterHitS || (this.state === 'halted' && w.t < this.haltedAt + 10)) {
+      if (this.state !== 'halted') this.haltedAt = w.t;
       if (this.state !== 'halted') w.log(`${this.name} halted: ${threat ? 'enemy overhead' : 'under fire'}, taking cover`, 'alert');
       this.state = 'halted';
-      this.haltWhy = threat ? 'enemy overhead' : 'under fire';
+      if (threat || w.t - this.hitAt < COLUMN.haltAfterHitS) this.haltWhy = threat ? 'enemy overhead' : 'under fire';
       return;
     }
     if (this.state !== 'moving') w.log(`${this.name} moving up the road to ${this.objective}`, 'info');

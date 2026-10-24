@@ -347,8 +347,14 @@ export class Hud {
         this.campaign?.onEndDay();
         break;
       case 'cap-station':
+        if (w.fighters[Number(d.i)].escort) w.fighters[Number(d.i)].escortColumn(w, false);
         w.fighters[Number(d.i)].toStation(w);
         break;
+      case 'cap-escort': {
+        const f = w.fighters[Number(d.i)];
+        f.escortColumn(w, !f.escort);
+        break;
+      }
       case 'cap-rtb':
         w.fighters[Number(d.i)].rtb(w);
         break;
@@ -638,7 +644,7 @@ export class Hud {
       const st = !f.alive ? 'LOST' : f.state === 'ground' ? (f.oneSortie ? 'LANDED' : `REARM ${fmtTime(f.groundUntil - w.t)}`) : f.state === 'intercept' ? `INTERCEPT ${tr?.label ?? ''}` : f.state.toUpperCase();
       rows.push(`<div class="sys sel-able ${this.unitSel === `F${i}` ? 'focus' : ''}" data-act="unit" data-code="F${i}"><div class="sys-h"><b>${f.name}</b> <span class="st ${f.alive ? 'ok' : 'dead'}">${st}</span></div>
         <div class="sys-b">AAM <b>${f.missiles}</b> · Fuel ${Math.round((100 * f.fuel) / f.maxFuel)}%
-        <button data-act="cap-station" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>CAP</button><button data-act="cap-rtb" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>RTB</button></div></div>`);
+        <button data-act="cap-station" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>CAP</button><button data-act="cap-rtb" data-i="${i}" ${f.alive && f.airborne ? '' : 'disabled'}>RTB</button>${w.column?.alive && f.alive ? `<button data-act="cap-escort" data-i="${i}" class="${f.escort ? 'on' : ''}" title="Escort the assault column: patrol just ahead of it and take on hostiles within 25 km of it">${f.escort ? 'Escorting' : 'Escort'}</button>` : ''}</div></div>`);
     });
     rows.push('<h3>Defended assets</h3>');
     const hurt = w.sites.filter((s) => s.defended || s.hp < 100);

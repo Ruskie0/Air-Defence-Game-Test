@@ -30,7 +30,7 @@ export const EVENTS: Record<EventId, EventDef> = {
     title: 'An arms dealer at the gate',
     text: 'A dealer with a truck of surplus MR SAM missiles offers 8 of them at a third of the depot price, no questions asked.',
     choices: [
-      { label: 'Buy them', detail: '8 spare missiles for the MR battery', costM: 3 },
+      { label: 'Buy them', detail: '8 spare missiles for the MR battery', costM: 4 },
       { label: 'Send him away', detail: 'Nothing happens' },
     ],
     ok: (c) => !!firstMr(c),

@@ -417,7 +417,8 @@ export class Effects {
       const contrail = CONTRAIL_KINDS.has(e.kind) && e.pos.z > 7800;
       const tbm = e.kind === 'tbm' && e.pos.z < 70000 && e.speed > 900;
       const atgm = e.kind === 'atgm';
-      if (!contrail && !tbm && !atgm) continue;
+      const rsam = e.kind === 'rsam';
+      if (!contrail && !tbm && !atgm && !rsam) continue;
       const key = -e.id;
       seen.add(key);
       const x = e.pos.x;
@@ -425,13 +426,23 @@ export class Effects {
       const z = -e.pos.y;
       if (tbm) this.fire.spawn({ x, y, z, life: Math.max(0.05, dt * 1.5), size0: 14, size1: 14, c0: [12, 6, 2.5], minPx: 4, windK: 0 });
       if (atgm) this.fire.spawn({ x, y, z, life: Math.max(0.05, dt * 1.5), size0: 1.2, size1: 1.2, c0: [12, 7, 3], minPx: 2.5, windK: 0 });
+      if (rsam) {
+        // Enemy SAM motor: a hot point behind the nozzle, then a thick grey smoke trail.
+        const k = 3 / Math.max(1, e.speed);
+        const life = Math.max(0.05, dt * 1.5);
+        const fx = x - e.vel.x * k;
+        const fy = y - e.vel.z * k;
+        const fz = z + e.vel.y * k;
+        this.fire.spawn({ x: fx, y: fy, z: fz, life, size0: 2.2, size1: 2.2, c0: [14, 8, 3.5], minPx: 3.5, windK: 0 });
+        this.fire.spawn({ x: fx, y: fy, z: fz, life, size0: 9, size1: 9, alpha: 0.45, c0: [1.6, 0.8, 0.3], windK: 0 });
+      }
       const last = this.lastEmit.get(key);
       if (!last) {
         this.lastEmit.set(key, { x, y, z });
         continue;
       }
       const seg = Math.hypot(x - last.x, y - last.y, z - last.z);
-      const spacing = Math.max(tbm ? 150 : atgm ? 8 : 70, seg / 10);
+      const spacing = Math.max(tbm ? 150 : atgm ? 8 : rsam ? 25 : 70, seg / 10);
       const n = Math.floor(seg / spacing);
       if (n === 0) continue;
       for (let k = 1; k <= n; k++) {
@@ -440,12 +451,12 @@ export class Effects {
           x: last.x + (x - last.x) * f,
           y: last.y + (y - last.y) * f,
           z: last.z + (z - last.z) * f,
-          life: tbm ? 20 : atgm ? 6 : 70,
-          size0: tbm ? 10 : atgm ? 1.5 : 6,
-          size1: tbm ? 50 : atgm ? 9 : 75,
-          alpha: tbm ? 0.3 : atgm ? 0.5 : 0.32,
-          c0: [0.98, 0.98, 1],
-          c1: [0.9, 0.92, 0.96],
+          life: tbm ? 20 : atgm ? 6 : rsam ? 22 : 70,
+          size0: tbm ? 10 : atgm ? 1.5 : rsam ? 3 : 6,
+          size1: tbm ? 50 : atgm ? 9 : rsam ? 32 : 75,
+          alpha: tbm ? 0.3 : atgm ? 0.5 : rsam ? 0.42 : 0.32,
+          c0: rsam ? [0.86, 0.85, 0.82] : [0.98, 0.98, 1],
+          c1: rsam ? [0.7, 0.7, 0.7] : [0.9, 0.92, 0.96],
           drag: 0.2,
         });
       }

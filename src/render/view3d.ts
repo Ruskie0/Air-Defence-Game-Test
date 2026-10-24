@@ -14,6 +14,7 @@ import { V3, clamp, polar } from '../sim/math';
 import type { Radar } from '../sim/radar';
 import type { Ciws } from '../sim/ciws';
 import type { Site } from '../sim/sites';
+import type { EnemyBase } from '../sim/theatre';
 import { MAP_SEED, type World } from '../sim/world';
 import { IDENT_COLOR } from '../ui/colors';
 import { CameraRig } from './camera';
@@ -188,7 +189,7 @@ export class View3D {
   private readonly trackLabels = new Map<number, { obj: CSS2DObject; el: HTMLDivElement; last: string }>();
   private readonly siteObjs: { site: Site; root: THREE.Group; mats: { color: THREE.Color }[]; label: CSS2DObject; dead: boolean }[] = [];
   /** Enemy installations our intel has located: placeholder models and labels, rebuilt when that set changes. */
-  private readonly baseObjs: { root: THREE.Group; label: CSS2DObject }[] = [];
+  private readonly baseObjs: { base: EnemyBase; site: Site | null; root: THREE.Group; label: CSS2DObject; mats: { color: THREE.Color }[]; dead: boolean }[] = [];
   private readonly antennas: { radar: Radar; obj: THREE.Object3D }[] = [];
   private readonly turrets: { ciws: Ciws; yaw: THREE.Object3D; pitch: THREE.Object3D }[] = [];
   private readonly coverage = new THREE.Group();
@@ -495,46 +496,124 @@ export class View3D {
   }
 
   /**
-   * Enemy installations we know about, as placeholder models: revetments and launch vehicles in the enemy's
-   * colours, with a red label. The rear air base is off the map and has none.
+   * Enemy installations we know about: SAM batteries, missile and drone launchers in their hides, helicopter
+   * FARPs and air bases, in the enemy's tan-tinted paint, with a red label. The rear air base is off the map
+   * and has none. A lost base, or a SAM site knocked out in battle, is drawn burnt out.
    */
   private buildBases(): void {
     const w = this.world;
     const shown = w.theatre.filter((b) => b.known && b.kind !== 'rear');
     this.clearBases();
-    const tan = new THREE.MeshLambertMaterial({ color: 0x7a5a48 });
-    const dark = new THREE.MeshLambertMaterial({ color: 0x4a3a32 });
     for (const b of shown) {
       const root = new THREE.Group();
       const ground = w.terrain.groundAt(b.x, b.y);
       root.position.set(b.x, ground, -b.y);
-      const box = (sx: number, sy: number, sz: number, m: THREE.Material, x: number, z: number): void => {
-        const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), m);
-        mesh.position.set(x, w.terrain.groundAt(b.x + x, b.y - z) - ground + sy / 2, z);
-        root.add(mesh);
+      const mats: { color: THREE.Color }[] = [];
+      const paint = new THREE.MeshStandardMaterial({ vertexColors: true, color: 0xd9b89a, metalness: 0.15, roughness: 0.8 });
+      const plain = (c: number): THREE.MeshLambertMaterial => {
+        const m = new THREE.MeshLambertMaterial({ color: c });
+        mats.push(m);
+        return m;
       };
-      if (b.kind === 'airfield') {
-        box(2400, 0.6, 50, dark, 0, 0);
-        for (let i = 0; i < 6; i++) box(40, 12, 30, tan, -900 + i * 360, 160);
-      } else {
-        // Launch vehicles and reloads in a dispersed hide.
-        const n = b.kind === 'drones' ? 4 : 3;
-        for (let i = 0; i < n; i++) {
-          const a = (i / n) * Math.PI * 2;
-          box(12, 4, 4, tan, Math.cos(a) * 120, Math.sin(a) * 120);
+      mats.push(paint);
+      // Everything sits on the ground under it, turned to face away from our side.
+      const away = Math.atan2(-b.x, b.y);
+      const at = (o: THREE.Object3D, x: number, z: number, yaw = 0): THREE.Object3D => {
+        const ca = Math.cos(away);
+        const sa = Math.sin(away);
+        const wx = x * ca + z * sa;
+        const wz = -x * sa + z * ca;
+        o.position.set(wx, w.terrain.groundAt(b.x + wx, b.y - wz) - ground + o.position.y, wz);
+        o.rotation.y = away + yaw;
+        root.add(o);
+        return o;
+      };
+      const unit = (name: string, x: number, z: number, yaw = 0): THREE.Object3D => at(new THREE.Mesh(groundGeometry(name), paint), x, z, yaw);
+      const box = (sx: number, sy: number, sz: number, c: number, x: number, z: number, yaw = 0): THREE.Object3D => {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz).translate(0, sy / 2, 0), plain(c));
+        return at(mesh, x, z, yaw);
+      };
+      const parked = (kind: string, x: number, z: number, yaw = 0): void => {
+        const m = airModel(kind);
+        m.material = paint;
+        m.getObjectByName('blur')?.removeFromParent();
+        for (const c of m.children) if (c instanceof THREE.Mesh) c.material = paint;
+        const g = new THREE.Group();
+        g.add(m);
+        m.position.y = kind === 'helo' ? 0.2 : 1.6;
+        at(g, x, z, yaw);
+      };
+      switch (b.kind) {
+        case 'sam': {
+          // A battery: tracking radar in the middle, launchers spread round it, a command post and a reload truck.
+          const radar = unit('radar-base', 0, 0);
+          const ant = new THREE.Mesh(groundGeometry('antenna-MR'), paint);
+          ant.position.y = 4.4;
+          ant.rotation.x = -0.2;
+          radar.add(ant);
+          for (let i = 0; i < 3; i++) {
+            const a = (i - 1) * 0.9;
+            unit('launcher-MR', Math.sin(a) * 140, Math.cos(a) * 140 - 30, (i - 1) * 0.5);
+          }
+          unit('ifv', -60, -90, 0.3);
+          box(8, 3, 3, 0x5a4a3c, 70, -110, -0.2);
+          break;
         }
-        box(20, 6, 10, dark, 0, 0);
+        case 'tbm':
+        case 'glcm':
+          // Erector-launchers and reload trucks dispersed in a hide.
+          for (let i = 0; i < 3; i++) {
+            const a = (i / 3) * Math.PI * 2 + 0.4;
+            unit(b.kind === 'tbm' ? 'launcher-LR' : 'launcher-MR', Math.cos(a) * 130, Math.sin(a) * 130, a);
+          }
+          box(10, 3.2, 3, 0x5a4a3c, 0, 0);
+          box(10, 3.2, 3, 0x5a4a3c, 18, 8, 0.4);
+          break;
+        case 'drones':
+          // Launch rails on trailers, ground control shelters and a few airframes ready on the rails.
+          for (let i = 0; i < 4; i++) {
+            at(new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.3, 9).rotateX(-0.25).translate(0, 1.8, 0), plain(0x6a5a48)), -60 + i * 40, 40);
+            parked('drone', -60 + i * 40, 40);
+          }
+          box(6, 2.6, 2.6, 0x5a4a3c, -20, -40);
+          box(6, 2.6, 2.6, 0x5a4a3c, 20, -40);
+          unit('ifv', 60, -50, 0.4);
+          break;
+        case 'farp':
+          // Forward arming and refuelling point: helicopters on pads, a fuel bladder and an ammunition stack.
+          for (let i = 0; i < 4; i++) {
+            const x = (i % 2) * 90 - 45;
+            const z = Math.floor(i / 2) * 90 - 45;
+            box(24, 0.3, 24, 0x8a7c66, x, z);
+            parked('helo', x, z, 0.2 * i);
+          }
+          box(14, 1.6, 9, 0x2e2a26, 120, 0);
+          box(8, 2, 4, 0x5a4a3c, -120, 20);
+          break;
+        case 'airfield':
+          // Runway, taxiway, hardened shelters and jets on the apron.
+          box(2400, 0.6, 50, 0x3a3836, 0, 0);
+          box(1600, 0.5, 22, 0x44403c, 0, 140);
+          for (let i = 0; i < 6; i++) {
+            const shelter = new THREE.Mesh(new THREE.CylinderGeometry(16, 16, 36, 12, 1, false, 0, Math.PI).rotateZ(Math.PI / 2).rotateY(Math.PI / 2), plain(0x8d8172));
+            at(shelter, -900 + i * 360, 220);
+          }
+          for (let i = 0; i < 4; i++) parked(i % 2 ? 'sead' : 'strike', -600 + i * 120, 175, Math.PI);
+          box(20, 30, 20, 0x9a8c7a, 900, 260);
+          break;
+        default:
+          box(20, 6, 10, 0x4a3a32, 0, 0);
       }
-      if (b.lost) root.traverse((o) => o instanceof THREE.Mesh && (o.material = dark));
       const el = document.createElement('div');
-      el.className = `site-label enemy${b.lost ? ' dead' : ''}`;
+      el.className = 'site-label enemy';
       el.textContent = b.name;
       const label = new CSS2DObject(el);
       label.center.set(0.5, -0.4);
       label.position.y = 40;
       root.add(label);
       this.scene.add(root);
-      this.baseObjs.push({ root, label });
+      const ad = w.enemyAd?.sites.find((a) => a.base === b);
+      this.baseObjs.push({ base: b, site: ad?.site ?? null, root, label, mats, dead: false });
     }
   }
 
@@ -912,7 +991,14 @@ export class View3D {
       t.yaw.rotation.y = Math.PI - t.ciws.aimAz * DEG;
       t.pitch.rotation.x = -t.ciws.aimEl * DEG;
     }
-    for (const b of this.baseObjs) b.label.visible = this.showLabels;
+    for (const b of this.baseObjs) {
+      b.label.visible = this.showLabels;
+      if ((b.base.lost || (b.site && !b.site.alive)) && !b.dead) {
+        b.dead = true;
+        for (const m of b.mats) m.color.multiplyScalar(0.25);
+        b.label.element.classList.add('dead');
+      }
+    }
     for (const s of this.siteObjs) {
       // Mobile units move their site: keep the model on it.
       const p = s.site.pos;
@@ -959,10 +1045,13 @@ export class View3D {
 
   /** Clear trees and houses around every site whenever the set of sites changes, so nothing is buried in a forest. */
   private syncClearings(): void {
-    const key = this.world.sites.map((s) => `${Math.round(s.pos.x)},${Math.round(s.pos.y)}`).join(';');
+    const bases = this.world.theatre.filter((b) => b.known && b.kind !== 'rear');
+    const key = this.world.sites.map((s) => `${Math.round(s.pos.x)},${Math.round(s.pos.y)}`).join(';') + `|${bases.length}`;
     if (key === this.clearedKey) return;
     this.clearedKey = key;
     for (const s of this.world.sites) this.scenery.clearAround(s.pos.x, s.pos.y, s.radius + (s.kind === 'asset' ? 250 : 60));
+    // Enemy installations stand in the open too (the air base clears its whole runway).
+    for (const b of bases) this.scenery.clearAround(b.x, b.y, b.kind === 'airfield' ? 1300 : 220);
   }
 
   render(): void {

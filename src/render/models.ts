@@ -255,6 +255,18 @@ function arm(): THREE.BufferGeometry {
   return k.build();
 }
 
+/** Enemy SAM: a stubby 5.5 m semi-active missile, olive body with a pale radome, long-chord wings and steering fins. */
+function rsam(): THREE.BufferGeometry {
+  const c = 0x7a7f62;
+  const k = new Kit();
+  k.lathe([[-2.75, 0], [-2.75, 0.2], [1.6, 0.2], [2.1, 0.15], [2.75, 0]], c, 12);
+  k.lathe([[2.1, 0.15], [2.75, 0]], 0xd7d4c4, 12);
+  k.tube(0.16, 0.14, 0.2, NOZZLE, 0, 0, -2.85, 8);
+  k.cross([[0.6, 0.2], [-0.6, 0.72], [-1.5, 0.72], [-1.5, 0.2]], 0.03, c);
+  k.cross([[-2.0, 0.2], [-2.5, 0.6], [-2.75, 0.6], [-2.75, 0.2]], 0.03, c, Math.PI / 4);
+  return k.build();
+}
+
 /** Surface-to-air and air-to-air missiles by spec code. */
 function interceptor(code: string): THREE.BufferGeometry {
   const k = new Kit();
@@ -426,6 +438,7 @@ const AIR: Record<string, () => THREE.BufferGeometry> = {
   cruise,
   tbm,
   arm,
+  rsam,
 };
 
 const geoCache = new Map<string, THREE.BufferGeometry>();
@@ -492,6 +505,7 @@ export const MODEL_LEN: Record<string, number> = {
   cruise: 6,
   tbm: 12,
   arm: 4.2,
+  rsam: 5.5,
   bomb: 3.4,
   atgm: 1.6,
 };
@@ -505,6 +519,7 @@ export const WRECK_SIZE: Record<string, number> = {
   recon: 1.4,
   drone: 0.6,
   arm: 0.5,
+  rsam: 0.5,
   cruise: 1,
   tbm: 1.2,
   fighter: 1.6,

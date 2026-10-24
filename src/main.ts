@@ -9,7 +9,7 @@ import { MAP_SEED, World } from './sim/world';
 import { CampaignUi, loadSaved } from './ui/campaign-ui';
 import { GameControl, Hud } from './ui/hud';
 import { Ppi } from './ui/ppi';
-import { Tutorial } from './ui/tutorial';
+import { Lesson, Tutorial, setupFrontLesson } from './ui/tutorial';
 import { WEATHER, WeatherId } from './campaign/weather';
 import { LastStand } from './campaign/laststand';
 import { StandUi } from './ui/laststand-ui';
@@ -104,12 +104,13 @@ function startSandbox(type?: MapType): void {
 }
 
 /** The guided training battle: the campaign's starting units plus an early warning radar, on a fixed map. */
-function startTraining(): void {
+function startTraining(lesson: Lesson = 'basics'): void {
   endTraining();
   endStand();
   hud.campaign = null;
   const c = Campaign.create(424242, 'normal', 'coastal');
   c.buy('EWR');
+  if (lesson === 'front') setupFrontLesson(c);
   const w = c.makeWorld(false);
   show(w);
   hud.setWorld(w);
@@ -128,7 +129,7 @@ function startTraining(): void {
       show(backdrop());
       cui.showMenu();
     }
-  });
+  }, lesson);
 }
 
 /** Last Stand: endless waves on a new map, a reinforcement pick after each. */
@@ -172,7 +173,7 @@ function endTraining(): void {
 // ?mode=sandbox skips the menu (automated playtests use it); ?mode=campaign starts or continues one.
 const mode = params.get('mode');
 if (mode === 'sandbox') startSandbox();
-else if (mode === 'training') startTraining();
+else if (mode === 'training') startTraining(params.get('lesson') === 'front' ? 'front' : 'basics');
 else if (mode === 'laststand') startLastStand();
 else if (mode === 'campaign') {
   const saved = params.has('seed') ? null : loadSaved();

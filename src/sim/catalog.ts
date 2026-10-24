@@ -31,6 +31,8 @@ export interface DeployedUnit {
   holdFire?: boolean;
   /** Kills over the whole campaign: the crew's experience. */
   xp?: number;
+  /** On loan for one day (an event): leaves after the battle. */
+  loan?: boolean;
 }
 
 /** Crew ranks by campaign kills. Each rank above Green makes the unit a little deadlier and quicker to reload. */

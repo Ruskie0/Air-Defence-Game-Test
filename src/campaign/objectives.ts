@@ -35,14 +35,14 @@ export function pickObjectives(plan: PlannedPkg[], day: number, seed: number): D
   // Real threats in the plan, for the missile budget: decoys count for nothing.
   const threats = plan.filter((p) => p.kind !== 'decoys' && p.kind !== 'dark').reduce((n, p) => n + (p.kind === 'bomber' ? 4 * p.size : p.kind === 'sead' ? 4 : p.size), 0);
   const pool: DayObjective[] = [
-    { id: 'clean', rewardM: 25 + 3 * day },
-    { id: 'lights', rewardM: 15 + 2 * day },
-    { id: 'intact', rewardM: 20 + 2 * day },
-    { id: 'thrift', rewardM: 20 + 2 * day, limit: Math.max(6, Math.round(threats * 1.1)) },
+    { id: 'clean', rewardM: 15 + 2 * day },
+    { id: 'lights', rewardM: 10 + day },
+    { id: 'intact', rewardM: 12 + day },
+    { id: 'thrift', rewardM: 12 + day, limit: Math.max(6, Math.round(threats * 1.1)) },
   ];
-  if (kinds.has('soj')) pool.push({ id: 'jammer', rewardM: 35 }, { id: 'jammer', rewardM: 35 });
-  if (kinds.has('bomber')) pool.push({ id: 'bombers', rewardM: 40 }, { id: 'bombers', rewardM: 40 });
-  if (kinds.has('recon')) pool.push({ id: 'recon', rewardM: 25 }, { id: 'recon', rewardM: 25 });
+  if (kinds.has('soj')) pool.push({ id: 'jammer', rewardM: 25 }, { id: 'jammer', rewardM: 25 });
+  if (kinds.has('bomber')) pool.push({ id: 'bombers', rewardM: 30 }, { id: 'bombers', rewardM: 30 });
+  if (kinds.has('recon')) pool.push({ id: 'recon', rewardM: 20 }, { id: 'recon', rewardM: 20 });
   const out: DayObjective[] = [];
   while (out.length < 2 && pool.length) {
     const o = pool.splice(rng.int(0, pool.length - 1), 1)[0];

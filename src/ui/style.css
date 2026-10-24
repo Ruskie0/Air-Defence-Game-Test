@@ -751,3 +751,4 @@ td.link {
   border-color: var(--accent);
 }
 .rank{color:#ffd84d;font-size:10px;letter-spacing:-1px}
+.event{border:1px solid var(--warn);border-radius:6px;padding:4px 10px 8px;margin:6px 0;background:#3d34171f}.event h3{color:var(--warn)}.event p{margin:4px 0}.event button{text-align:left;flex:1}

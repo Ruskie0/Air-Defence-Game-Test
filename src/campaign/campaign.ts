@@ -4,6 +4,7 @@ import { finishMoves } from '../sim/mobility';
 import { UPGRADES, UpgradeId } from './upgrades';
 import { DayObjective, objectiveName, objectiveStatus, pickObjectives } from './objectives';
 import { ReconDrone } from '../sim/entities';
+import { EVENTS, EventId, rollEvent } from './events';
 import { hdist, v3 } from '../sim/math';
 import { CLASSIC_LAYOUT, MapLayout, MapType, Terrain, legacyLayout, randomLayout, typeForSeed } from '../sim/terrain';
 import { MAP_SEED } from '../sim/world';
@@ -73,6 +74,11 @@ export interface CampaignState {
   upgrades?: string[];
   /** Today's bonus objectives. */
   objectives?: DayObjective[];
+  /** Today's event, until the player has chosen; and what the choice did. */
+  event?: EventId | null;
+  eventResult?: string;
+  /** Taken off the next income (an event). */
+  incomePenalty?: number;
 }
 
 /** Where new units go before the player moves them, in order of preference. */
@@ -179,7 +185,7 @@ export class Campaign {
   income(): number {
     const hp = (n: string): number => (this.s.deployment.assets.find((a) => a.name === n)?.hp ?? 0) / 100;
     const supply = this.has('supply') ? 15 : 0;
-    return Math.round((50 + 65 * hp('Airbase') + 45 * hp('Power plant') + 25 * hp('CRC')) * this.diff.income) + supply;
+    return Math.max(0, Math.round((50 + 65 * hp('Airbase') + 45 * hp('Power plant') + 25 * hp('CRC')) * this.diff.income) + supply - (this.s.incomePenalty ?? 0));
   }
 
   /** Price of restoring one hp point of an asset. */
@@ -299,7 +305,7 @@ export class Campaign {
   }
 
   replaceAircraftCost(u: DeployedUnit): number | null {
-    return u.type === 'CAP' && u.aircraft < 2 ? AIRCRAFT_COST : null;
+    return u.type === 'CAP' && u.aircraft < 2 && !u.loan ? AIRCRAFT_COST : null;
   }
 
   replaceAircraft(u: DeployedUnit): boolean {
@@ -312,6 +318,7 @@ export class Campaign {
 
   /** Scrap a unit for a fifth of its price. */
   sell(u: DeployedUnit): void {
+    if (u.loan) return;
     this.s.money += Math.round(CATALOG[u.type].costM * 0.2);
     this.s.deployment.units = this.units.filter((x) => x !== u);
   }
@@ -363,6 +370,32 @@ export class Campaign {
     this.s.plan = planDay(this.s.day, this.s.seed, this.s.enemy, this.s.nextPkg, this.layout.rot, this.diff.threat);
     this.s.nextPkg += this.s.plan.length;
     this.s.objectives = pickObjectives(this.s.plan, this.s.day, this.s.seed);
+    this.s.event = rollEvent(this);
+    this.s.eventResult = undefined;
+  }
+
+  /** Re-aim today's strike packages after the enemy learned new positions (an event). */
+  replanStrikes(): void {
+    const known = this.s.enemy.known ?? [];
+    for (const p of this.s.plan) if ((p.kind === 'cruise' || p.kind === 'tbm') && !p.aims && known.length) p.aims = known.slice(0, Math.max(1, p.size));
+  }
+
+  /** Why the player cannot take this choice of today's event, or null. */
+  eventChoiceError(i: number): string | null {
+    const id = this.s.event;
+    if (!id) return 'No event';
+    const cost = EVENTS[id].choices[i].costM ?? 0;
+    return cost > this.s.money ? 'Not enough budget' : null;
+  }
+
+  chooseEvent(i: number): boolean {
+    const id = this.s.event;
+    if (!id || this.eventChoiceError(i)) return false;
+    this.s.money -= EVENTS[id].choices[i].costM ?? 0;
+    this.s.eventResult = `${EVENTS[id].title}: ${EVENTS[id].apply(this, i)}`;
+    this.s.event = null;
+    if (id === 'preempt' && i === 0) this.s.objectives = pickObjectives(this.s.plan, this.s.day, this.s.seed);
+    return true;
   }
 
   /** Units an enemy recon drone photographed that are still where it saw them. */
@@ -456,6 +489,7 @@ export class Campaign {
       // Units moved during the battle stay where they ended up.
       u.x = f.unit.x;
       u.y = f.unit.y;
+      if (u.loan) continue;
       if (f.radar) u.armWatch = f.radar.armWatch;
       if (f.fu) u.holdFire = f.fu.hold;
       if (f.ciws) u.holdFire = !f.ciws.auto;
@@ -503,6 +537,7 @@ export class Campaign {
     const objectives = (s.objectives ?? []).map((o) => ({ name: objectiveName(o), rewardM: o.rewardM, done: objectiveStatus(o, w, true) === 'done' }));
     const bonus = objectives.reduce((t, o) => t + (o.done ? o.rewardM : 0), 0);
     const income = this.income() + bonus;
+    s.incomePenalty = 0;
     const report: DayReport = {
       day: s.day,
       kills: w.stats.kills,

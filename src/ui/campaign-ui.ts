@@ -7,6 +7,7 @@ import type { World } from '../sim/world';
 import type { Ppi } from './ppi';
 import { UPGRADES, UPGRADE_ORDER, UpgradeId } from '../campaign/upgrades';
 import { objectiveDesc, objectiveName } from '../campaign/objectives';
+import { EVENTS } from '../campaign/events';
 
 const SAVE_KEY = 'air-defence-campaign-v1';
 
@@ -193,7 +194,20 @@ export class CampaignUi {
     }).join('');
 
     const intel = c.intel();
+    const ev = s.event ? EVENTS[s.event] : null;
+    const event = ev
+      ? `<div class="event"><h3>${esc(ev.title)}</h3><p>${esc(ev.text)}</p><div class="row">${ev.choices
+          .map((ch, i) => {
+            const why = c.eventChoiceError(i);
+            const price = ch.costM ? (ch.costM > 0 ? ` (${money(ch.costM)})` : ` (+${money(-ch.costM)})`) : '';
+            return `<button data-cui="event" data-i="${i}" ${why ? 'disabled' : ''} title="${esc(why ?? ch.detail)}"><b>${esc(ch.label)}${price}</b><br><small class="dim">${esc(ch.detail)}</small></button>`;
+          })
+          .join('')}</div></div>`
+      : s.eventResult
+        ? `<div class="event dim">${esc(s.eventResult)}</div>`
+        : '';
     $('plan-left').innerHTML = `
+      ${event}
       <h3>Intelligence briefing, day ${s.day}</h3>
       <p class="dim">${esc(this.mapLine())}</p>
       <ul class="intel">${intel.map((l) => `<li>${esc(l)}</li>`).join('') || '<li class="dim">Nothing reported.</li>'}</ul>
@@ -241,7 +255,7 @@ export class CampaignUi {
           u.launchers.length ? btn('spares', '+4 spares', c.sparesCost(u), 'Spare missiles reload the launchers during the day') : '',
           btn('launcher', '+Launcher', c.launcherCost(u), 'One more loaded launcher'),
           btn('aircraft', 'Replace fighter', c.replaceAircraftCost(u)),
-          `<button data-cui="sell" data-uid="${u.uid}" class="${this.confirmSell === u.uid ? 'warn' : ''}" title="Scrap for a fifth of the price">${this.confirmSell === u.uid ? `Confirm +${money(info.costM * 0.2)}` : 'Sell'}</button>`,
+          u.loan ? '<span class="st ok">On loan today</span>' : `<button data-cui="sell" data-uid="${u.uid}" class="${this.confirmSell === u.uid ? 'warn' : ''}" title="Scrap for a fifth of the price">${this.confirmSell === u.uid ? `Confirm +${money(info.costM * 0.2)}` : 'Sell'}</button>`,
         ].join('');
         return `<div class="sys ${this.focus === u.uid ? 'focus' : ''}" data-cui="focus" data-uid="${u.uid}">
           <div class="sys-h"><b>${this.label(u)}</b> <span class="dim">${this.where(u)}</span></div>
@@ -422,6 +436,9 @@ export class CampaignUi {
         this.startPlacing(nu);
         return;
       }
+      case 'event':
+        if (!c.chooseEvent(Number(d.i))) return;
+        break;
       case 'upgrade':
         if (!c.upgrade(d.id as UpgradeId)) return;
         this.note = `${UPGRADES[d.id as UpgradeId].name} bought.`;

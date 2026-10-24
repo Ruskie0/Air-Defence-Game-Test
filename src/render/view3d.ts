@@ -563,7 +563,7 @@ export class View3D {
     let o = this.entityObjs.get(e.id);
     if (o) return o;
     const root = new THREE.Group();
-    const body = airModel(e.kind, e.munition);
+    const body = airModel(e.recon ? 'recon' : e.kind, e.munition);
     root.add(body);
     const tex = e.side === 'red' ? MARKERS.red : e.side === 'blue' ? MARKERS.blue : MARKERS.neutral;
     const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, sizeAttenuation: false }));

@@ -7,7 +7,7 @@ import { CHARRED_MAT, WRECK_SIZE } from './models';
 
 const G = 9.81;
 /** Terminal velocity of each falling wreck in m/s; aircraft break up and tumble, so they fall slower than intact. */
-const TERMINAL: Record<string, number> = { drone: 40, arm: 160, cruise: 150, tbm: 260 };
+const TERMINAL: Record<string, number> = { recon: 70, drone: 40, arm: 160, cruise: 150, tbm: 260 };
 const AIRCRAFT_TERMINAL = 120;
 /** Wrecks on the ground are removed this long after landing (sim seconds). */
 const KEEP_S = 300;
@@ -56,7 +56,8 @@ export class Wrecks {
   /** Take over the body of a killed entity; `at` is its last drawn position. */
   add(e: Entity, body: THREE.Object3D, at: THREE.Vector3): void {
     const munition = e.munition;
-    const vt = TERMINAL[e.kind] ?? (munition ? 150 : AIRCRAFT_TERMINAL);
+    const kind = e.recon ? 'recon' : e.kind;
+    const vt = TERMINAL[kind] ?? (munition ? 150 : AIRCRAFT_TERMINAL);
     // The sim's death record holds the state at the moment of the kill; older builds fall back to the entity.
     const fate = (e as { fate?: { pos?: Entity['pos']; vel?: Entity['vel'] } | null }).fate;
     const p = fate?.pos ?? e.pos;
@@ -71,7 +72,7 @@ export class Wrecks {
     this.group.add(body);
     this.list.push({
       obj: body,
-      size: WRECK_SIZE[e.kind] ?? (munition ? 1 : 1.6),
+      size: WRECK_SIZE[kind] ?? (munition ? 1 : 1.6),
       pos: body.position,
       vel,
       drag: G / (vt * vt),

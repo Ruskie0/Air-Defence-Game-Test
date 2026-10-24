@@ -70,7 +70,7 @@ const MISSILE_SMOKE: Record<string, { s0: number; s1: number; life: number; flam
   AAM: { s0: 4, s1: 40, life: 24, flame: 4 },
 };
 
-const CONTRAIL_KINDS = new Set(['fighter', 'bomber', 'sead', 'soj', 'airliner', 'strike', 'awacs', 'tanker']);
+const CONTRAIL_KINDS = new Set(['fighter', 'bomber', 'sead', 'soj', 'airliner', 'strike', 'awacs', 'tanker', 'redfighter']);
 
 /** Smoke, fire, debris, contrails and tracers, all driven by sim time so they freeze when paused. */
 export class Effects {
@@ -560,6 +560,18 @@ export class Effects {
   /** Jets at treetop height whip up a thin trail of dust and leaves behind them. */
   private lowFlyers(w: World, dt: number, visible: (e: Entity) => boolean): void {
     if (dt <= 0) return;
+    // The enemy's armoured thrust on one of our towns raises the same dust on its way in.
+    const ea = w.enemyArmour;
+    if (ea && ea.state === 'moving' && rnd() < dt * 6) {
+      const dx = ea.dest.x - ea.pos.x;
+      const dy = ea.dest.y - ea.pos.y;
+      const d = Math.hypot(dx, dy) || 1;
+      const back = 20 + rnd() * 170;
+      const x = ea.pos.x - (dx / d) * back;
+      const y = ea.pos.y - (dy / d) * back;
+      const g = w.terrain.groundAt(x, y);
+      this.puff({ x, y: g + 2, z: -y, vx: sym(2), vy: 1.2, vz: sym(2), life: 10 + rnd() * 5, size0: 10, size1: 55, alpha: 0.3, c0: [0.55, 0.49, 0.38], c1: [0.62, 0.59, 0.52], windK: 0.6 });
+    }
     for (const e of w.entities) {
       if (e.kind === 'convoy' && e.alive && e.speed > 1 && visible(e) && rnd() < dt * 4) {
         // Trucks on dirt roads drag a plume of dust behind them.

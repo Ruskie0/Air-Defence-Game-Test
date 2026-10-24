@@ -140,6 +140,9 @@ function isKill(fate: unknown): boolean {
   return !/detonat|impact|exit|left|leak/i.test(how);
 }
 
+/** The air model for an entity: recon jets and SEAD decoys look different from the rest of their kind. */
+const modelKind = (e: Entity): string => (e.recon ? 'recon' : e.kind === 'cruise' && e.decoy ? 'decoy' : e.kind);
+
 export class View3D {
   readonly renderer: THREE.WebGLRenderer;
   readonly labels: CSS2DRenderer;
@@ -197,6 +200,8 @@ export class View3D {
   private readonly siteRing: THREE.Sprite;
   private readonly tmp = new THREE.Vector3();
   private sceneryRes = 1;
+  /** The enemy's armoured column attacking one of our towns (World.enemyArmour), built when first seen. */
+  private armourObj: { root: THREE.Group; body: THREE.Mesh; label: CSS2DObject } | null = null;
   /** The campaign clock (minutes) while planning, when the shown world has no battle clock of its own. */
   planClock: (() => number | undefined) | null = null;
 
@@ -385,6 +390,11 @@ export class View3D {
     }
     this.siteObjs.length = 0;
     this.clearBases();
+    if (this.armourObj) {
+      this.scene.remove(this.armourObj.root);
+      this.armourObj.label.element.remove();
+      this.armourObj = null;
+    }
     this.antennas.length = 0;
     this.turrets.length = 0;
     this.clearCoverage();
@@ -843,7 +853,7 @@ export class View3D {
     let o = this.entityObjs.get(e.id);
     if (o) return o;
     const root = new THREE.Group();
-    const body = airModel(e.recon ? 'recon' : e.kind, e.munition);
+    const body = airModel(modelKind(e), e.munition);
     root.add(body);
     const tex = e.side === 'red' ? MARKERS.red : e.side === 'blue' ? MARKERS.blue : MARKERS.neutral;
     const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, sizeAttenuation: false }));
@@ -856,6 +866,44 @@ export class View3D {
     o = { e, root, body, marker, trail, hist: [], nextHist: 0 };
     this.entityObjs.set(e.id, o);
     return o;
+  }
+
+  /** The enemy armour: the column model in enemy paint at its position, facing the town it is going for. */
+  private syncArmour(): void {
+    const ea = this.world.enemyArmour;
+    if (!ea || ea.state === 'over') {
+      if (this.armourObj) this.armourObj.root.visible = false;
+      return;
+    }
+    if (!this.armourObj) {
+      const root = new THREE.Group();
+      const body = airModel('column');
+      body.material = new THREE.MeshStandardMaterial({ vertexColors: true, color: 0xd9b89a, metalness: 0.15, roughness: 0.8 });
+      root.add(body);
+      const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: MARKERS.red, depthTest: false, transparent: true, sizeAttenuation: false }));
+      marker.scale.setScalar(0.018);
+      marker.position.y = 20;
+      marker.renderOrder = 6;
+      root.add(marker);
+      const el = document.createElement('div');
+      el.className = 'site-label enemy';
+      el.textContent = `${ea.name} → ${ea.target}`;
+      const label = new CSS2DObject(el);
+      label.center.set(0.5, -0.4);
+      label.position.y = 30;
+      root.add(label);
+      this.scene.add(root);
+      this.armourObj = { root, body, label };
+    }
+    const o = this.armourObj;
+    o.root.visible = true;
+    o.label.visible = this.showLabels;
+    const g = this.world.terrain.groundAt(ea.pos.x, ea.pos.y);
+    o.root.position.set(ea.pos.x, g + 2, -ea.pos.y);
+    if (Math.hypot(ea.dest.x - ea.pos.x, ea.dest.y - ea.pos.y) > 1) o.body.lookAt(this.tmp.set(ea.dest.x, g + 2, -ea.dest.y));
+    // Like our own units, it grows a little with distance so it can be found from the overview.
+    const d = this.camera.position.distanceTo(o.root.position);
+    o.body.scale.setScalar(clamp((d * 0.021) / 150, 1, 8));
   }
 
   /** The assault column faces along the road, even halted or forming up; in position it is the laager instead. */
@@ -890,7 +938,7 @@ export class View3D {
       toThree(e.pos, o.root.position);
       // Grow with distance so aircraft span about 1.2 degrees and munitions 0.8 on screen, never smaller than real.
       const d = camPos.distanceTo(o.root.position);
-      const len = MODEL_LEN[e.recon ? 'recon' : e.kind] ?? (e.munition ? 6 : 16);
+      const len = MODEL_LEN[modelKind(e)] ?? (e.munition ? 6 : 16);
       o.body.scale.setScalar(clamp((d * (e.munition ? 0.014 : 0.021)) / len, 1, 800));
       if (e.kind === 'helo') this.flyHelo(e, o, ev.simDt);
       else if (e.kind === 'column') this.driveColumn(e as Column, o);
@@ -1014,6 +1062,7 @@ export class View3D {
       t.yaw.rotation.y = Math.PI - t.ciws.aimAz * DEG;
       t.pitch.rotation.x = -t.ciws.aimEl * DEG;
     }
+    this.syncArmour();
     for (const b of this.baseObjs) {
       b.label.visible = this.showLabels;
       if ((b.base.lost || (b.site && !b.site.alive)) && !b.dead) {

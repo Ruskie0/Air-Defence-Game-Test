@@ -268,7 +268,21 @@ function interceptor(code: string): THREE.BufferGeometry {
   return k.build();
 }
 
+/** High-altitude recon UAV: long slender fuselage, sensor bulge, high-aspect wing, V-tail and a dorsal jet engine. */
+function recon(): THREE.BufferGeometry {
+  const c = 0xb9bdc0;
+  const k = new Kit();
+  k.lathe([[-6.8, 0], [-6.5, 0.35], [-3, 0.6], [2, 0.75], [4.6, 0.7], [6.0, 0.45], [6.8, 0]], c, 14, 0, 0, 1, 1.1);
+  k.ellipsoid(0.5, 0.45, 0.8, 0x2a2f33, 0, -0.75, 3.8);
+  k.lathe([[-2.6, 0], [-2.4, 0.45], [0.8, 0.55], [1.5, 0.3], [1.7, 0]], c, 12, 0, 0.85);
+  k.tube(0.4, 0.38, 0.4, NOZZLE, 0, 0.85, -2.8);
+  k.plate(sym([[0.6, 1.4], [12, 0.3], [12, -0.5], [0.6, -0.9]]), 0.16, c, 0.35);
+  for (const s of [-1, 1]) k.fin([[-4.6, 0.3], [-6.4, 2.6], [-7.1, 2.6], [-6.8, 0.3]], 0.1, c, 0, s * 0.8);
+  return k.build();
+}
+
 const AIR: Record<string, () => THREE.BufferGeometry> = {
+  recon,
   fighter,
   sead,
   bomber,
@@ -313,6 +327,7 @@ export function interceptorModel(code: string): THREE.Mesh {
 
 /** Rough size of each kind, for wreck fires and crash effects (1 = a cruise missile). */
 export const WRECK_SIZE: Record<string, number> = {
+  recon: 1.4,
   drone: 0.6,
   arm: 0.5,
   cruise: 1,

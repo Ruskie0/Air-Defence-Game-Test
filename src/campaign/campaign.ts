@@ -45,6 +45,8 @@ export interface DayReport {
   lessons: string[];
   /** Crews that went up a rank. */
   promotions?: string[];
+  /** Spent on resupply convoys and field repairs during the battle ($M). */
+  supportM?: number;
   /** Bonus objectives and whether they were met. */
   objectives?: { name: string; rewardM: number; done: boolean }[];
 }
@@ -395,6 +397,7 @@ export class Campaign {
       raids: withRaids ? toRaids(this.s.plan) : [],
       civil: withRaids,
       upgrades: this.s.upgrades,
+      budgetM: this.s.money,
     });
   }
 
@@ -409,6 +412,8 @@ export class Campaign {
     }
 
     finishMoves(w);
+    // Support calls made during the battle are paid for now.
+    s.money = Math.max(0, s.money - w.supportSpentM);
     const losses: string[] = [];
     const promotions: string[] = [];
     const before = new Map(s.deployment.assets.map((a) => [a.name, a.hp]));
@@ -513,6 +518,7 @@ export class Campaign {
       lessons,
       promotions,
       objectives,
+      supportM: Math.round(w.supportSpentM * 10) / 10,
     };
     s.history.push(report);
 

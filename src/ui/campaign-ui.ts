@@ -341,6 +341,7 @@ export class CampaignUi {
         }
         <span>Leakers (hits on defended or AD sites)</span><b>${r.leakers}</b>
         <span>Missiles fired</span><b>${r.missilesFired} (${money(r.missileCostM)})</b>
+        ${r.supportM ? `<span>Support calls (convoys, repairs)</span><b>${money(r.supportM)}</b>` : ''}
         ${r.civilian ? `<span class="bad">Civil airliners shot down</span><b class="bad">${r.civilian}</b>` : ''}
         ${r.fratricide ? `<span class="bad">Friendly aircraft shot down</span><b class="bad">${r.fratricide}</b>` : ''}
       </div>

@@ -1,6 +1,7 @@
 import { DT } from './constants';
 import { Ciws, GUNS } from './ciws';
 import { MoveOrder, orderMove, stepMoves } from './mobility';
+import { SupportCall, stepSupport } from './support';
 import { Modifiers, modifiers } from '../campaign/upgrades';
 import { Arm, Cruise, Emitter, Entity, Fate, ReconDrone, Sighting } from './entities';
 import { Fighter } from './fighter';
@@ -59,6 +60,8 @@ export interface WorldOptions {
   civil?: boolean;
   /** Campaign upgrades in force (see src/campaign/upgrades.ts). */
   upgrades?: readonly string[];
+  /** Money available for support calls during the battle ($M); unlimited in the sandbox. */
+  budgetM?: number;
 }
 
 /** What a deployed unit became in this world, so the campaign can read back its state after the day. */
@@ -97,6 +100,11 @@ export class World {
   wcs: Wcs = 'TIGHT';
   /** Game-stat multipliers from campaign upgrades. */
   readonly mods: Modifiers;
+  /** Support calls budget ($M) and what has been spent from it. */
+  readonly budgetM: number;
+  supportSpentM = 0;
+  /** Resupply convoys and repair teams on their way. */
+  support: SupportCall[] = [];
   /** Bumped whenever a unit's position changes, so views can redraw coverage. */
   layoutSeq = 0;
   readonly logEntries: LogEntry[] = [];
@@ -145,6 +153,7 @@ export class World {
     this.seed = o.seed ?? MAP_SEED;
     this.rng = new Rng(this.seed);
     this.mods = modifiers(o.upgrades);
+    this.budgetM = o.budgetM ?? Infinity;
     this.terrain = o.terrain ?? new Terrain(MAP_SEED);
     const dep = o.deployment ?? sandboxDeployment(this.terrain);
     for (const a of DEFENDED_ASSETS) {
@@ -647,6 +656,7 @@ export class World {
 
     for (const e of this.entities) if (e.alive) e.update(this, dt);
     if (stepMoves(this, dt)) this.layoutSeq++;
+    stepSupport(this);
     this.stepGnss(dt);
     this.stepArmWatch();
 

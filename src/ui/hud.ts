@@ -11,6 +11,7 @@ import type { Ciws } from '../sim/ciws';
 import { CATALOG, RANKS } from '../sim/catalog';
 import { DayObjective, objectiveDesc, objectiveName, objectiveStatus } from '../campaign/objectives';
 import { MOBILITY, moveError, moveStatus } from '../sim/mobility';
+import { FIELD_REPAIR, RESUPPLY, callRepair, callResupply, repairError, resupplyCost, resupplyError } from '../sim/support';
 import { CLASS_NAME, IDENT_COLOR, IDENT_NAME, fmtTime } from './colors';
 import type { Ppi } from './ppi';
 
@@ -140,6 +141,29 @@ export class Hud {
     v.renderer.domElement.title = '';
   }
 
+  /** Support call buttons for a unit: a resupply convoy for SAM batteries, a repair team when damaged. */
+  private supportRow(code: string): string {
+    const w = this.w;
+    const f = w.fieldedByCode(code);
+    if (!f || !f.sites.length) return '';
+    const btns: string[] = [];
+    if (f.fu) {
+      const err = resupplyError(w, f.fu);
+      btns.push(`<button data-act="resupply" data-code="${f.fu.code}" ${err ? 'disabled' : ''} title="${esc(err ?? `${RESUPPLY.rounds} spare missiles in ${fmtTime(RESUPPLY.delayS)}`)}">Resupply ${this.cost(resupplyCost(f.fu))}</button>`);
+    }
+    const hurt = f.sites.filter((x) => x.alive && x.hp < 100);
+    for (const site of hurt.slice(0, 3)) {
+      const err = repairError(w, site);
+      btns.push(`<button data-act="repair" data-name="${esc(site.name)}" ${err ? 'disabled' : ''} title="${esc(err ?? `+${FIELD_REPAIR.hp}% in ${fmtTime(FIELD_REPAIR.delayS)}`)}">Repair ${esc(site.name)} ${Math.round(site.hp)}% ${this.cost(FIELD_REPAIR.costM)}</button>`);
+    }
+    return btns.length ? `<div class="row">${btns.join('')}</div>` : '';
+  }
+
+  /** A price for a support call (free in the sandbox). */
+  private cost(m: number): string {
+    return Number.isFinite(this.w.budgetM) ? `$${m.toFixed(m < 10 ? 1 : 0)}M` : '';
+  }
+
   /** Move button and status line for a unit's detail panel. */
   private moveRow(code: string): string {
     const f = this.w.fieldedByCode(code);
@@ -246,6 +270,16 @@ export class Hud {
       case 'hold':
         w.toggleHold(d.code!);
         break;
+      case 'resupply': {
+        const fu = w.unit(d.code!);
+        if (fu) this.lastOrder = callResupply(w, fu) ?? 'Resupply convoy on its way.';
+        break;
+      }
+      case 'repair': {
+        const site = w.site(d.name!);
+        if (site) this.lastOrder = callRepair(w, site) ?? `Repair team on its way to ${site.name}.`;
+        break;
+      }
       case 'move':
         if (this.moving === d.code) this.stopMove();
         else this.startMove(d.code!);
@@ -401,6 +435,7 @@ export class Hud {
       'score',
       `<span class="chip">Kills <b>${s.kills}</b></span><span class="chip ${s.leakers ? 'bad' : ''}">Leakers <b>${s.leakers}</b></span>` +
         `<span class="chip" title="LR ${s.fired.LR} · MR ${s.fired.MR} · SHORAD ${s.fired.SH} · AAM ${s.fired.AAM} · CIWS rounds ${s.ciwsRounds}">Missiles <b>${fired}</b> ($${s.costM.toFixed(1)}M)</span>` +
+        (Number.isFinite(this.w.budgetM) ? `<span class="chip" title="Campaign budget left for support calls (resupply, field repair)">Budget <b>$${Math.round(this.w.budgetM - this.w.supportSpentM)}M</b></span>` : '') +
         (s.fratricide || s.civilian ? `<span class="chip bad">Fratricide ${s.fratricide} · Civil ${s.civilian}</span>` : ''),
     );
   }
@@ -503,7 +538,11 @@ export class Hud {
     rows.push(
       '<div class="assets">' +
         hurt
-          .map((s) => `<div class="asset ${s.alive ? '' : 'dead'}"><span>${s.name}</span><span class="bar"><i style="width:${s.hp}%;background:${s.hp > 60 ? '#5ee07a' : s.hp > 25 ? '#ffd84d' : '#ff4d4d'}"></i></span></div>`)
+          .map((s) => {
+            const err = repairError(w, s);
+            const btn = s.alive && s.hp < 100 ? `<button data-act="repair" data-name="${esc(s.name)}" ${err ? 'disabled' : ''} title="${esc(err ?? `Field repair: +${FIELD_REPAIR.hp}% in ${fmtTime(FIELD_REPAIR.delayS)}`)}">Repair ${this.cost(FIELD_REPAIR.costM)}</button>` : '';
+            return `<div class="asset ${s.alive ? '' : 'dead'}"><span>${s.name} ${btn}</span><span class="bar"><i style="width:${s.hp}%;background:${s.hp > 60 ? '#5ee07a' : s.hp > 25 ? '#ffd84d' : '#ff4d4d'}"></i></span></div>`;
+          })
           .join('') +
         '</div>',
     );
@@ -605,7 +644,7 @@ export class Hud {
           <span>Missile</span><b>${fu.spec.name}, ${(fu.spec.maxRangeM / 1000).toFixed(0)} km</b>
         </div>
         <div class="row">${this.holdButton(fu.code, fu.hold)}${this.radarButtons(r)}</div>
-        ${this.moveRow(fu.code)}${order}${this.targetTable(rows)}`;
+        ${this.moveRow(fu.code)}${this.supportRow(fu.code)}${order}${this.targetTable(rows)}`;
     }
     const c = w.ciws.find((x) => x.code === code);
     if (c) {
@@ -615,7 +654,7 @@ export class Hud {
           <span>State</span><b>${!c.site.alive ? 'destroyed' : c.firing || c.lasing ? `firing at ${c.target?.name ?? ''}` : c.target ? `tracking ${c.target.name}` : c.auto ? 'automatic' : 'hold'}</b>
         </div>
         <div class="row"><button data-act="ciws" data-code="${c.code}" ${c.site.alive ? '' : 'disabled'}>${c.auto ? 'Hold fire' : 'Automatic'}</button></div>
-        ${this.moveRow(c.code)}${order}
+        ${this.moveRow(c.code)}${this.supportRow(c.code)}${order}
         <div class="dim">${c.spec.kind === 'laser' ? 'The laser burns down drones (and, slowly, cruise missiles) inside 3.5 km. It never runs out of ammunition but overheats after long bursts.' : `The gun engages anything inbound inside about ${(c.spec.rangeM / 1000).toFixed(1)} km on its own; it cannot be pointed at a track.`}</div>`;
     }
     if (code.startsWith('F')) {
@@ -648,7 +687,7 @@ export class Hud {
           <span>Radiated</span><b>${fmtTime(w.radiating.get(r.code) ?? 0)} this day</b>
         </div>
         <div class="row">${this.radarButtons(r)}</div>
-        ${this.moveRow(r.code)}${order}`;
+        ${this.moveRow(r.code)}${this.supportRow(r.code)}${order}`;
     }
     return null;
   }

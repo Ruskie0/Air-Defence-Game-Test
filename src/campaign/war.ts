@@ -947,7 +947,9 @@ export class War {
   /** Everything hostile is down or gone, nothing more is due, and no missile is flying. */
   engagementClear(): boolean {
     const w = this.w;
-    return this.quiet() && !w.scenario.raids.some((r) => !r.launched);
+    if (w.missiles.length || w.pendingCount > 0 || w.scenario.raids.some((r) => !r.launched)) return false;
+    // The enemy's AWACS, tanker and patrols far out stay up all day: they are not part of the engagement.
+    return !w.entities.some((e) => e.alive && e.side === 'red' && (e.munition || (e.airborne && e.pkg >= 0 && e.kind !== 'awacs' && e.kind !== 'tanker' && Math.hypot(e.pos.x, e.pos.y) < 120000)));
   }
 
   /** Take the engagement in hand (live) or leave it to standing orders (delegate). */

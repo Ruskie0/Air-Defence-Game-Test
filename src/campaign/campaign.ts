@@ -864,6 +864,11 @@ export class Campaign {
     return out;
   }
 
+  /** Armour waves the brigade sends against an airfield assault: up to two, and only while it has 4 or more battalions. */
+  fieldArmourWaves(): number {
+    return this.armourStock >= 2 * ARMOUR_BDE.perAttack ? Math.min(2, Math.floor(this.armourStock / ARMOUR_BDE.perAttack)) : 0;
+  }
+
   /** Where the assault on the enemy airfield would go in, if it is the next objective. */
   private fieldSpot(): { x: number; y: number } | null {
     const f = this.s.front;
@@ -892,9 +897,7 @@ export class Campaign {
       if (AIRCRAFT.includes(a)) sorties.set(`${base.id}:${a}`, (sorties.get(`${base.id}:${a}`) ?? 0) + n);
       else draw(base, a, n);
     });
-    // The armour brigade throws in what it can spare (two attacks' worth at most); each wave costs the force.
-    const waves = Math.min(2, Math.floor(this.armourStock / ARMOUR_BDE.perAttack));
-    this.s.armourCounter = waves;
+    this.s.armourCounter = this.fieldArmourWaves();
     this.s.plan.push(...counters);
     this.s.plan.sort((a, b) => a.t - b.t);
   }

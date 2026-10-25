@@ -497,10 +497,10 @@ export class CampaignUi {
     const force = c.fieldCounterForce();
     const per: Record<string, number> = {};
     for (const x of force) per[x.kind] = (per[x.kind] ?? 0) + x.n;
-    const waves = Math.min(2, Math.floor(c.armourStock / ARMOUR_BDE.perAttack));
+    const waves = c.fieldArmourWaves();
     const names: Record<string, string> = { strike: 'strike jets', sead: 'SEAD jets', helo: 'attack helicopters', drones: 'drones', cruise: 'cruise missiles' };
     const parts = Object.entries(per).map(([k, n]) => `${n} ${names[k] ?? k}`);
-    if (waves) parts.push(`${waves} armour wave${waves > 1 ? 's' : ''} (−${waves * ARMOUR_BDE.counterHp}% each to the force)`);
+    parts.push(waves ? `${waves} armour wave${waves > 1 ? 's' : ''} (−${ARMOUR_BDE.counterHp}% each to the force)` : `no armour (the brigade needs ${2 * ARMOUR_BDE.perAttack} battalions to spare any)`);
     const field = c.theatre.find((b) => b.kind === 'airfield' && !b.lost);
     const down = field ? c.runwayDown(field.id) : null;
     return `<div class="event"><h3>The airfield counter-attack</h3>${down ? `<p class="good"><b>Runway cratered until ${hhmm(down)}</b>: no jets or SEAD can fly from it. Assault now and only helicopters, drones, missiles and armour meet the force.</p>` : '<p class="dim">A deep strike that hits the airfield craters its runway for 24 h: assault inside that window and its jets stay on the ground.</p>'}<p>If we assault ${esc(f.towns[next].name)} now, the enemy throws everything it has ready at the assault force: <b>${esc(parts.join(', ') || 'nothing')}</b>. Deep strikes on the airfield and FARP, AWACS hunts and beating off its armour wear this down first.</p></div>`;

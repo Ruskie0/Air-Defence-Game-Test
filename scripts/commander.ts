@@ -3,6 +3,7 @@
 import { CAMPAIGN_DAYS, Campaign } from '../src/campaign/campaign';
 import { CATALOG, UnitType } from '../src/sim/catalog';
 import { DeepStrikeId, deepStrike, deepStrikeError, strikeTargets } from '../src/campaign/deepstrike';
+import { avail } from '../src/sim/theatre';
 import { OFFENSIVE_COST_M, assaultSpot, nextObjective } from '../src/campaign/front';
 import { nearestFree } from '../src/sim/deploy';
 
@@ -29,7 +30,14 @@ export function commanderShop(c: Campaign): string[] {
   const atField = !!f && nextI >= 0 && !!f.towns[nextI].airfield;
   const threat = atField ? c.fieldCounterForce().filter((x) => x.kind !== 'drones').reduce((t, x) => t + x.n, 0) : 0;
   if (atField && !flag('--no-strikes')) {
-    const prep = strikeTargets(c).filter((b) => (b.kind === 'airfield' || b.kind === 'farp') && !deepStrikeError(c, b.id)).sort((a, b) => (a.kind === 'airfield' ? -1 : 1) - (b.kind === 'airfield' ? -1 : 1))[0];
+    // A two-day push: the day before, hit the FARP (or the nearest drone team once the FARP is thin); then
+    // crater the runway and go in. From day 8 there is no time to prepare.
+    const open = strikeTargets(c).filter((b) => !deepStrikeError(c, b.id));
+    const fieldB = open.find((b) => b.kind === 'airfield');
+    const farp = open.find((b) => b.kind === 'farp' && avail(b, 'helo') > 2);
+    const team = open.filter((b) => b.kind === 'drones' && avail(b, 'drone') > 6).sort((x, y) => Math.hypot(x.x - fieldB!.x, x.y - fieldB!.y) - Math.hypot(y.x - fieldB!.x, y.y - fieldB!.y))[0];
+    const late = c.s.day >= CAMPAIGN_DAYS - 2;
+    const prep = late || !fieldB ? fieldB : farp ?? (fieldB ? team : undefined) ?? fieldB;
     if (prep && deepStrike(c, prep.id)) bought.push(`prep strike ${prep.id} (${c.s.deepStrike?.ok ? 'hit' : 'failed'})`);
   }
   // Go in while the runway is cratered, or once what it could throw is thin, or on the last days.

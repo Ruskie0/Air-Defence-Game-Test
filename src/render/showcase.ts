@@ -112,6 +112,7 @@ export function showcaseModel(spec: ModelSpec): THREE.Object3D {
       }
   }
   // Air models are built around their centre of mass: stand them on the floor.
+  root.updateMatrixWorld(true);
   const bb = new THREE.Box3().setFromObject(root);
   if (spec.kind === 'air' || spec.kind === 'missile') root.position.y = -bb.min.y;
   return root;
@@ -201,6 +202,7 @@ export class Showcase {
     if (this.model) this.holder.remove(this.model);
     this.model = showcaseModel(spec);
     this.holder.add(this.model);
+    this.model.updateMatrixWorld(true);
     const bb = new THREE.Box3().setFromObject(this.model);
     bb.getSize(this.size);
     const sphere = bb.getBoundingSphere(new THREE.Sphere());

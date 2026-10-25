@@ -958,6 +958,7 @@ export class Campaign {
       weather: this.s.weather,
       counterBattery: withRaids ? this.s.day : 0,
       clockStart: withRaids ? this.clock : undefined,
+      pulse: withRaids ? this.pulse?.type : undefined,
     });
   }
 

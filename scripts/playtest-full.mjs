@@ -1,6 +1,8 @@
 // Full-campaign browser playthrough: plays every raid through the UI (start, fight at high compression, end,
 // debrief, plan), collecting page errors, and on the late days measures sim step and 3D render times with the
-// raid in full swing, plus the save size. Usage: npm run build && node scripts/playtest-full.mjs [seed]
+// raid in full swing, plus the save size. The headless report's commander plans between raids.
+// Usage: npm run build && npx esbuild scripts/commander.ts --bundle --format=iife --outfile=playtest/commander.js
+//        && node scripts/playtest-full.mjs [seed]
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { chromium } from 'playwright';
@@ -18,6 +20,9 @@ page.on('pageerror', (e) => errors.push(String(e.stack ?? e).slice(0, 600)));
 page.on('console', (m) => m.type() === 'error' && errors.push(m.text().slice(0, 400)));
 await page.goto(`http://localhost:${port}/?mode=campaign&seed=${seed}`);
 await page.waitForFunction(() => window.game?.cui?.campaign);
+// The headless report's commander does the buying, repairs, strikes and moves (npx esbuild scripts/commander.ts
+// --bundle --format=iife --outfile=playtest/commander.js first).
+await page.addScriptTag({ path: 'playtest/commander.js' });
 
 for (let raid = 0; raid < 60; raid++) {
   const st = await page.evaluate(() => ({ day: window.game.cui.campaign.s.day, over: window.game.cui.campaign.s.over, mode: document.body.dataset.mode }));
@@ -25,8 +30,15 @@ for (let raid = 0; raid < 60; raid++) {
     console.log('campaign over', JSON.stringify(st.over).slice(0, 200));
     break;
   }
+  const bought = await page.evaluate(() => {
+    const c = window.game.cui.campaign;
+    const b = window.commanderShop(c);
+    window.game.cui.showPlanning();
+    return b;
+  });
+  if (bought.length) console.log(`  commander: ${bought.join(', ').slice(0, 200)}`);
   await page.waitForSelector('[data-cui="start"]');
-  await page.click('[data-cui="start"]');
+  await page.locator('[data-cui="start"]').first().dispatchEvent('click');
   await page.waitForFunction(() => document.body.dataset.mode === 'battle');
   let perf = null;
   for (let i = 0; i < 120; i++) {
@@ -49,11 +61,11 @@ for (let raid = 0; raid < 60; raid++) {
   }
   if (perf) console.log(`day ${st.day} perf: ${perf.ents} live entities, sim step ${perf.stepMs.toFixed(3)} ms, render ${perf.renderMs.toFixed(1)} ms (SwiftShader)`);
   if (st.day >= 9 && raid % 3 === 0) await page.screenshot({ path: `playtest/full-d${st.day}.png` });
-  await page.click('[data-act="endday"]');
+  await page.locator('[data-act="endday"]').first().dispatchEvent('pointerdown', { bubbles: true });
   await page.waitForFunction(() => document.body.dataset.mode === 'debrief');
   const text = (await page.locator('#debrief-body').innerText()).replace(/\n+/g, ' | ');
   console.log(`raid ${raid} day ${st.day}: ${text.slice(0, 160)}`);
-  if (await page.locator('[data-cui="plan"]').count()) await page.click('[data-cui="plan"]');
+  if (await page.locator('[data-cui="plan"]').count()) await page.locator('[data-cui="plan"]').first().dispatchEvent('click');
   else break;
   await page.waitForFunction(() => document.body.dataset.mode === 'plan' || window.game.cui.campaign.s.over);
 }

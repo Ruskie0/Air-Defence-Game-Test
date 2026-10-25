@@ -519,7 +519,7 @@ export class Hud {
       'score',
       `<span class="chip">Kills <b>${s.kills}</b></span><span class="chip ${s.leakers ? 'bad' : ''}">Leakers <b>${s.leakers}</b></span>` +
       (this.w.redSupport.awacsUp
-        ? '<span class="chip bad" title="Enemy AWACS up: its packages arrive together, strike jets go for gaps in our coverage, its fighters are vectored onto our CAP and our missiles kill a little less often. Hunt it with a fighter.">AWACS up: raids coordinated</span>'
+        ? `<span class="chip bad" title="Enemy AWACS up: in a combined strike its packages arrive close together, strike jets go for gaps in our coverage, its fighters are vectored onto our CAP and our missiles kill a little less often. Hunt it with your fighters: unescorted, a pair usually gets it; escorted, it is a real risk.">AWACS up: raids coordinated${this.w.redSupport.escortSeen(this.w) ? ` · ${this.w.redSupport.escortSeen(this.w)}` : ''}</span>`
         : this.w.redSupport.down
           ? '<span class="chip" title="No enemy AWACS: packages arrive staggered, strike jets fly their planned targets, fighter sweeps only find what their own radar sees">AWACS down: raids uncoordinated</span>'
           : '') +

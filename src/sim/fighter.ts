@@ -36,6 +36,8 @@ export class Fighter extends Air {
   private popUntil = 0;
   /** The enemy support aircraft being hunted ('awacs' or 'tanker'). */
   huntKind: string | null = null;
+  /** Shots taken on this hunt: two at most, then it breaks off. */
+  private huntShots = 0;
   private leg = 0;
 
   constructor(name: string, code: string, base: V3, station: V3, start: V3) {
@@ -110,6 +112,7 @@ export class Fighter extends Air {
     }
     this.state = 'hunt';
     this.huntKind = kind;
+    this.huntShots = 0;
     this.targetTrackId = null;
     w.log(`${this.name} going deep after the enemy ${kind === 'awacs' ? 'AWACS' : 'tanker'}`, 'engage');
   }
@@ -284,7 +287,7 @@ export class Fighter extends Air {
       }
       case 'hunt': {
         const tgt = w.redSupport.target(this.huntKind ?? '');
-        if (!tgt || (this.missiles === 0 && !this.aam)) {
+        if (!tgt || (this.huntShots >= 2 && !this.aam) || (this.missiles === 0 && !this.aam)) {
           this.huntKind = null;
           if (this.missiles === 0) this.rtb(w);
           else this.toStation(w);
@@ -296,10 +299,11 @@ export class Fighter extends Air {
         const R = dist(this.pos, tgt.pos);
         const off = angleBetween(this.vel, sub(tgt.pos, this.pos));
         // A big target that sees it coming and runs: the fighter has to close well inside its usual range to make the shot stick.
-        if (!this.aam && this.missiles > 0 && R < clamp(this.aamRange(tgt.pos, tgt.vel) * 0.6, 15000, 35000) && off < 45) {
+        if (!this.aam && this.missiles > 0 && this.huntShots < 2 && R < clamp(this.aamRange(tgt.pos, tgt.vel) * 0.6, 15000, 35000) && off < 45) {
           this.missiles--;
           this.aam = new Interceptor(w, AAM_MSL, null, this.name, this.pos, tgt.pos, clone(this.vel), -1);
           this.aam.home = tgt;
+          this.huntShots++;
           w.missiles.push(this.aam);
           w.stats.fired.AAM++;
           w.stats.costM += AAM_MSL.costM;

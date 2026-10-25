@@ -733,7 +733,7 @@ export class Campaign {
     const at = assaultSpot(this.terrain, f, f.offensive);
     // The enemy fights hardest for its forward airfield: everything it has goes at that assault force.
     const field = f.towns[f.offensive].airfield;
-    const big = (n: number): number => (field ? Math.ceil(n * 1.5) : n);
+    const big = (n: number): number => (field ? Math.ceil(n * 1.3) : n);
     const kinds: [PkgKind, number][] = [['drones', big(Math.min(12, 4 + Math.floor(day / 2)))]];
     if (day >= 2) kinds.push(['cruise', big(Math.min(5, 2 + Math.floor(day / 4)))]);
     if (day >= 3 || field) kinds.push(['helo', big(day >= 6 ? 3 : 2)]);

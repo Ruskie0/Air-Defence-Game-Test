@@ -1,0 +1,227 @@
+/* ---------------------------------------------------------------- armoury */
+#armoury {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: radial-gradient(ellipse at 50% 40%, #13241c 0%, #08100c 75%);
+  color: var(--text);
+}
+#armoury.hidden {
+  display: none;
+}
+.arm-top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--panel-border);
+  background: var(--panel);
+}
+.arm-top h2 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--accent);
+  letter-spacing: 0.12em;
+}
+.arm-top .grow {
+  flex: 1;
+}
+.arm-top .close {
+  width: 30px;
+  font-size: 16px;
+}
+.arm-tabs {
+  display: flex;
+  gap: 4px;
+}
+.arm-tabs button {
+  padding: 5px 12px;
+}
+.arm-main {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) 400px;
+}
+.arm-list {
+  overflow-y: auto;
+  padding: 8px;
+  border-right: 1px solid var(--panel-border);
+  background: rgba(6, 12, 10, 0.6);
+}
+.arm-list h4 {
+  margin: 12px 4px 4px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.arm-list h4:first-child {
+  margin-top: 2px;
+}
+.arm-list button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 3px;
+  padding: 6px 8px;
+  border-left: 3px solid transparent;
+}
+.arm-list button b {
+  display: block;
+  font-weight: 600;
+}
+.arm-list button small {
+  color: var(--dim);
+  font-size: 10px;
+}
+.arm-list button.blue {
+  border-left-color: rgba(77, 166, 255, 0.5);
+}
+.arm-list button.red {
+  border-left-color: rgba(255, 77, 77, 0.5);
+}
+.arm-list button.neutral {
+  border-left-color: rgba(94, 224, 122, 0.5);
+}
+.arm-view {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.arm-stage {
+  flex: 1;
+  min-height: 0;
+}
+.arm-stage canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+.arm-stage canvas:active {
+  cursor: grabbing;
+}
+.arm-caption {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 14px 10px;
+  font: 11px var(--mono);
+}
+.arm-detail {
+  overflow-y: auto;
+  padding: 14px 18px 24px;
+  border-left: 1px solid var(--panel-border);
+  background: var(--panel);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.arm-detail h3 {
+  margin: 0;
+  font-size: 18px;
+}
+.arm-detail h3.blue {
+  color: #8cc8ff;
+}
+.arm-detail h3.red {
+  color: #ff8a80;
+}
+.arm-detail h3.neutral {
+  color: #7fe89a;
+}
+.arm-tag {
+  font: 11px var(--mono);
+  color: var(--dim);
+  margin-bottom: 8px;
+}
+.arm-detail p {
+  margin: 0 0 8px;
+}
+.arm-detail p.small {
+  font-size: 11px;
+  margin-top: 4px;
+}
+.arm-detail section {
+  margin-top: 14px;
+}
+.arm-detail h4 {
+  margin: 0 0 4px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.arm-detail table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.arm-detail th,
+.arm-detail td {
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(120, 255, 170, 0.07);
+  vertical-align: top;
+  text-align: left;
+}
+.arm-detail th {
+  width: 42%;
+  font-weight: normal;
+  color: var(--dim);
+  padding-right: 8px;
+}
+.arm-detail td {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.arm-bars {
+  display: grid;
+  gap: 4px;
+}
+.arm-bar {
+  display: grid;
+  grid-template-columns: 42% minmax(0, 1fr) 64px;
+  align-items: center;
+  gap: 8px;
+}
+.arm-bar .k {
+  color: var(--dim);
+}
+.arm-bar .track {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(120, 255, 170, 0.08);
+  overflow: hidden;
+}
+.arm-bar .track i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #2f6b4a, var(--accent));
+}
+.arm-bar .v {
+  font: 11px var(--mono);
+  text-align: right;
+}
+.shop-item .info {
+  padding: 1px 6px;
+  font-size: 11px;
+}
+
+@media (max-width: 900px) {
+  .arm-main {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 280px auto;
+    overflow-y: auto;
+  }
+  .arm-list {
+    max-height: 30vh;
+    border-right: 0;
+  }
+  .arm-detail {
+    overflow: visible;
+    border-left: 0;
+  }
+}

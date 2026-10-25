@@ -635,10 +635,17 @@ export class CampaignUi {
     }).join('');
     const front = f.towns.map((t, i) => (t.ours ? i : -1)).filter((i) => i >= 0).pop();
     const objBtns = `${next >= 0 ? `<button data-cui="objective" data-kind="push" data-town="${next}" class="${obj?.kind === 'push' ? 'on' : ''}" title="Battalions you order to advance drive up the road to ${esc(f.towns[next].name)}. A town falls ${GROUND.captureS / 60} minutes after we hold it with nothing of the enemy's there.">Push for ${esc(f.towns[next].name)}</button>` : ''}${front !== undefined ? ` <button data-cui="objective" data-kind="hold" data-town="${front}" class="${obj?.kind === 'hold' ? 'on' : ''}" title="Battalions you order to advance move up to ${esc(f.towns[front].name)} and hold it. Holding a town of ours halves the losses a battalion takes.">Hold ${esc(f.towns[front].name)}</button>` : ''}`;
+    const canEscort = war.w.fielded.filter((x) => ['SH', 'GUN', 'CIWS', 'LASER', 'MR'].includes(x.unit.type) && x.sites[0]?.alive);
+    const escorts = (id: number): string => {
+      const on = canEscort.filter((x) => war.escortOf(x.unit.uid) === id).map((x) => `<button data-cui="escort" data-uid="${x.unit.uid}" class="on" title="Detach: it drives back inside our lines">${esc(war.w.unitName(x))} ✕</button>`);
+      const free = canEscort.filter((x) => war.escortOf(x.unit.uid) === undefined).map((x) => `<button data-cui="escort" data-uid="${x.unit.uid}" data-bn="${id}" title="Follow: keeps 2-3 km behind this battalion and covers it. SHORAD, guns and CIWS fire on the move; an MR battery bounds forward when it is 8 km behind and is dark while it drives.">+ ${esc(x.unit.type)}</button>`);
+      return on.length || free.length ? `<div class="dim">Air defence cover: ${on.join(' ') || 'none'} ${free.join(' ')}</div>` : '';
+    };
     const ours = g.bats.filter((b) => b.side === 'blue' && b.alive).map((b) => {
       const btn = (o: Order, label: string, tip: string): string => `<button data-cui="bnorder" data-id="${b.id}" data-o="${o}" class="${b.order === o ? 'on' : ''}" title="${tip}">${label}</button>`;
       return `<div class="sys"><div class="sys-h"><b>${esc(b.name)}</b> ${state(b)} <span class="dim">${esc(where(b))}</span></div>
         <div class="sys-b">${bar(b.strength, b.strength >= 50 ? '#78ffaa' : b.strength >= GROUND.breakAt ? '#ffd84d' : '#ff4d4d')} ${Math.round(b.strength)}% ${b.kind === 'armour' ? 'armour' : b.kind === 'arty' ? 'rocket artillery: shells enemy battalions within 60 km every 20 minutes' : 'mech infantry'}
+        ${escorts(b.id)}
         ${btn('advance', 'Advance', 'Drive up the road to the objective and fight anything in the way')} ${btn('hold', 'Hold', 'Stop where it is and dig in (a quarter less loss in a fight)')} ${btn('withdraw', 'Withdraw', 'Pull back to the nearest town of ours behind it, or the depot, and refit')}</div></div>`;
     }).join('') || '<p class="dim">No battalions left. A new one reaches the depot every morning.</p>';
     const theirs = g.bats.filter((b) => b.side === 'red' && b.alive).map((b) => {
@@ -982,6 +989,11 @@ export class CampaignUi {
       case 'objective': {
         const err = this.war?.setObjective(d.kind as 'push' | 'hold', Number(d.town));
         this.note = err ?? (d.kind === 'push' ? 'Objective set: order battalions to Advance to push.' : 'Objective set: order battalions to Advance to move up and hold.');
+        break;
+      }
+      case 'escort': {
+        const err = this.war?.escort(Number(d.uid), d.bn === undefined ? null : Number(d.bn));
+        if (err) this.note = err;
         break;
       }
       case 'bnorder': {

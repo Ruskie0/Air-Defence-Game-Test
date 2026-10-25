@@ -19,9 +19,12 @@ export const GROUND = {
   /** Within this of a town a battalion holds or contests it (m). */
   townR: 3000,
   /** A town falls after being held this long uncontested (s). */
-  captureS: 1800,
+  captureS: 1200,
+  /** Air damage to our battalions with air defence cover, and without it. */
+  coveredAir: 0.4,
+  openAir: 1.6,
   /** Strength lost per second in contact against a full-strength enemy battalion (percent). An even fight breaks one side in about 45 minutes. */
-  fire: 100 / 2700,
+  fire: 100 / 1800,
   /** Damage taken is cut to this share for a battalion holding a town of its own side, holding in the open, or pulling back. */
   inTown: 0.35,
   holding: 0.75,
@@ -324,7 +327,9 @@ export class Ground {
         continue;
       }
       // Broken, it scatters as it falls back: harder to hit from the air than a battalion in formation.
-      if (b.site) b.site.vuln = b.vuln * (b.broken ? 0.5 : 1);
+      // Air defence close by (an escort, or our own SAM umbrella) shoots up what comes at it from the air; a
+      // battalion out on its own is easy meat for helicopters and drones.
+      if (b.site) b.site.vuln = b.vuln * (b.broken ? 0.5 : 1) * (b.side === 'blue' ? (this.covered(w, b) ? GROUND.coveredAir : GROUND.openAir) : 1);
       // Broken: it falls back to its depot to refit.
       if (b.broken && b.order !== 'withdraw') {
         b.order = 'withdraw';
@@ -464,6 +469,16 @@ export class Ground {
     const where = stage >= 0 ? this.townNames[stage] : 'its depot';
     w.log(`Intel: ${go.length} enemy battalions are forming up at ${where} to attack ${this.townNames[target]}. They move in about ${Math.round(GROUND.formUpS / 60)} minutes: a deep strike can hit them while they form up.`, 'alert');
     this.hooks.event(`${go.length} enemy battalions are forming up at ${where} to attack ${this.townNames[target]}`);
+  }
+
+  /** Whether one of our air defence units in action covers this battalion. */
+  covered(w: World, b: Battalion): boolean {
+    return w.fielded.some((f) => {
+      const t = f.unit.type;
+      const r = t === 'MR' || t === 'LR' ? 12000 : t === 'SH' || t === 'GUN' || t === 'CIWS' || t === 'LASER' ? 6000 : 0;
+      if (!r || !f.sites[0]?.alive || (f.move && f.move.phase !== 'move') || (f.move && (t === 'MR' || t === 'LR'))) return false;
+      return Math.hypot(f.sites[0].pos.x - b.pos.x, f.sites[0].pos.y - b.pos.y) <= r;
+    });
   }
 
   /** Set our objective: every battalion told to advance heads for it. */

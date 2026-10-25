@@ -2,7 +2,7 @@ import { CATALOG, DEFENDED_ASSETS, type DeployedUnit, RANKS, rankOf } from '../s
 import { inZones, nearestFree } from '../sim/deploy';
 import type { Sighting } from '../sim/entities';
 import { GROUND, Ground, type GroundState, type Order } from '../sim/ground';
-import { orderMove } from '../sim/mobility';
+import { MOBILITY, orderMove, shiftUnit } from '../sim/mobility';
 import { RED_SUPPORT, sweepCap } from '../sim/redair';
 import { ENEMY_AD } from '../sim/enemyad';
 import { ARTY } from '../sim/exposure';
@@ -53,8 +53,13 @@ export const CAS = {
   samLoss: 0.18,
   fighterLoss: 0.05,
   /** Strength each surviving jet takes off the battalion (percent). */
-  hitPerJet: [8, 12] as [number, number],
+  hitPerJet: [12, 18] as [number, number],
 };
+
+/** Unit types that can be attached to follow a battalion, and how far ahead it gets before an MR battery bounds forward. */
+const ESCORT_TYPES = ['SH', 'GUN', 'CIWS', 'LASER', 'MR'];
+const ESCORT_BOUND_M = 8000;
+const PUSH_ANSWER_MIN = 90;
 
 /** Our rocket artillery battalion. Game-level numbers. */
 export const BLUE_ARTY = {
@@ -94,6 +99,10 @@ export interface WarState {
   /** Our rocket batteries: when each can fire again, and salvos in the air (clock). */
   artyReady?: Record<number, number>;
   salvos?: { bn: number; at: number }[];
+  /** Earliest campaign minute the enemy answers another push with air. */
+  pushAnswer?: number;
+  /** Air defence units attached to follow a battalion. */
+  escorts?: { uid: number; bn: number }[];
   /** The last objective logged, so a repeated order is not logged again. */
   lastObjective?: string;
   /** The day so far, for the 06:00 report. */
@@ -110,6 +119,7 @@ export class War {
   /** Raised at 06:00 with the day's report. */
   onDay: ((r: DayReport) => void) | null = null;
   private nextTick = 0;
+  private escortDrawn = 0;
   private lastClock: number;
   /** Losses and kills already written into the campaign, so each tick takes only what is new. */
   private written = new Map<string, number>();
@@ -263,6 +273,8 @@ export class War {
       return err;
     }
     const f = this.fielded(u.uid);
+    // A move order takes it off escort duty.
+    if (this.st.escorts) this.st.escorts = this.st.escorts.filter((e) => e.uid !== u.uid);
     if (!f) {
       // Still on its way: it will drive to the new spot when it reaches the depot.
       const err = this.c.placeError(this.c.terrain, u.type, x, y, u.uid);
@@ -294,6 +306,107 @@ export class War {
     const b = g?.bats.find((x) => x.id === id);
     if (!g || !b) return 'No such battalion';
     return g.order(b, o);
+  }
+
+  /** The battalion this unit is escorting, if any. */
+  escortOf(uid: number): number | undefined {
+    return this.st.escorts?.find((e) => e.uid === uid)?.bn;
+  }
+
+  /**
+   * Attach an air defence unit to follow a battalion up the road (bn null detaches it: it drives back inside our
+   * lines). SHORAD, guns, CIWS and lasers keep 2 to 3 km behind and fight on the move; an MR battery follows in
+   * bounds, packing up and driving when the battalion is 8 km ahead, and is dark while it moves.
+   */
+  escort(uid: number, bn: number | null): string | null {
+    const f = this.w.fielded.find((x) => x.unit.uid === uid);
+    if (!f || !f.sites[0]?.alive) return 'No such unit';
+    if (!ESCORT_TYPES.includes(f.unit.type)) return 'Only SHORAD, guns, CIWS, lasers and MR batteries can escort';
+    const list = (this.st.escorts ??= []).filter((e) => e.uid !== uid);
+    this.st.escorts = list;
+    if (bn === null) {
+      const u = f.unit;
+      const z = this.c.zones.reduce((a, b) => (Math.hypot(u.x - b.x, u.y - b.y) - b.r < Math.hypot(u.x - a.x, u.y - a.y) - a.r ? b : a));
+      const p = nearestFree(this.c.terrain, u.type, z.x, z.y, this.c.units, u.uid, 600, this.c.zones);
+      orderMove(this.w, f, p.x, p.y, true);
+      this.w.log(`${this.w.unitName(f)} detached: driving back inside our lines`, 'info');
+      return null;
+    }
+    const b = this.w.ground?.bats.find((x) => x.id === bn && x.side === 'blue' && x.alive);
+    if (!b) return 'No such battalion';
+    list.push({ uid, bn });
+    this.w.log(`${this.w.unitName(f)} is following ${b.name}`, 'info');
+    return null;
+  }
+
+  private escortStep(dt: number): void {
+    const g = this.w.ground;
+    const list = this.st.escorts;
+    if (!g || !list?.length) return;
+    const w = this.w;
+    const rank = new Map<number, number>();
+    let moved = false;
+    for (const e of [...list]) {
+      const f = w.fielded.find((x) => x.unit.uid === e.uid);
+      const b = g.bats.find((x) => x.id === e.bn && x.alive);
+      if (!f || !f.sites[0]?.alive) {
+        this.st.escorts = this.st.escorts!.filter((x) => x !== e);
+        continue;
+      }
+      if (!b) {
+        this.escort(e.uid, null);
+        continue;
+      }
+      const i = rank.get(b.id) ?? 0;
+      rank.set(b.id, i + 1);
+      // Behind it on the road, staggered: the side it came from is the side away from the enemy.
+      const back = b.side === 'blue' ? -1 : 1;
+      const t = g.at(b.s + back * (2500 + 500 * i), (i % 2 ? 1 : -1) * (300 + 200 * i));
+      const p = f.sites[0].pos;
+      const d = Math.hypot(t.x - p.x, t.y - p.y);
+      if (f.unit.type === 'MR') {
+        if (!f.move && d > ESCORT_BOUND_M) orderMove(w, f, t.x, t.y, true);
+        continue;
+      }
+      if (f.move) continue;
+      if (d < 150) continue;
+      const k = Math.min(1, (MOBILITY[f.unit.type].speed * dt) / d);
+      shiftUnit(w, f, p.x + (t.x - p.x) * k, p.y + (t.y - p.y) * k);
+      moved = true;
+    }
+    // Coverage is redrawn now and then while escorts drive, not every step.
+    if (moved && w.t - this.escortDrawn > 20) {
+      this.escortDrawn = w.t;
+      w.layoutSeq++;
+    }
+  }
+
+  /**
+   * Pushing is when the enemy throws its air at us: battalions advancing past our forward town draw a helicopter
+   * and drone package aimed at them, at most every PUSH_ANSWER_MIN.
+   */
+  private answerPush(): void {
+    const g = this.w.ground;
+    const s = this.c.s;
+    const f = s.front;
+    if (!g || !f || this.clock < (this.st.pushAnswer ?? 0)) return;
+    const front = f.towns.map((t, i) => (t.ours ? g.townS[i] : -Infinity)).reduce((a, b) => Math.max(a, b), g.blueDepot);
+    const going = g.bats.filter((b) => b.side === 'blue' && b.alive && !b.broken && b.order === 'advance' && b.kind !== 'arty' && b.s > front + GROUND.townR).sort((a, b) => b.s - a.s);
+    if (!going.length) return;
+    this.st.pushAnswer = this.clock + PUSH_ANSWER_MIN;
+    const out: PlannedPkg[] = [];
+    going.slice(0, 2).forEach((b, i) => {
+      const a = g.at(b.s);
+      const c = g.at(b.s + 8000);
+      const base = { bearing: (Math.atan2(c.x - a.x, c.y - a.y) * 180) / Math.PI, t: 0, reported: true, origin: { x: b.pos.x, y: b.pos.y }, target: b.name };
+      if (i === 0) out.push({ ...base, id: s.nextPkg++, kind: 'helo', size: Math.min(4, 2 + Math.floor(s.day / 4)) });
+      out.push({ ...base, id: s.nextPkg++, kind: 'drones', size: Math.min(10, 4 + Math.floor(s.day / 2)) });
+    });
+    const plan = assignBases(out, this.c.theatre, this.c.busy(this.clock));
+    if (!plan.length) return;
+    timeOnTarget(plan, new Rng(s.seed * 97 + Math.round(this.clock)));
+    this.fly(plan);
+    this.w.log(`Intel: the enemy is sending helicopters and drones against our advancing battalions`, 'alert');
   }
 
   /** Why the CAP squadron cannot fly close air support on this enemy battalion now, or null if it can. */
@@ -446,6 +559,8 @@ export class War {
     this.planner(dMin);
     this.support();
     this.moveArtillery();
+    this.escortStep(WAR.tickS);
+    this.answerPush();
     this.casStep();
     this.artyStep();
     this.checkOver();
@@ -853,7 +968,7 @@ export class War {
     w.zones = zones;
     for (const fl of w.fielded) {
       const u = fl.unit;
-      if (u.type === 'CAP' || inZones(zones, u.x, u.y) || !fl.sites[0]?.alive) continue;
+      if (u.type === 'CAP' || this.escortOf(u.uid) !== undefined || inZones(zones, u.x, u.y) || !fl.sites[0]?.alive) continue;
       const z = zones.reduce((a, b) => (Math.hypot(u.x - b.x, u.y - b.y) - b.r < Math.hypot(u.x - a.x, u.y - a.y) - a.r ? b : a));
       const d = Math.hypot(u.x - z.x, u.y - z.y) || 1;
       const p = nearestFree(c.terrain, u.type, z.x + ((u.x - z.x) * z.r * 0.8) / d, z.y + ((u.y - z.y) * z.r * 0.8) / d, c.units, u.uid, 300, zones);
@@ -1083,7 +1198,10 @@ export class War {
     const nextDay = (DAY_START_MIN + c.s.day * 1440 - this.clock) * 60;
     const due = [toOp, nextDay, ...c.units.filter((u) => u.arrives !== undefined).map((u) => (u.arrives! - this.clock) * 60), st.pushAt !== undefined ? (st.pushAt - this.clock) * 60 : Infinity];
     const raids = w.scenario.raids.filter((r) => !r.launched).map((r) => r.t - w.t);
-    return Math.max(0, Math.min(...due, ...raids) - 1);
+    // A ground fight or an advance under way: short jumps, so orders, CAS and the guns keep up with it.
+    const g = w.ground;
+    const busy = g && g.bats.some((b) => b.alive && (b.foe || (b.side === 'blue' && b.order === 'advance' && b.kind !== 'arty')));
+    return Math.max(0, Math.min(...due, ...raids, busy ? 300 : Infinity) - 1);
   }
 
   /** Jump the clock `s` seconds through quiet time without stepping (headless runs): exposure drains as it would. */
@@ -1094,6 +1212,8 @@ export class War {
       const dt = Math.min(30, left);
       w.t += dt;
       w.ground?.step(w, dt);
+      this.escortStep(dt);
+      if (left > 30) this.update();
     }
     for (const f of w.fielded) if (f.heat && !f.radar?.isEmitting()) f.heat = Math.max(0, f.heat - 0.5 * s);
     this.update();

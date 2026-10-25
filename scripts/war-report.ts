@@ -21,7 +21,16 @@ const c = Campaign.create(seed, diff);
 const war = new War(c);
 const w = (): typeof war.w => war.w;
 
-let push: { town: number; at: number; start: number } | null = null;
+import { Site } from '../src/sim/sites';
+/** Damage our battalions took from the air during a push, by weapon kind. */
+const airHurt = new Map<string, number>();
+const dmg0 = Site.prototype.damage;
+Site.prototype.damage = function (this: Site, ww, amount, by) {
+  const before = this.hp;
+  dmg0.call(this, ww, amount, by);
+  if (push && this.role === 'assault') { const k = by.replace(/[-\s]?\d+.*$/, ''); airHurt.set(k, (airHurt.get(k) ?? 0) + before - this.hp); }
+};
+let push: { town: number; at: number; start: number; gather: boolean } | null = null;
 const results: string[] = [];
 /** What the commander buys, in order, while it can afford it (as the raid campaign's commander did). */
 function shop(): string[] {
@@ -63,21 +72,41 @@ function shop(): string[] {
     const man = g.bats.filter((b) => b.side === 'blue' && b.alive && b.kind !== 'arty');
     const next = nextObjective(f);
     if (next >= 0 && !push && man.filter((b) => !b.broken && b.strength > 70).length >= 4) {
-      push = { town: next, at: war.clock, start: man.reduce((t, b) => t + b.strength, 0) };
-      out.push(`PUSH for ${f.towns[next].name} with ${man.length} battalions`);
+      push = { town: next, at: war.clock, start: man.reduce((t, b) => t + b.strength, 0), gather: true };
+      out.push(`GATHER for ${f.towns[next].name} with ${man.length} battalions`);
+      if (!noAd) {
+        // Escort: all but one SHORAD, a gun and an MR battery go with the two lead battalions.
+        const lead = man.filter((b) => !b.broken).sort((a, b) => b.s - a.s);
+        const pick = [...w().fielded.filter((x) => x.unit.type === 'SH').slice(1), ...w().fielded.filter((x) => x.unit.type === 'GUN').slice(0, 1), ...w().fielded.filter((x) => x.unit.type === 'CIWS').slice(0, 1), ...w().fielded.filter((x) => x.unit.type === 'MR').slice(0, 1)];
+        pick.forEach((x, i) => war.escort(x.unit.uid, lead[i % lead.length].id));
+        out.push(`escort: ${pick.map((x) => x.unit.type).join(' ')}`);
+      }
     }
-    if (push) {
+    if (push?.gather) {
+      // Form up on our forward town with the escorts before going in.
+      const front = f.towns.map((t, i) => (t.ours ? i : -1)).filter((i) => i >= 0).pop();
+      const fs = front !== undefined ? g.townS[front] : g.blueDepot;
+      if (front !== undefined) war.setObjective('hold', front);
+      for (const b of man) if (!b.broken && b.order !== 'advance') war.orderBattalion(b.id, 'advance');
+      const ready = man.every((b) => b.broken || Math.abs(b.s - fs) < 4000) && w().fielded.every((x) => war.escortOf(x.unit.uid) === undefined || x.unit.type === 'MR' || Math.hypot(x.sites[0].pos.x - g.at(fs).x, x.sites[0].pos.y - g.at(fs).y) < 5000);
+      if (ready || war.clock - push.at > 240) {
+        out.push(`PUSH for ${f.towns[push.town].name} after ${((war.clock - push.at) / 60).toFixed(1)} h forming up`);
+        push = { town: push.town, at: war.clock, start: man.reduce((t, b) => t + b.strength, 0), gather: false };
+        airHurt.clear();
+      }
+    } else if (push) {
       war.setObjective('push', push.town);
       for (const b of man) if (!b.broken && b.order !== 'advance') war.orderBattalion(b.id, 'advance');
       const red = g.bats.filter((b) => b.side === 'red' && b.alive).sort((a, b) => a.s - b.s)[0];
       if (red && !war.casError(red.id)) out.push(war.cas(red.id));
+      if (flag('--esclog')) out.push(man.map((b) => `${b.name.split(' ')[0]}@${(b.s / 1000).toFixed(0)}${g.covered(w(), b) ? 'C' : ''}`).join(' ') + ' | ' + w().fielded.filter((x) => war.escortOf(x.unit.uid) !== undefined).map((x) => `${x.unit.type}${x.move ? x.move.phase : ''}(${(Math.hypot(x.sites[0].pos.x - g.bats.find((b) => b.id === war.escortOf(x.unit.uid))!.pos.x, x.sites[0].pos.y - g.bats.find((b) => b.id === war.escortOf(x.unit.uid))!.pos.y) / 1000).toFixed(1)}km)`).join(' '));
       if (f.towns[push.town].ours) {
         const lost = push.start - man.reduce((t, b) => t + b.strength, 0);
-        out.push(`TOOK ${f.towns[push.town].name} after ${((war.clock - push.at) / 60).toFixed(1)} game hours, strength lost ${Math.round(lost)}`);
+        out.push(`TOOK ${f.towns[push.town].name} after ${((war.clock - push.at) / 60).toFixed(1)} game hours, lost ${Math.round(lost)} of ${Math.round(push.start)} (${Math.round((100 * lost) / push.start)}%); from the air: ${[...airHurt].map(([k, v]) => `${k} ${Math.round(v)}`).join(', ')}`);
         results.push(out[out.length - 1]);
         push = null;
       } else if (man.every((b) => b.broken || !b.alive)) {
-        out.push(`PUSH FAILED after ${((war.clock - push.at) / 60).toFixed(1)} game hours`);
+        out.push(`PUSH FAILED after ${((war.clock - push.at) / 60).toFixed(1)} game hours; from the air: ${[...airHurt].map(([k, v]) => `${k} ${Math.round(v)}`).join(', ')}`);
         results.push(out[out.length - 1]);
         push = null;
       }
@@ -101,7 +130,7 @@ function shop(): string[] {
   // Units the enemy has a fix on move a couple of kilometres (the LR battery stays and fights).
   for (const fl of w().fielded) {
     const u = fl.unit;
-    if (u.type === 'CAP' || u.type === 'LR' || fl.move || !w().exposure.fixOn(u.uid)) continue;
+    if (u.type === 'CAP' || u.type === 'LR' || fl.move || war.escortOf(u.uid) !== undefined || !w().exposure.fixOn(u.uid)) continue;
     const a = ((u.uid * 137 + c.s.day * 61) % 360) * (Math.PI / 180);
     const q = nearestFree(c.terrain, u.type, u.x + Math.cos(a) * 2500, u.y + Math.sin(a) * 2500, c.units, u.uid, 600, c.zones);
     if (!war.move(u, q.x, q.y)) out.push(`${u.type} relocated`);

@@ -71,8 +71,8 @@ export function moveError(w: World, f: Fielded, x: number, y: number): string | 
 }
 
 /** Order a ground unit to a new position (or a CAP pair to a new station). Returns why it cannot go, or null. */
-export function orderMove(w: World, f: Fielded, x: number, y: number): string | null {
-  const err = moveError(w, f, x, y);
+export function orderMove(w: World, f: Fielded, x: number, y: number, force = false): string | null {
+  const err = force ? null : moveError(w, f, x, y);
   if (err) return err;
   const u = f.unit;
   if (u.type === 'CAP') {
@@ -157,6 +157,26 @@ function place(w: World, f: Fielded, d: number): void {
   }
   f.unit.x = Math.round(f.sites[0].pos.x);
   f.unit.y = Math.round(f.sites[0].pos.y);
+}
+
+/** Drive a unit that fights on the move (an escort) straight to (x, y) this step: it stays in action. */
+export function shiftUnit(w: World, f: Fielded, x: number, y: number): void {
+  const main = f.sites[0].pos;
+  const dx = x - main.x;
+  const dy = y - main.y;
+  for (const s of f.sites) {
+    const mast = s.pos.z - w.terrain.groundAt(s.pos.x, s.pos.y);
+    s.pos.x += dx;
+    s.pos.y += dy;
+    s.pos.z = w.terrain.groundAt(s.pos.x, s.pos.y) + mast;
+  }
+  if (f.radar) {
+    f.radar.pos.x = main.x;
+    f.radar.pos.y = main.y;
+    f.radar.pos.z = main.z;
+  }
+  f.unit.x = Math.round(main.x);
+  f.unit.y = Math.round(main.y);
 }
 
 /** Launchers that ended up in water or on a cliff pull in next to the radar. */

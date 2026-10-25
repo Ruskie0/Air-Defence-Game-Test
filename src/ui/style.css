@@ -991,3 +991,9 @@ li.warn {
 .tip button {
   margin-left: 6px;
 }
+
+/* RTS selection: the shift-drag box on the 3D view and the group panel. */
+.sel-box { position: fixed; z-index: 50; border: 1px dashed #7fd4ff; background: rgba(127, 212, 255, 0.08); pointer-events: none; }
+table.grp td { padding: 1px 4px; white-space: nowrap; }
+table.grp .heat { width: 46px; }
+table.grp tr { cursor: pointer; }

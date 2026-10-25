@@ -55,6 +55,11 @@ export class Hud {
   selected: number | null = null;
   /** Selected friendly: a fire unit, CIWS or radar code, or F<index> for a fighter. */
   unitSel: string | null = null;
+  /** Every unit in the current selection; with one, unitSel is the same unit and its own panel shows. */
+  multi: string[] = [];
+  /** Control groups 1 to 9, as unit codes. */
+  private readonly groups: string[][] = [];
+  private lastGroupKey = { n: 0, t: 0 };
   private lastOrder = '';
   /** Code of the unit waiting for a click on the map to say where it should move. */
   private moving: string | null = null;
@@ -68,9 +73,25 @@ export class Hud {
     this.ppi = ppi;
     this.ctl = ctl;
     view.onSelect = (id) => this.select(id);
-    view.onSelectSite = (site) => this.selectUnit(this.unitAtSite(site));
+    const pickSite = (site: Site, add: boolean): void => {
+      const code = this.unitAtSite(site);
+      if (!code) return;
+      if (!add) return this.selectUnit(code);
+      this.setSelection(this.multi.includes(code) ? this.multi.filter((c) => c !== code) : [...this.multi, code]);
+    };
+    const box = (sites: Site[], add: boolean): void => {
+      const codes = sites.map((x) => this.unitAtSite(x)).filter((c): c is string => !!c);
+      if (!codes.length && !add) return this.clearSelection();
+      this.setSelection([...(add ? this.multi : []), ...codes]);
+    };
+    view.onSelectSite = pickSite;
+    view.onBoxSelect = box;
+    view.onRightClick = (p, alt) => this.groupOrder(p.x, p.y, alt);
     view.onEmptyClick = () => this.clearSelection();
     ppi.onSelect = (id) => this.select(id);
+    ppi.onSelectSite = pickSite;
+    ppi.onBoxSelect = box;
+    ppi.onRightClick = (x, y, alt) => this.groupOrder(x, y, alt);
     this.buildStatic();
     document.addEventListener('pointerdown', (e) => this.onAction(e));
     document.addEventListener('keydown', (e) => this.onKey(e));
@@ -107,11 +128,122 @@ export class Hud {
     this.lastOrder = '';
     this.nextSlow = 0;
     this.view.selectedSite = code ? this.siteOfUnit(code) : null;
+    this.multi = code ? [code] : [];
+    this.syncRings();
     if (code !== null && this.selected !== null) {
       this.selected = null;
       this.view.selected = null;
       this.ppi.selected = null;
     }
+  }
+
+  /** Select several of our units at once (a box, shift-clicks or a control group). */
+  setSelection(codes: string[]): void {
+    const uniq = [...new Set(codes)].filter((c) => this.w.fieldedByCode(c));
+    this.selectUnit(uniq.length === 1 ? uniq[0] : null);
+    this.multi = uniq;
+    this.syncRings();
+    if (uniq.length > 1 && this.selected !== null) {
+      this.selected = null;
+      this.view.selected = null;
+      this.ppi.selected = null;
+    }
+  }
+
+  private syncRings(): void {
+    const sites = this.multi.map((c) => this.siteOfUnit(c)).filter((x): x is Site => !!x);
+    this.view.selectedSites = sites;
+    this.ppi.selectedSites = sites;
+  }
+
+  /** Centre of the selected units' first sites, in sim metres. */
+  private centroid(codes: string[]): { x: number; y: number } | null {
+    const ps = codes.map((c) => this.w.fieldedByCode(c)?.sites[0]?.pos).filter((p) => !!p);
+    if (!ps.length) return null;
+    return { x: ps.reduce((a, p) => a + p!.x, 0) / ps.length, y: ps.reduce((a, p) => a + p!.y, 0) / ps.length };
+  }
+
+  /** Right click on the map: move the selection there as a formation, or (Alt) shoot and scoot. */
+  private groupOrder(x: number, y: number, scootIt: boolean): void {
+    if (!this.multi.length || this.moving) return;
+    if (scootIt) return this.scootSelection();
+    this.moveFormation(x, y);
+  }
+
+  /** Send every selected unit to (x, y), keeping their spacing around the group's centre. */
+  private moveFormation(x: number, y: number): void {
+    const w = this.w;
+    const c = this.centroid(this.multi);
+    if (!c) return;
+    const errs: string[] = [];
+    let ok = 0;
+    let n = 0;
+    for (const code of this.multi) {
+      const f = w.fieldedByCode(code);
+      const p = f?.sites[0]?.pos;
+      if (!f || !p) continue;
+      n++;
+      const err = w.moveUnit(code, x + p.x - c.x, y + p.y - c.y);
+      if (err) errs.push(`${this.nameOf(code)}: ${err}`);
+      else ok++;
+    }
+    this.lastOrder = n === 1 ? (errs.length ? `Cannot move there: ${errs[0]}` : 'Moving.') : `${ok} of ${n} moving in formation.${errs.length ? ` ${errs.join('; ')}` : ''}`;
+    this.nextSlow = 0;
+  }
+
+  private scootSelection(): void {
+    const errs: string[] = [];
+    let ok = 0;
+    for (const code of this.multi) {
+      const err = this.w.scootUnit(code);
+      if (err) errs.push(`${this.nameOf(code)}: ${err}`);
+      else ok++;
+    }
+    this.lastOrder = `${ok} of ${this.multi.length} scooting.${errs.length ? ` ${errs.join('; ')}` : ''}`;
+    this.nextSlow = 0;
+  }
+
+  /** Hold fire on the whole selection, or release it if all of it is already holding. */
+  private holdSelection(): void {
+    const w = this.w;
+    const armed = this.multi.filter((c) => w.unit(c) || w.ciws.some((x) => x.code === c));
+    const hold = armed.some((c) => !(w.unit(c)?.hold ?? !w.ciws.find((x) => x.code === c)!.auto));
+    for (const c of armed) w.setHold(c, hold);
+    this.lastOrder = armed.length ? `${armed.length} units ${hold ? 'holding fire' : 'weapons free'}.` : 'Nothing armed selected.';
+    this.nextSlow = 0;
+  }
+
+  /** Give every radar in the selection the next emission preset after the first one's. */
+  private emconSelection(): void {
+    const rs = this.multi.map((c) => this.radarOf(c)).filter((r): r is Radar => !!r);
+    if (!rs.length) return;
+    const e = rs[0].emcon;
+    const next = e === 'on' ? 'near' : e === 'near' ? 'engaged' : 'on';
+    for (const r of rs) this.w.setEmcon(r.code, next);
+    this.nextSlow = 0;
+  }
+
+  private radarOf(code: string): Radar | undefined {
+    const f = this.w.fieldedByCode(code);
+    return f?.fu?.radar ?? f?.radar;
+  }
+
+  private nameOf(code: string): string {
+    const f = this.w.fieldedByCode(code);
+    return f?.fu?.name ?? f?.ciws?.name ?? f?.radar?.name ?? code;
+  }
+
+  /** Wait for a click on the map, then move the whole selection there in formation. */
+  private startGroupMove(): void {
+    this.moving = 'group';
+    this.lastOrder = `Click the map where the group should go: each unit keeps its place in the formation. Right click does the same any time. Esc cancels.`;
+    const v = this.view;
+    v.onGroundHover = (p) => v.setPreview(p, 0, true);
+    v.onGroundClick = (p) => {
+      this.stopMove();
+      this.moveFormation(p.x, p.y);
+    };
+    this.nextSlow = 0;
   }
 
   clearSelection(): void {
@@ -246,15 +378,23 @@ export class Hud {
     if (e.code === 'Space') {
       this.ctl.paused = !this.ctl.paused;
       e.preventDefault();
-    } else if (/^Digit[1-5]$/.test(e.code)) {
-      this.ctl.speed = SPEEDS[Number(e.code.slice(5)) - 1];
+    } else if (/^(Minus|Equal|NumpadSubtract|NumpadAdd)$/.test(e.code)) {
+      const i = SPEEDS.indexOf(this.ctl.speed) + (/Minus|Subtract/.test(e.code) ? -1 : 1);
+      this.ctl.speed = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, i))];
       this.ctl.paused = false;
-    } else if (e.code === 'KeyG' && this.unitSel) {
+    } else if (/^Digit[1-9]$/.test(e.code)) {
+      this.groupKey(Number(e.code.slice(5)), e.ctrlKey || e.metaKey || e.shiftKey);
+      e.preventDefault();
+    } else if (e.code === 'KeyG' && this.multi.length) {
       if (this.moving) this.stopMove();
-      else this.startMove(this.unitSel);
-    } else if (e.code === 'KeyH' && this.unitSel) {
-      this.w.toggleHold(this.unitSel);
+      else if (this.multi.length > 1) this.startGroupMove();
+      else this.startMove(this.multi[0]);
+    } else if (e.code === 'KeyH' && this.multi.length) {
+      if (this.multi.length > 1) this.holdSelection();
+      else this.w.toggleHold(this.multi[0]);
       this.nextSlow = 0;
+    } else if (e.code === 'KeyX' && this.multi.length) {
+      this.scootSelection();
     } else if (e.code === 'Escape') {
       if (this.moving) {
         this.stopMove();
@@ -264,6 +404,30 @@ export class Hud {
       this.clearSelection();
       $('help').classList.add('hidden');
     }
+  }
+
+  /** Ctrl (or Shift) + n saves the selection as group n; n selects it, and n twice flies the camera there. */
+  private groupKey(n: number, assign: boolean): void {
+    if (assign) {
+      this.groups[n] = [...this.multi];
+      this.lastOrder = this.multi.length ? `Group ${n}: ${this.multi.length} unit${this.multi.length > 1 ? 's' : ''}.` : `Group ${n} cleared.`;
+      this.nextSlow = 0;
+      return;
+    }
+    const g = (this.groups[n] ?? []).filter((c) => this.w.fieldedByCode(c));
+    if (!g.length) return;
+    const now = performance.now();
+    const twice = this.lastGroupKey.n === n && now - this.lastGroupKey.t < 400;
+    this.lastGroupKey = { n, t: now };
+    this.setSelection(g);
+    const c = twice ? this.centroid(g) : null;
+    if (c) this.view.flyToGround(c.x, c.y);
+    this.lastOrder = `Group ${n} selected.${twice ? '' : ' Press again to fly there.'}`;
+  }
+
+  /** Control groups a unit belongs to, as "1, 4". */
+  private groupsOf(code: string): string {
+    return this.groups.flatMap((g, i) => (g?.includes(code) ? [String(i)] : [])).join(', ');
   }
 
   private resolve(): Track | undefined {
@@ -384,7 +548,21 @@ export class Hud {
         this.clearSelection();
         break;
       case 'unit':
-        this.selectUnit(this.unitSel === d.code ? null : d.code!);
+        if (e.shiftKey) this.setSelection(this.multi.includes(d.code!) ? this.multi.filter((c) => c !== d.code) : [...this.multi, d.code!]);
+        else this.selectUnit(this.unitSel === d.code ? null : d.code!);
+        break;
+      case 'grp-move':
+        if (this.moving) this.stopMove();
+        else this.startGroupMove();
+        break;
+      case 'grp-scoot':
+        this.scootSelection();
+        break;
+      case 'grp-hold':
+        this.holdSelection();
+        break;
+      case 'grp-emcon':
+        this.emconSelection();
         break;
       case 'engage-from': {
         const tr = w.tracker.get(Number(d.id));
@@ -875,8 +1053,53 @@ export class Hud {
     return null;
   }
 
+  /** One compact row per unit in a multi-selection: ammo, exposure (heat) and readiness bars, and group orders. */
+  private groupDetail(): string {
+    const w = this.w;
+    const bar = (pct: number, col: string, tip: string): string =>
+      `<span class="heat" title="${esc(tip)}"><i style="width:${Math.round(Math.max(0, Math.min(100, pct)))}%;background:${col}"></i></span>`;
+    let held = 0;
+    let armed = 0;
+    const rows = this.multi.map((code) => {
+      const f = w.fieldedByCode(code);
+      if (!f) return '';
+      const fu = f.fu;
+      const c = f.ciws;
+      const ammo = fu ? (100 * fu.rounds) / Math.max(1, fu.maxRounds) : c ? (100 * c.ammo) / Math.max(1, c.maxAmmo) : null;
+      const alive = f.sites.filter((x) => x.alive);
+      const hp = alive.length ? alive.reduce((a, x) => a + x.hp, 0) / f.sites.length : 0;
+      const launchers = fu ? fu.launchers.filter((l) => l.site.alive && l.rounds > 0).length / Math.max(1, fu.launchers.length) : 1;
+      const ready = f.move ? 0 : hp * launchers;
+      const hold = fu ? fu.hold : c ? !c.auto : false;
+      if (fu || c) armed++;
+      if (hold) held++;
+      const heat = f.heat ?? 0;
+      const state = f.move ? moveStatus(w, f) : hold ? 'HOLD' : '';
+      const g = this.groupsOf(code);
+      return `<tr data-act="unit" data-code="${code}" title="Click for this unit alone; shift-click drops it from the selection">
+        <td>${esc(this.nameOf(code))}${g ? ` <small class="dim">[${g}]</small>` : ''}</td>
+        <td>${ammo === null ? '<small class="dim">no weapon</small>' : bar(ammo, ammo > 30 ? '#78ffaa' : '#ff4d4d', `Ammunition ${Math.round(ammo)}%`)}</td>
+        <td>${bar(heat, heat < 50 ? '#ffd84d' : heat < 80 ? '#ff9a3d' : '#ff4d4d', `Exposure ${Math.round(heat)}%: at 100% the enemy locates it`)}</td>
+        <td>${bar(ready, '#7fd4ff', f.move ? 'Moving: out of action' : `Readiness ${Math.round(ready)}%: site health and launchers ready`)}</td>
+        <td><small class="${state === 'HOLD' ? 'jam' : 'dim'}">${esc(state)}</small></td></tr>`;
+    });
+    const radars = this.multi.map((c) => this.radarOf(c)).filter((r): r is Radar => !!r);
+    const emcon = radars.length ? `<button data-act="grp-emcon" title="Give every radar in the group the next emission preset">EMCON: ${esc(radars[0].emcon)}</button>` : '';
+    const order = this.lastOrder ? `<div class="order">${esc(this.lastOrder)}</div>` : '';
+    return `<h3>${this.multi.length} units selected <button data-act="desel" class="close-x" title="Deselect (Esc)">×</button></h3>
+      <div class="row"><button data-act="grp-move" class="${this.moving === 'group' ? 'on' : ''}" title="Move (G, or right click the map): the group keeps its formation">Move</button><button data-act="grp-scoot" title="Shoot and scoot every unit (X, or Alt + right click)">Scoot</button>${armed ? `<button data-act="grp-hold" class="${held === armed ? 'on' : ''}" title="Hold fire on the whole group, or release it (H)">${held === armed ? 'Release' : 'Hold fire'}</button>` : ''}${emcon}</div>
+      ${order}
+      <div class="tbl-wrap"><table class="grp"><thead><tr><th>Unit</th><th>Ammo</th><th>Heat</th><th>Ready</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table></div>
+      <div class="dim"><small>Ctrl or Shift + 1–9 saves this group; 1–9 selects it, twice flies there. Shift-drag on the map or drag on the scope to box select; shift-click adds or drops a unit.</small></div>`;
+  }
+
   private updateDetail(): void {
     const w = this.w;
+    if (this.multi.length > 1) {
+      this.multi = this.multi.filter((c) => w.fieldedByCode(c));
+      if (this.multi.length > 1) return this.set('detail', this.groupDetail());
+      this.setSelection(this.multi);
+    }
     if (this.unitSel) {
       const html = this.unitDetail(this.unitSel);
       if (html) {

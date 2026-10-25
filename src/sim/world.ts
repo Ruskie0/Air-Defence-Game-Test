@@ -808,6 +808,26 @@ export class World {
     this.log(`${r.name} emission control: ${EMCON_TEXT[r.emcon]}`, 'info');
   }
 
+  /** Set a radar's emission preset directly, so a whole selection can share one. */
+  setEmcon(code: string, preset: Radar['emcon']): void {
+    const r = this.radarByCode(code);
+    if (!r || r.emcon === preset) return;
+    r.emcon = preset;
+    if (preset === 'on' && !r.armSilent) r.emitting = true;
+    this.log(`${r.name} emission control: ${EMCON_TEXT[preset]}`, 'info');
+  }
+
+  /** Hold fire on a SAM battery or gun, or release it, to a given state. */
+  setHold(code: string, hold: boolean): void {
+    const fu = this.unit(code);
+    if (fu) {
+      if (fu.hold !== hold) fu.setHold(this, hold);
+      return;
+    }
+    const c = this.ciws.find((x) => x.code === code);
+    if (c && c.auto === hold) this.toggleHold(code);
+  }
+
   /** Radars on an automatic emission preset: radiate only while a hostile is close enough to matter. */
   private stepEmcon(): void {
     if (this.t < this.nextEmcon) return;

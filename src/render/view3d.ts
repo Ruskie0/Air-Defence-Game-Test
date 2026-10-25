@@ -158,11 +158,19 @@ export class View3D {
   selected: number | null = null;
   onSelect: (trackId: number) => void = () => {};
   /** A friendly site's name on the map was clicked. */
-  onSelectSite: (site: Site) => void = () => {};
+  onSelectSite: (site: Site, add: boolean) => void = () => {};
+  /** Shift-drag box on the ground: the friendly sites inside it. */
+  onBoxSelect: (sites: Site[], add: boolean) => void = () => {};
+  /** Right click without dragging: the ground point, and whether Alt was held. */
+  onRightClick: ((p: V3, alt: boolean) => void) | null = null;
   /** A plain click on the map that hit nothing selectable (used to deselect). */
   onEmptyClick: () => void = () => {};
   /** Friendly site to mark as selected. */
   selectedSite: Site | null = null;
+  /** Further friendly sites in a multi-selection, each marked with its own ring. */
+  selectedSites: Site[] = [];
+  private readonly groupRings: THREE.Sprite[] = [];
+  private boxEl: HTMLDivElement | null = null;
   private readonly container: HTMLElement;
   private world: World;
   private terrainMesh: THREE.Mesh | null = null;
@@ -182,7 +190,7 @@ export class View3D {
   /** World.layoutSeq the coverage rings were drawn for. */
   private coverageSeq = -1;
   private readonly raycaster = new THREE.Raycaster();
-  private down: { x: number; y: number } | null = null;
+  private down: { x: number; y: number; b: number } | null = null;
   /** Set while the planning screen wants map clicks: called with the ground point clicked. */
   onGroundClick: ((p: V3) => void) | null = null;
   /** Called with the ground point under the pointer while onGroundClick is set. */
@@ -262,8 +270,49 @@ export class View3D {
 
     this.scene.add(this.preview);
     const el = this.renderer.domElement;
-    el.addEventListener('pointerdown', (e) => (this.down = { x: e.clientX, y: e.clientY }));
+    // Shift-drag draws a selection box. It is caught on the way down to the canvas so the orbit controls never see it.
+    el.parentElement!.addEventListener(
+      'pointerdown',
+      (e) => {
+        if (e.target !== el || !e.shiftKey || e.button !== 0 || this.onGroundClick) return;
+        e.stopPropagation();
+        e.preventDefault();
+        const x0 = e.clientX;
+        const y0 = e.clientY;
+        const box = (this.boxEl ??= Object.assign(document.createElement('div'), { className: 'sel-box' }));
+        document.body.appendChild(box);
+        const draw = (x: number, y: number): void => {
+          Object.assign(box.style, { left: `${Math.min(x, x0)}px`, top: `${Math.min(y, y0)}px`, width: `${Math.abs(x - x0)}px`, height: `${Math.abs(y - y0)}px` });
+        };
+        draw(x0, y0);
+        const move = (ev: PointerEvent): void => draw(ev.clientX, ev.clientY);
+        const up = (ev: PointerEvent): void => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+          box.remove();
+          if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 6) {
+            // A shift-click on a unit adds it to the selection.
+            const site = this.pickSite(ev.clientX, ev.clientY);
+            if (site) this.onSelectSite(site, true);
+            return;
+          }
+          this.onBoxSelect(this.sitesInRect(x0, y0, ev.clientX, ev.clientY), ev.ctrlKey);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+      },
+      { capture: true },
+    );
+    el.addEventListener('pointerdown', (e) => (this.down = { x: e.clientX, y: e.clientY, b: e.button }));
+    el.addEventListener('contextmenu', (e) => e.preventDefault());
     el.addEventListener('pointerup', (e) => {
+      if (this.down && e.button === 2 && this.down.b === 2) {
+        const moved = Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y);
+        this.down = null;
+        const p = moved < 6 && this.onRightClick ? this.pickGround(e.clientX, e.clientY) : null;
+        if (p) this.onRightClick!(p, e.altKey);
+        return;
+      }
       if (!this.down || e.button !== 0) return;
       const moved = Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y);
       this.down = null;
@@ -299,6 +348,40 @@ export class View3D {
       if (d < bd) {
         bd = d;
         best = id;
+      }
+    }
+    return best;
+  }
+
+  /** Screen position of a sim point, or null when it is behind the camera. */
+  private screenOf(x: number, y: number, z: number): [number, number] | null {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const p = this.tmp.set(x, z, -y).project(this.camera);
+    if (p.z > 1) return null;
+    return [r.left + ((p.x + 1) / 2) * r.width, r.top + ((1 - p.y) / 2) * r.height];
+  }
+
+  /** Our living sites drawn inside a screen rectangle. */
+  sitesInRect(x0: number, y0: number, x1: number, y1: number): Site[] {
+    const [ax, bx] = [Math.min(x0, x1), Math.max(x0, x1)];
+    const [ay, by] = [Math.min(y0, y1), Math.max(y0, y1)];
+    return this.world.sites.filter((s) => {
+      if (!s.alive) return false;
+      const p = this.screenOf(s.pos.x, s.pos.y, s.pos.z);
+      return !!p && p[0] >= ax && p[0] <= bx && p[1] >= ay && p[1] <= by;
+    });
+  }
+
+  /** Our site drawn nearest a screen position, within 24 px. */
+  pickSite(clientX: number, clientY: number): Site | null {
+    let best: Site | null = null;
+    let bd = 24;
+    for (const s of this.world.sites) {
+      const p = s.alive ? this.screenOf(s.pos.x, s.pos.y, s.pos.z) : null;
+      const d = p ? Math.hypot(p[0] - clientX, p[1] - clientY) : Infinity;
+      if (d < bd) {
+        bd = d;
+        best = s;
       }
     }
     return best;
@@ -491,7 +574,7 @@ export class View3D {
       el.classList.add('pickable');
       el.addEventListener('pointerdown', (ev) => {
         ev.stopPropagation();
-        this.onSelectSite(site);
+        this.onSelectSite(site, ev.shiftKey);
       });
     }
     const o = new CSS2DObject(el);
@@ -1004,6 +1087,17 @@ export class View3D {
     const ss = this.selectedSite;
     this.siteRing.visible = !!ss;
     if (ss) this.siteRing.position.set(ss.pos.x, ss.pos.z + 10, -ss.pos.y);
+    const extra = this.selectedSites.filter((x) => x !== ss);
+    while (this.groupRings.length < extra.length) {
+      const ring = this.siteRing.clone();
+      this.scene.add(ring);
+      this.groupRings.push(ring);
+    }
+    this.groupRings.forEach((ring, i) => {
+      const s = extra[i];
+      ring.visible = !!s;
+      if (s) ring.position.set(s.pos.x, s.pos.z + 10, -s.pos.y);
+    });
     for (const tr of w.tracker.tracks) {
       if (!tr.confirmed) continue;
       seen.add(tr.id);

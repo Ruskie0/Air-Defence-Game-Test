@@ -23,7 +23,6 @@ export function commanderShop(c: Campaign): string[] {
   const last = c.s.history[c.s.history.length - 1];
   const pressing = !!last?.front?.some((l) => / and took /.test(l));
   const covered = count('MR') + count('LR') >= 2 && count('SH') >= 1;
-  const spare = c.s.money - OFFENSIVE_COST_M >= (pressing ? 0 : 100);
   // Before the airfield: wear down what would counter-attack it (deep strikes on the airfield and FARP) and only
   // go in once the jets and helicopters it could throw are few, or on the last days.
   const nextI = f ? nextObjective(f) : -1;
@@ -43,6 +42,9 @@ export function commanderShop(c: Campaign): string[] {
   // Go in while the runway is cratered, or once what it could throw is thin, or on the last days.
   const field = c.theatre.find((b) => b.kind === 'airfield' && !b.lost);
   const ready = !atField || (!!field && c.runwayDown(field.id) !== null) || threat <= 6 || c.s.day >= CAMPAIGN_DAYS - 1;
+  // Inside a cratered-runway window the push is worth any money left.
+  const window = !!field && c.runwayDown(field.id) !== null;
+  const spare = c.s.money - OFFENSIVE_COST_M >= (pressing || window ? 0 : 100);
   if (f && covered && spare && ready && !flag('--no-offensive') && c.launchOffensive()) {
     bought.push(`offensive on ${f.towns[f.offensive!].name}`);
     const at = assaultSpot(c.terrain, f, f.offensive!);

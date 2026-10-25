@@ -621,17 +621,56 @@ const TYRE = 0x1f1f1d;
 
 /** A wheeled chassis of length len with axles at the given z positions and the cab at the cab end (-1 is -Z). */
 function chassis(k: Kit, len: number, w: number, axles: number[], cab: -1 | 1 = -1, color = OLIVE): void {
+  // Frame rails, side skirts and mudguards.
   k.box(w * 0.9, 0.5, len, OLIVE_D, 0, 1.0, 0);
-  for (const z of axles) for (const x of [-w / 2 + 0.2, w / 2 - 0.2]) k.wheel(0.55, 0.4, TYRE, x, 0.55, z);
-  k.box(w, 2.0, 2.2, color, 0, 2.2, cab * (len / 2 - 1.1));
-  k.box(w * 0.8, 0.5, 0.05, GLASS, 0, 2.6, cab * (len / 2 + 0.01));
+  for (const x of [-w / 2 + 0.05, w / 2 - 0.05]) k.box(0.1, 0.35, len - 2.6, OLIVE_D, x, 1.2, -cab * 0.6);
+  for (const z of axles) {
+    for (const x of [-w / 2 + 0.2, w / 2 - 0.2]) {
+      k.wheel(0.55, 0.4, TYRE, x, 0.55, z);
+      k.wheel(0.3, 0.42, 0x3d3f35, x, 0.55, z);
+    }
+    k.box(w + 0.1, 0.1, 1.3, OLIVE_D, 0, 1.18, z);
+  }
+  // Cab: box with a sloped nose, windscreen, side windows, roof hatch, mirrors, bumper and an exhaust stack.
+  const cz = cab * (len / 2 - 1.15);
+  k.box(w, 1.7, 2.1, color, 0, 2.05, cz - cab * 0.05);
+  k.box(w, 0.55, 0.9, color, 0, 1.35, cab * (len / 2 - 0.2));
+  k.box(w * 0.86, 0.7, 0.06, GLASS, 0, 2.45, cab * (len / 2 - 0.08), cab * 0.18);
+  for (const x of [-w / 2 - 0.01, w / 2 + 0.01]) k.box(0.04, 0.55, 0.9, GLASS, x, 2.45, cz + cab * 0.35);
+  k.box(w * 0.5, 0.12, 0.9, OLIVE_D, 0, 2.95, cz);
+  for (const x of [-w / 2 - 0.15, w / 2 + 0.15]) k.box(0.08, 0.35, 0.2, DARK, x, 2.55, cab * (len / 2 - 0.25));
+  k.box(w + 0.1, 0.25, 0.2, DARK, 0, 0.95, cab * (len / 2 + 0.05));
+  k.tube(0.08, 0.08, 1.4, DARK, w / 2 - 0.2, 2.5, cz - cab * 1.1, 6);
+  // Fuel tank and stowage box behind the cab.
+  k.box(0.5, 0.6, 1.4, 0x3f4530, w / 2 - 0.1, 1.15, cz - cab * 2.0);
+  k.box(0.5, 0.5, 1.0, 0x3f4530, -w / 2 + 0.1, 1.15, cz - cab * 2.0);
 }
 
 /** Canisters of the given cross-section pivoting at z = pz, raised by el with their far end towards -Z (the threat). */
 function canisters(k: Kit, xs: number[], dys: number[], size: number, len: number, el: number, pz: number, py: number, color: number): void {
   const cy = py + Math.sin(el) * (len / 2);
   const cz = pz - Math.cos(el) * (len / 2);
-  for (const x of xs) for (const dy of dys) k.box(size, size, len, color, x, cy + dy * Math.cos(el), cz + dy * Math.sin(el), el);
+  for (const x of xs)
+    for (const dy of dys) {
+      k.box(size, size, len, color, x, cy + dy * Math.cos(el), cz + dy * Math.sin(el), el);
+      // Frangible front cover and a darker reinforcing band at each end.
+      const fy = cy + dy * Math.cos(el) + Math.sin(el) * (len / 2);
+      const fz = cz + dy * Math.sin(el) - Math.cos(el) * (len / 2);
+      k.box(size * 0.92, size * 0.92, 0.06, 0xb9b39a, x, fy, fz, el);
+      k.box(size + 0.04, size + 0.04, 0.2, OLIVE_D, x, cy + dy * Math.cos(el) - Math.sin(el) * (len / 2 - 0.2), cz + dy * Math.sin(el) + Math.cos(el) * (len / 2 - 0.2), el);
+    }
+  // Elevating ram and the cradle under the pack.
+  k.box(0.3, 0.3, len * 0.6, OLIVE_D, 0, py + Math.sin(el) * len * 0.2 - size, pz - Math.cos(el) * len * 0.3, el);
+}
+
+/** Outrigger jacks levelling a launcher or radar at its corners. */
+function outriggers(k: Kit, w: number, zs: number[]): void {
+  for (const z of zs)
+    for (const s of [-1, 1]) {
+      k.box(0.9, 0.18, 0.25, OLIVE_D, s * (w / 2 + 0.35), 0.95, z);
+      k.box(0.18, 0.9, 0.18, OLIVE_D, s * (w / 2 + 0.75), 0.5, z);
+      k.box(0.55, 0.06, 0.55, DARK, s * (w / 2 + 0.75), 0.03, z);
+    }
 }
 
 /** LR: semi-trailer with four large canisters raised towards the threat, tractor at the back. */
@@ -641,6 +680,10 @@ function launcherLR(): THREE.BufferGeometry {
   k.box(2.6, 0.6, 9.2, OLIVE, 0, 1.5, -1.4);
   canisters(k, [-0.55, 0.55], [-0.55, 0.55], 1.0, 6.2, 0.66, 3.2, 2.9, OLIVE);
   k.box(0.3, 3.2, 0.3, OLIVE_D, 0, 2.6, -0.4, -0.5);
+  outriggers(k, 2.6, [-5.4, 1.8]);
+  // Generator and cable reel on the gooseneck.
+  k.box(1.6, 1.0, 1.2, 0x4d5434, 0, 2.3, 3.6);
+  k.add(new THREE.CylinderGeometry(0.45, 0.45, 0.5, 12), DARK, 0.9, 2.2, 2.6, 0, 0, Math.PI / 2);
   return k.build();
 }
 
@@ -650,6 +693,7 @@ function launcherMR(): THREE.BufferGeometry {
   chassis(k, 9, 2.5, [-3.0, -1.8, 3.2], 1);
   k.box(2.4, 0.6, 6.4, OLIVE, 0, 1.5, -1.2);
   canisters(k, [-0.75, 0, 0.75], [-0.36, 0.36], 0.68, 4.4, 0.5, 1.8, 2.5, 0x5f6a40);
+  outriggers(k, 2.5, [-3.6, 1.4]);
   return k.build();
 }
 
@@ -670,8 +714,14 @@ function shoradHull(): THREE.BufferGeometry {
 function radarBase(trailer: number): THREE.BufferGeometry {
   const k = new Kit();
   chassis(k, trailer, 2.5, [-trailer / 2 + 1.0, trailer / 2 - 2.0, trailer / 2 - 0.9]);
-  k.box(2.4, 2.2, trailer - 2.6, OLIVE, 0, 2.3, 1.2);
-  for (const x of [-1.6, 1.6]) for (const z of [-trailer / 2 + 0.5, trailer / 2 - 0.5]) k.box(0.2, 1.2, 0.2, OLIVE_D, x * 1.2, 0.6, z);
+  // Equipment shelter: door, louvres, air conditioner and cable entry.
+  const sl = trailer - 2.6;
+  k.box(2.4, 2.2, sl, OLIVE, 0, 2.3, 1.2);
+  k.box(0.04, 1.6, 0.9, OLIVE_D, 1.22, 2.1, 1.2 + sl / 4);
+  for (let i = 0; i < 4; i++) k.box(0.04, 0.08, 1.0, DARK, -1.22, 2.6 + i * 0.18, 1.2 - sl / 4);
+  k.box(0.9, 0.6, 0.6, 0x4d5434, 0, 3.7, 1.2 + sl / 2 - 0.5);
+  k.box(0.4, 0.4, 0.4, DARK, -0.9, 3.55, 1.2 - sl / 2 + 0.4);
+  outriggers(k, 2.5, [-trailer / 2 + 0.5, trailer / 2 - 0.5]);
   return k.build();
 }
 

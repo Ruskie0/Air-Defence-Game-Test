@@ -112,6 +112,7 @@ export function showcaseModel(spec: ModelSpec): THREE.Object3D {
       }
   }
   // Air models are built around their centre of mass: stand them on the floor.
+  root.updateMatrixWorld(true);
   const bb = new THREE.Box3().setFromObject(root);
   if (spec.kind === 'air' || spec.kind === 'missile') root.position.y = -bb.min.y;
   return root;
@@ -200,8 +201,10 @@ export class Showcase {
   show(spec: ModelSpec): void {
     if (this.model) this.holder.remove(this.model);
     this.model = showcaseModel(spec);
-    this.holder.add(this.model);
+    // Measure it on its own, before the holder's offset for the last model applies to it.
+    this.model.updateMatrixWorld(true);
     const bb = new THREE.Box3().setFromObject(this.model);
+    this.holder.add(this.model);
     bb.getSize(this.size);
     const sphere = bb.getBoundingSphere(new THREE.Sphere());
     this.radius = Math.max(0.8, sphere.radius);
@@ -247,7 +250,7 @@ export class Showcase {
       if (o.name === 'tailrotor') o.rotation.x += dt * 40;
     });
     const fit = this.radius / Math.sin((this.camera.fov * Math.PI) / 360) / Math.min(1, this.camera.aspect);
-    const d = fit * 0.78 * this.zoom;
+    const d = fit * 1.1 * this.zoom;
     this.camera.near = Math.max(0.02, d / 200);
     this.camera.far = d * 20;
     this.camera.position.set(Math.sin(this.yaw) * Math.cos(this.pitch) * d, this.centreY + Math.sin(this.pitch) * d, Math.cos(this.yaw) * Math.cos(this.pitch) * d);

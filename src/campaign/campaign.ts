@@ -1,3 +1,4 @@
+import { RED_SUPPORT } from '../sim/redair';
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, RANKS, ROUND_COST, UnitType, launcherOffsets, newUnit, rankOf } from '../sim/catalog';
 import { CAP_RADIUS, DEPLOY_RADIUS, nearestFree, placeError } from '../sim/deploy';
 import { finishMoves } from '../sim/mobility';
@@ -144,6 +145,8 @@ export interface CampaignState {
   repairs?: Record<string, number>;
   /** Extra repair crews hired: each adds REPAIR_PER_H points an hour to repairs. */
   repairCrews?: number;
+  /** Clock time the enemy has a new AWACS after we shot its last one down. */
+  awacsBackAt?: number;
   /** Day the last offensive went in (one a day). */
   offensiveDay?: number;
   /** The enemy's own ground offensive today: on which of our towns, from which of theirs, in which operation. */
@@ -959,6 +962,7 @@ export class Campaign {
       counterBattery: withRaids ? this.s.day : 0,
       clockStart: withRaids ? this.clock : undefined,
       pulse: withRaids ? this.pulse?.type : undefined,
+      awacsDenied: withRaids && (this.s.awacsBackAt ?? 0) > this.clock,
     });
   }
 
@@ -968,6 +972,7 @@ export class Campaign {
     const at = this.clock;
     const end = at + w.t / 60;
     const slot = this.pulse;
+    if (w.redSupport.awacsKilledAt !== null) s.awacsBackAt = at + w.redSupport.awacsKilledAt / 60 + RED_SUPPORT.replaceH * 60;
     // Weapons still inbound when the day is ended early reach their targets.
     for (const e of w.entities) {
       if (!e.alive || e.side !== 'red' || !e.munition || !e.target) continue;

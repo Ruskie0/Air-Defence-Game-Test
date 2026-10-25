@@ -73,6 +73,8 @@ export interface WorldOptions {
   weather?: WeatherId;
   /** Level of the enemy's counter-battery fire (campaign day); 0 turns it off. 4 when omitted. */
   counterBattery?: number;
+  /** The enemy's AWACS was shot down recently and has not been replaced: none flies in this battle. */
+  awacsDenied?: boolean;
   /** Campaign clock (minutes since midnight before day 1, as in campaign/clock.ts) at t = 0; absent outside the campaign. */
   clockStart?: number;
   /** The kind of operation this battle is ('probe', 'strike', 'night'); only combined strikes are timed on target. */
@@ -279,6 +281,7 @@ export class World {
     }
     if (this.column) this.spawn(this.column);
     if (o.enemyAssault) this.enemyArmour = new EnemyArmour(o.enemyAssault.target, o.enemyAssault.from, o.enemyAssault.to);
+    this.redSupport.denied = !!o.awacsDenied;
     this.redSupport.launch(this, o.counterBattery ?? 0);
     sweepCap(this);
     this.scenario = new Scenario(o.raids, this.terrain.layout.rot);

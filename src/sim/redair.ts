@@ -19,6 +19,8 @@ export const RED_SUPPORT = {
   stationMult: 1.4,
   /** From which campaign day (or Last Stand wave) each flies. */
   awacsLevel: 4,
+  /** Hours from an AWACS kill until a replacement is on station. */
+  replaceH: 12,
   /** Packages closer together than this (s) belong to one wave. */
   waveGapS: 300,
   tankerLevel: 5,
@@ -104,6 +106,10 @@ export class RedSupport {
   private tanker: Tanker | null = null;
   /** The level from which the enemy fights with an AWACS: below it, its raids are neither helped nor hurt. */
   private level = 0;
+  /** No AWACS to put up in this battle: the last one was shot down and its replacement is not here yet. */
+  denied = false;
+  /** Battle time the AWACS was shot down, if it was. */
+  awacsKilledAt: number | null = null;
 
   /**
    * The enemy should have an AWACS up by now but has none (shot down, or not replaced yet): its raids are
@@ -171,7 +177,7 @@ export class RedSupport {
     if (!rear) return;
     const center = orbitCenter(w, rear);
     const entry = v3(rear.x, rear.y);
-    if (level >= RED_SUPPORT.awacsLevel && !this.awacsUp && avail(rear, 'awacs') > 0) {
+    if (level >= RED_SUPPORT.awacsLevel && !this.awacsUp && !this.denied && avail(rear, 'awacs') > 0) {
       this.awacs = new Awacs(w.nextName('AEW'), entry, center);
       w.spawn(this.awacs);
       this.escortAwacs(w, this.awacs);
@@ -218,7 +224,8 @@ export class RedSupport {
   /** An aircraft shot down: tell the player what it costs the enemy. Its stock is written off at settle. */
   lost(w: World, kind: string): void {
     if (kind === 'awacs') {
-      w.log('Enemy AWACS DOWN: raids uncoordinated. Its packages will arrive staggered, its strike jets fly their planned targets and its fighters fly blind', 'engage');
+      this.awacsKilledAt = w.t;
+      w.log(`Enemy AWACS DOWN: raids uncoordinated for ${RED_SUPPORT.replaceH} h, the rest of this raid and the next. Its packages will arrive staggered, its strike jets fly their planned targets and its fighters fly blind`, 'engage');
       this.coordinate(w);
     }
     if (kind === 'tanker') w.log('Enemy tanker shot down: its jammers and SEAD fighters will go home sooner', 'engage');

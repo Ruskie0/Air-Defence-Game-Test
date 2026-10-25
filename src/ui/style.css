@@ -1002,34 +1002,62 @@ table.grp tr { cursor: pointer; }
   position: absolute;
   top: 54px;
   left: 50%;
-  margin-left: -32px;
-  width: 64px;
-  height: 64px;
+  width: 180px;
+  height: 44px;
+  margin-left: -90px;
   cursor: pointer;
   z-index: 3;
-  filter: drop-shadow(0 0 3px #000);
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  backdrop-filter: blur(4px);
+}
+#view .compass:hover {
+  border-color: rgba(120, 255, 170, 0.4);
+}
+#view .compass .tape {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 26px;
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 22%, #000 78%, transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 22%, #000 78%, transparent);
 }
 #view .compass svg {
-  transform: rotate(var(--hdg, 0rad));
-}
-#view .compass .ring {
-  fill: rgba(10, 18, 16, 0.55);
-  stroke: rgba(200, 230, 215, 0.6);
-  stroke-width: 1.2;
+  display: block;
+  will-change: transform;
 }
 #view .compass line {
-  stroke: rgba(200, 230, 215, 0.8);
-  stroke-width: 1.4;
+  stroke: var(--dim);
+  stroke-width: 1;
 }
-#view .compass .n {
-  fill: #ff6b5a;
-}
-#view .compass .s {
-  fill: rgba(220, 230, 225, 0.75);
+#view .compass text {
+  text-anchor: middle;
+  fill: var(--dim);
+  font: 500 8px var(--mono);
 }
 #view .compass .nl {
-  fill: #fff;
-  font: 700 9px var(--font);
-  text-anchor: middle;
-  dominant-baseline: middle;
+  fill: var(--text);
+  font: 700 10px var(--font);
+}
+#view .compass .nl.n {
+  fill: var(--accent);
+}
+#view .compass .caret {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  margin-left: -4px;
+  border: 4px solid transparent;
+  border-top: 5px solid var(--accent);
+}
+#view .compass .brg {
+  position: absolute;
+  bottom: 3px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font: 600 11px var(--mono);
+  color: var(--accent);
+  letter-spacing: 0.04em;
 }

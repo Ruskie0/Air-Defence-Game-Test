@@ -28,11 +28,13 @@ export function commanderShop(c: Campaign): string[] {
   const nextI = f ? nextObjective(f) : -1;
   const atField = !!f && nextI >= 0 && !!f.towns[nextI].airfield;
   const threat = atField ? c.fieldCounterForce().filter((x) => x.kind !== 'drones').reduce((t, x) => t + x.n, 0) : 0;
-  const ready = !atField || threat <= 6 || c.s.day >= CAMPAIGN_DAYS - 1;
   if (atField && !flag('--no-strikes')) {
     const prep = strikeTargets(c).filter((b) => (b.kind === 'airfield' || b.kind === 'farp') && !deepStrikeError(c, b.id)).sort((a, b) => (a.kind === 'airfield' ? -1 : 1) - (b.kind === 'airfield' ? -1 : 1))[0];
     if (prep && deepStrike(c, prep.id)) bought.push(`prep strike ${prep.id} (${c.s.deepStrike?.ok ? 'hit' : 'failed'})`);
   }
+  // Go in while the runway is cratered, or once what it could throw is thin, or on the last days.
+  const field = c.theatre.find((b) => b.kind === 'airfield' && !b.lost);
+  const ready = !atField || (!!field && c.runwayDown(field.id) !== null) || threat <= 6 || c.s.day >= CAMPAIGN_DAYS - 1;
   if (f && covered && spare && ready && !flag('--no-offensive') && c.launchOffensive()) {
     bought.push(`offensive on ${f.towns[f.offensive!].name}`);
     const at = assaultSpot(c.terrain, f, f.offensive!);

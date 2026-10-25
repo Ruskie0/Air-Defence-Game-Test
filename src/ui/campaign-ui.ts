@@ -445,7 +445,7 @@ export class CampaignUi {
         const full = b.start ? total({ stock: b.start }) : 0;
         const pct = full ? Math.min(100, (100 * total(b)) / full) : 100;
         const col = pct > 60 ? '#ff6b5b' : pct > 30 ? '#ffb05b' : '#8a8a8a';
-        return `<div class="eb"><span><b>${esc(b.name)}</b> ${b.kind === 'rear' ? '' : `<span class="dim">${km} km</span>`}<br><small>${esc(stockText(b))}</small></span><span class="bar" title="Strength left against what it started the war with"><i style="width:${pct}%;background:${col}"></i></span></div>`;
+        return `<div class="eb"><span><b>${esc(b.name)}</b> ${b.kind === 'rear' ? '' : `<span class="dim">${km} km</span>`}<br><small>${esc(stockText(b))}${c.runwayDown(b.id) ? ` · <b>Runway cratered until ${hhmm(c.runwayDown(b.id)!)}</b>` : ''}</small></span><span class="bar" title="Strength left against what it started the war with"><i style="width:${pct}%;background:${col}"></i></span></div>`;
       })
       .join('');
     const hidden = bases.filter((b) => !b.known && !b.lost);
@@ -501,7 +501,9 @@ export class CampaignUi {
     const names: Record<string, string> = { strike: 'strike jets', sead: 'SEAD jets', helo: 'attack helicopters', drones: 'drones', cruise: 'cruise missiles' };
     const parts = Object.entries(per).map(([k, n]) => `${n} ${names[k] ?? k}`);
     if (waves) parts.push(`${waves} armour wave${waves > 1 ? 's' : ''} (−${waves * ARMOUR_BDE.counterHp}% each to the force)`);
-    return `<div class="event"><h3>The airfield counter-attack</h3><p>If we assault ${esc(f.towns[next].name)} now, the enemy throws everything it has ready at the assault force: <b>${esc(parts.join(', ') || 'nothing')}</b>. Deep strikes on the airfield and FARP, AWACS hunts and beating off its armour wear this down first.</p></div>`;
+    const field = c.theatre.find((b) => b.kind === 'airfield' && !b.lost);
+    const down = field ? c.runwayDown(field.id) : null;
+    return `<div class="event"><h3>The airfield counter-attack</h3>${down ? `<p class="good"><b>Runway cratered until ${hhmm(down)}</b>: no jets or SEAD can fly from it. Assault now and only helicopters, drones, missiles and armour meet the force.</p>` : '<p class="dim">A deep strike that hits the airfield craters its runway for 24 h: assault inside that window and its jets stay on the ground.</p>'}<p>If we assault ${esc(f.towns[next].name)} now, the enemy throws everything it has ready at the assault force: <b>${esc(parts.join(', ') || 'nothing')}</b>. Deep strikes on the airfield and FARP, AWACS hunts and beating off its armour wear this down first.</p></div>`;
   }
 
   /** The enemy's own attack on one of our towns: when it is coming, and the chance to break it up first. */
@@ -587,8 +589,8 @@ export class CampaignUi {
     document.body.dataset.mode = 'debrief';
     const dmg = r.damage.filter((d) => d.lost > 0);
     $('debrief-body').innerHTML = `
-      <h2>${over ? (over.won ? `Campaign won${c.s.grade ? `: ${c.s.grade}` : ''}` : 'Campaign lost') : `${r.at !== undefined ? `${esc(stamp(r.at))}, ${r.pulse ? esc(PULSES[r.pulse].name.toLowerCase()) : 'raid'}` : `Day ${r.day}`} debrief`}</h2>
-      ${over ? `<p class="${over.won ? 'good' : 'bad'}"><b>${esc(over.reason)}</b></p>` : ''}
+      <h2>${over ? (over.won ? `Campaign won${c.s.grade ? `: ${c.s.grade}` : ''}` : over.draw ? 'Stalemate' : 'Campaign lost') : `${r.at !== undefined ? `${esc(stamp(r.at))}, ${r.pulse ? esc(PULSES[r.pulse].name.toLowerCase()) : 'raid'}` : `Day ${r.day}`} debrief`}</h2>
+      ${over ? `<p class="${over.won ? 'good' : over.draw ? 'warn' : 'bad'}"><b>${esc(over.reason)}</b></p>` : ''}
       <div class="kv">
         <span>Threats destroyed</span><b>${r.kills}</b>
         ${

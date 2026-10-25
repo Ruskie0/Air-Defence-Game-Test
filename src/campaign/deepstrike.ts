@@ -31,6 +31,8 @@ export const DEEP_STRIKES: Partial<Record<BaseKind, DeepStrikeDef>> = {
 
 /** Share of an installation's stock a successful strike destroys. */
 export const STRIKE_LOSS = 0.5;
+/** Hours a hit craters an airfield's runway. */
+export const RUNWAY_DOWN_H = 24;
 
 /** Installations a deep strike could go for today: located, still in the war and within reach. */
 export function strikeTargets(c: Campaign): EnemyBase[] {
@@ -88,10 +90,16 @@ export function deepStrike(c: Campaign, id: DeepStrikeId): string | null {
     return smaller > 0;
   });
   c.refreshObjectives();
+  // A hit on an airfield craters its runway for a day: nothing flies from it until it is fixed.
+  const crater = b.kind === 'airfield';
+  if (crater) {
+    (s.runwayUntil ??= {})[id] = c.clock + RUNWAY_DOWN_H * 60;
+    s.plan = s.plan.filter((p) => p.base !== id || !AIRCRAFT.includes(PKG[p.kind].asset!));
+  }
   s.deepStrike = {
     id,
     ok: true,
-    text: `Strike on the ${name} went in: ${gone.length ? `${gone.join(', ')} destroyed for good` : 'it was empty'}.${cut ? ` ${cut} of today's packages from there were called off or cut down.` : ''}`,
+    text: `Strike on the ${name} went in: ${gone.length ? `${gone.join(', ')} destroyed for good` : 'it was empty'}.${crater ? ` The runway is cratered for ${RUNWAY_DOWN_H} h: no jets fly from it.` : ''}${cut ? ` ${cut} of today's packages from there were called off or cut down.` : ''}`,
   };
   return s.deepStrike.text;
 }

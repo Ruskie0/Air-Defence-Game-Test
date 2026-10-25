@@ -117,7 +117,10 @@ export interface CampaignState {
   plan: PlannedPkg[];
   history: DayReport[];
   civilLosses: number;
-  over: null | { won: boolean; reason: string };
+  /** How the campaign ended. `draw` is a stalemate (a Bronze ceasefire): neither won nor lost. */
+  over: null | { won: boolean; reason: string; draw?: boolean };
+  /** Enemy airfields whose runway a deep strike cratered, until this clock minute: no jets fly, no reinforcement. */
+  runwayUntil?: Record<string, number>;
   /** Seed of this campaign's map; absent in saves from before random maps (the classic map). */
   mapSeed?: number;
   /** Map type; absent in saves from before map types (their maps are rebuilt the old way). */
@@ -328,7 +331,15 @@ export class Campaign {
   busy(at = this.pulse?.at ?? this.clock, plan: PlannedPkg[] = []): Map<string, number> {
     const m = sortiesOf(plan);
     for (const r of this.s.sorties ?? []) if (r.until > at) m.set(r.key, (m.get(r.key) ?? 0) + r.n);
+    // A cratered runway launches nothing.
+    for (const [id, until] of Object.entries(this.s.runwayUntil ?? {})) if (until > at) for (const a of ['strike', 'sead', 'recon']) m.set(`${id}:${a}`, (m.get(`${id}:${a}`) ?? 0) + 999);
     return m;
+  }
+
+  /** Clock minute the runway at airfield `id` is cratered until, or null if it is open. */
+  runwayDown(id: string, at = this.clock): number | null {
+    const u = this.s.runwayUntil?.[id];
+    return u !== undefined && u > at ? u : null;
   }
 
   /** Let the clock run on to `t` in the lull: orders reach the depot and the repair crews work. */
@@ -1399,7 +1410,7 @@ export class Campaign {
         const held = townsHeld(s.front);
         if (held > 0 || !s.front) {
           s.grade = 'Bronze';
-          s.over = { won: true, reason: `Ceasefire after ${CAMPAIGN_DAYS} days with the airbase out of action${s.front ? `, holding ${held} of the ${s.front.towns.length} towns on the road` : ''}. Bronze grade.` };
+          s.over = { won: false, draw: true, reason: `Stalemate: ceasefire after ${CAMPAIGN_DAYS} days with the airbase out of action${s.front ? `, holding ${held} of the ${s.front.towns.length} towns on the road` : ''}. Bronze grade.` };
         } else s.over = { won: false, reason: 'The ceasefire came with the airbase out of action and every town fallen. The defence has failed.' };
       }
     } else if (s.front?.towns.some((t) => t.airfield && t.ours)) s.over = { won: true, reason: `We took the enemy's forward airfield on day ${s.day}. The front has collapsed: the campaign is won.` };
@@ -1409,7 +1420,8 @@ export class Campaign {
       const towns = s.front?.towns ?? [];
       const held = townsHeld(s.front);
       s.grade = towns.length && held >= towns.length - 1 ? 'Gold' : held >= 2 || !towns.length ? 'Silver' : 'Bronze';
-      s.over = { won: true, reason: `Ceasefire after ${CAMPAIGN_DAYS} days: the airbase held${towns.length ? `, and we hold ${held} of the ${towns.length} towns on the road` : ''}. ${s.grade} grade.` };
+      const draw = s.grade === 'Bronze';
+      s.over = { won: !draw, draw, reason: `${draw ? 'Stalemate: c' : 'C'}easefire after ${CAMPAIGN_DAYS} days: the airbase held${towns.length ? `, and we hold ${held} of the ${towns.length} towns on the road` : ''}. ${s.grade} grade.` };
     }
     const medals = battleMedals(w);
     if (s.day >= 3 && report.leakers === 0 && report.kills > 0) medals.push(award('clean') ?? '');
@@ -1446,7 +1458,10 @@ export class Campaign {
         else if (s.front && townsHeld(s.front) === 0) s.over = { won: false, reason: 'Morning found the airbase out of action and every town fallen. The defence has failed.' };
       } else s.downMornings = 0;
       s.deployment.units = s.deployment.units.filter((u) => !u.loan);
+      // A cratered airfield gets no reinforcement while it is down.
+      const held = this.theatre.filter((b) => this.runwayDown(b.id)).map((b) => [b, { ...b.stock }] as const);
       reinforce(this.theatre, this.diff.threat);
+      for (const [b, st] of held) b.stock = st;
       s.armourStock = Math.min(ARMOUR_BDE.max, this.armourStock + ARMOUR_BDE.perNight);
       this.replan();
       if (s.autoRestock) report.restockM = this.restock();

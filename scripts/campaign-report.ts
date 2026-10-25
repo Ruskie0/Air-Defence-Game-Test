@@ -108,7 +108,7 @@ while (!c.s.over) {
       `\n  bonus $${r.bonusM ?? 0}M${r.income ? `  income $${r.income}M` : ''}`,
   );
 }
-console.log(`\n${c.s.over.won ? 'WON' : 'LOST'} on day ${c.s.day} (${c.s.history.length} raids): ${c.s.over.reason}  score ${c.score()}  (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+console.log(`\n${c.s.over.won ? 'WON' : c.s.over.draw ? 'DRAW' : 'LOST'} on day ${c.s.day} (${c.s.history.length} raids): ${c.s.over.reason}  score ${c.score()}  (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
 console.log('Towns held:', c.s.front?.towns.filter((t) => t.ours).map((t) => t.name).join(', '));
 console.log('Force at the end:', c.units.map((u) => u.type).join(' '));
 console.log(`Save size: ${(c.save().length / 1024).toFixed(1)} KB`);

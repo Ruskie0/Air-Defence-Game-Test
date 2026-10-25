@@ -485,7 +485,8 @@ tbody tr.sel {
 body[data-mode='menu'] :is(#left, #right, #log, #ppi-wrap, #plan-left, #plan-right, #speed, #wcs, #raid, #score, #clock, #menu-btn),
 body[data-mode='plan'] :is(#left, #right, #log, #speed, #wcs),
 body[data-mode='debrief'] :is(#plan-left, #plan-right),
-body[data-mode='battle'] :is(#plan-left, #plan-right),
+body[data-mode='battle']:not(.planning) :is(#plan-left, #plan-right),
+body.planning[data-mode='battle'] :is(#left, #right),
 body[data-mode='sandbox'] :is(#plan-left, #plan-right),
 body[data-mode='training'] :is(#plan-left, #plan-right, #spawn) {
   display: none;
@@ -997,3 +998,104 @@ li.warn {
 table.grp td { padding: 1px 4px; white-space: nowrap; }
 table.grp .heat { width: 46px; }
 table.grp tr { cursor: pointer; }
+/* Compass rose over the 3D view, turned by View3D so north always points north. */
+#view .compass {
+  position: absolute;
+  top: 54px;
+  left: 50%;
+  width: 180px;
+  height: 44px;
+  margin-left: -90px;
+  cursor: pointer;
+  z-index: 3;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  backdrop-filter: blur(4px);
+}
+#view .compass:hover {
+  border-color: rgba(120, 255, 170, 0.4);
+}
+#view .compass .tape {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 26px;
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 22%, #000 78%, transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 22%, #000 78%, transparent);
+}
+#view .compass svg {
+  display: block;
+  will-change: transform;
+}
+#view .compass line {
+  stroke: var(--dim);
+  stroke-width: 1;
+}
+#view .compass text {
+  text-anchor: middle;
+  fill: var(--dim);
+  font: 500 8px var(--mono);
+}
+#view .compass .nl {
+  fill: var(--text);
+  font: 700 10px var(--font);
+}
+#view .compass .nl.n {
+  fill: var(--accent);
+}
+#view .compass .caret {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  margin-left: -4px;
+  border: 4px solid transparent;
+  border-top: 5px solid var(--accent);
+}
+#view .compass .brg {
+  position: absolute;
+  bottom: 3px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font: 600 11px var(--mono);
+  color: var(--accent);
+  letter-spacing: 0.04em;
+}
+
+.site-label.ghost {
+  opacity: 0.7;
+  font-style: italic;
+  border-style: dashed;
+}
+.site-label.bn {
+  font-weight: 600;
+}
+.site-label.bn.fighting {
+  color: #ffb05b;
+  border-color: #ffb05b;
+}
+.cap-bar {
+  font: 600 11px var(--font, sans-serif);
+  color: #ffd84d;
+  text-align: center;
+  text-shadow: 0 1px 2px #000;
+  pointer-events: none;
+}
+.cap-bar i {
+  display: block;
+  width: 120px;
+  height: 5px;
+  margin: 2px auto 0;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid #ffd84d;
+}
+.cap-bar b {
+  display: block;
+  height: 100%;
+  background: #ffd84d;
+}
+.site-label.bn.exposed {
+  border-color: #ff9f43;
+  color: #ffcf9a;
+}

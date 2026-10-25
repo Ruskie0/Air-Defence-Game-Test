@@ -14,9 +14,12 @@ import { V3, clamp, polar } from '../sim/math';
 import type { Radar } from '../sim/radar';
 import type { Ciws } from '../sim/ciws';
 import type { Site } from '../sim/sites';
+import type { Ident, Track } from '../sim/tracker';
 import type { EnemyBase } from '../sim/theatre';
 import { MAP_SEED, type World } from '../sim/world';
 import { IDENT_COLOR } from '../ui/colors';
+import { CATALOG } from '../sim/catalog';
+import { hhmm } from '../campaign/clock';
 import { CameraRig } from './camera';
 import { Effects } from './effects';
 import { type FrameEvents, WorldEvents } from './events';
@@ -69,6 +72,16 @@ function markerTex(color: string, shape: 'circle' | 'diamond' | 'square' | 'dot'
     else g.stroke();
   });
 }
+
+/** Track symbols by identity: what the radar picture says, not what is really there. */
+const TRACK_MARKERS: Record<Ident, THREE.CanvasTexture> = {
+  HOS: markerTex(IDENT_COLOR.HOS, 'diamond'),
+  SUS: markerTex(IDENT_COLOR.SUS, 'diamond'),
+  PEND: markerTex(IDENT_COLOR.PEND, 'square'),
+  UNK: markerTex(IDENT_COLOR.UNK, 'square'),
+  NEU: markerTex(IDENT_COLOR.NEU, 'square'),
+  FRD: markerTex(IDENT_COLOR.FRD, 'circle'),
+};
 
 const MARKERS = {
   red: markerTex('#ff5050', 'diamond'),
@@ -141,6 +154,14 @@ function isKill(fate: unknown): boolean {
 }
 
 /** The air model for an entity: recon jets and SEAD decoys look different from the rest of their kind. */
+/**
+ * How much bigger than life things are drawn, so units read at a glance without zooming right in. Models then
+ * grow a little more with distance (sizeK), but much slower than perspective shrinks them: far things do get
+ * smaller on screen, unlike the old constant screen size.
+ */
+export const SHOW_SCALE = { air: 4, munition: 4.5, ground: 5 };
+export const sizeK = (d: number): number => clamp(Math.pow(d / 1500, 0.5), 1, 9);
+
 const modelKind = (e: Entity): string => (e.recon ? 'recon' : e.kind === 'cruise' && e.decoy ? 'decoy' : e.kind);
 
 export class View3D {
@@ -197,8 +218,8 @@ export class View3D {
   onGroundHover: ((p: V3 | null) => void) | null = null;
   private readonly entityObjs = new Map<number, EntityObj>();
   private readonly missileObjs = new Map<number, { body: THREE.Object3D; trail: TrailObj }>();
-  private readonly trackLabels = new Map<number, { obj: CSS2DObject; el: HTMLDivElement; last: string }>();
-  private readonly siteObjs: { site: Site; root: THREE.Group; mats: { color: THREE.Color }[]; label: CSS2DObject; dead: boolean }[] = [];
+  private readonly trackLabels = new Map<number, { obj: CSS2DObject; el: HTMLDivElement; last: string; sym: THREE.Sprite; ident: Ident }>();
+  private readonly siteObjs: { site: Site; root: THREE.Group; body?: THREE.Group; mats: { color: THREE.Color }[]; label: CSS2DObject; dead: boolean }[] = [];
   /** Enemy installations our intel has located: placeholder models and labels, rebuilt when that set changes. */
   private readonly baseObjs: { base: EnemyBase; site: Site | null; root: THREE.Group; label: CSS2DObject; mats: { color: THREE.Color }[]; dead: boolean }[] = [];
   private readonly antennas: { radar: Radar; obj: THREE.Object3D }[] = [];
@@ -208,7 +229,21 @@ export class View3D {
   private readonly siteRing: THREE.Sprite;
   private readonly tmp = new THREE.Vector3();
   private sceneryRes = 1;
+  /** Compass rose over the view; it turns with the camera so north is always marked. */
+  private readonly compass: HTMLDivElement;
+  private readonly compassTape: SVGSVGElement;
+  private readonly compassBrg: HTMLDivElement;
+  private lastBrg = -1;
   /** The enemy's armoured column attacking one of our towns (World.enemyArmour), built when first seen. */
+  /** Living war: battalions on the road (enemy models; labels with strength for both sides) and the hulks they leave. */
+  private readonly bnObjs = new Map<number, { root: THREE.Group; label: CSS2DObject; el: HTMLDivElement; last: string; hulkAt: number }>();
+  private readonly hulks: THREE.Mesh[] = [];
+  /** Capture bars over towns changing hands. */
+  private readonly capObjs = new Map<number, { obj: CSS2DObject; el: HTMLDivElement; bar: HTMLElement }>();
+  private readonly hulkMat = new THREE.MeshStandardMaterial({ color: 0x1c1a18, roughness: 1, metalness: 0 });
+  private readonly redBnMat = new THREE.MeshStandardMaterial({ color: 0x8a5a4a, roughness: 0.85, metalness: 0.1 });
+  /** Living war: ghosts of units on order, at the spot they were placed, with the road from the depot. */
+  private readonly ghosts = new Map<number, { root: THREE.Group; line: THREE.Line; label: CSS2DObject; eta: number }>();
   private armourObj: { root: THREE.Group; body: THREE.Mesh; label: CSS2DObject } | null = null;
   /** The campaign clock (minutes) while planning, when the shown world has no battle clock of its own. */
   planClock: (() => number | undefined) | null = null;
@@ -225,6 +260,32 @@ export class View3D {
     this.labels = new CSS2DRenderer();
     this.labels.domElement.className = 'labels3d';
     container.appendChild(this.labels.domElement);
+    this.compass = document.createElement('div');
+    this.compass.className = 'compass';
+    this.compass.title = 'Compass: click to face north';
+    // Heading tape: 2 px per degree, drawn from -180 to 540 so any heading has a full window either side.
+    const names: Record<number, string> = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' };
+    let ticks = '';
+    for (let d = -180; d <= 540; d += 5) {
+      const x = (d + 180) * 2;
+      const n = (d + 360) % 360;
+      if (n % 45 === 0) ticks += `<text x="${x}" y="11" class="${n === 0 ? 'nl n' : 'nl'}">${names[n]}</text>`;
+      else if (n % 15 === 0) ticks += `<line x1="${x}" x2="${x}" y1="13" y2="5"/><text x="${x}" y="22" class="dg">${String(n / 10).padStart(2, '0')}</text>`;
+      else ticks += `<line x1="${x}" x2="${x}" y1="13" y2="9"/>`;
+    }
+    this.compass.innerHTML = `<div class="tape"><svg width="1442" height="26" viewBox="0 0 1442 26" aria-hidden="true">${ticks}</svg></div><div class="caret"></div><div class="brg">000°</div>`;
+    this.compassTape = this.compass.querySelector('svg')!;
+    this.compassBrg = this.compass.querySelector('.brg')!;
+    this.compass.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      // Swing round to look north, keeping range and height.
+      const t = this.controls.target;
+      const off = this.tmp.copy(this.camera.position).sub(t);
+      const flat = Math.hypot(off.x, off.z);
+      this.follow = false;
+      this.rig.flyTo(new THREE.Vector3(t.x, this.camera.position.y, t.z + flat), t.clone(), 0.8);
+    });
+    container.appendChild(this.compass);
 
     this.camera = new THREE.PerspectiveCamera(50, 1, 5, 900000);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -492,10 +553,12 @@ export class View3D {
     this.fx.reset();
     this.wrecks.reset();
     for (const l of this.trackLabels.values()) {
-      this.scene.remove(l.obj);
+      this.scene.remove(l.obj, l.sym);
       l.el.remove();
     }
     this.trackLabels.clear();
+    this.clearGhosts();
+    this.clearGround();
     this.selected = null;
     this.buildSites();
     this.buildBases();
@@ -582,6 +645,169 @@ export class View3D {
     return o;
   }
 
+  private clearGround(): void {
+    for (const o of this.bnObjs.values()) {
+      this.scene.remove(o.root);
+      o.el.remove();
+    }
+    this.bnObjs.clear();
+    for (const o of this.capObjs.values()) {
+      this.scene.remove(o.obj);
+      o.el.remove();
+    }
+    this.capObjs.clear();
+    for (const h of this.hulks) this.scene.remove(h);
+    this.hulks.length = 0;
+  }
+
+  /** The ground war: enemy battalions as a cluster of vehicles with a marker, a label with strength on every battalion, hulks where they bleed. */
+  private syncGround(): void {
+    const g = this.world.ground;
+    if (!g) return;
+    const live = new Set<number>();
+    for (const b of g.bats) {
+      if (!b.alive) continue;
+      live.add(b.id);
+      let o = this.bnObjs.get(b.id);
+      if (!o) {
+        const root = new THREE.Group();
+        if (b.side === 'red') {
+          for (let i = 0; i < 6; i++) {
+            const m = new THREE.Mesh(groundGeometry(i < 3 ? 'tank' : 'ifv'), this.redBnMat);
+            m.position.set((i % 3) * 26 - 26, 0, Math.floor(i / 3) * 24 - 12);
+            root.add(m);
+          }
+          const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: MARKERS.red, depthTest: false, transparent: true, sizeAttenuation: false }));
+          marker.scale.setScalar(0.016);
+          marker.position.y = 25;
+          marker.renderOrder = 6;
+          root.add(marker);
+        }
+        const el = document.createElement('div');
+        el.className = `site-label bn ${b.side === 'red' ? 'enemy' : ''}`;
+        const label = new CSS2DObject(el);
+        label.center.set(0.5, -0.6);
+        label.position.y = 40;
+        root.add(label);
+        this.scene.add(root);
+        o = { root, label, el, last: '', hulkAt: b.strength };
+        this.bnObjs.set(b.id, o);
+      }
+      const y = this.world.terrain.groundAt(b.pos.x, b.pos.y);
+      o.root.position.set(b.pos.x, y, -b.pos.y);
+      const a = g.at(b.s + 50 * b.dir);
+      o.root.rotation.y = Math.atan2(a.x - b.pos.x, a.y - b.pos.y) + Math.PI;
+      const tag = b.foe ? ' ⚔' : b.broken ? ' (broken)' : '';
+      const cover = b.side === 'blue' ? (g.covered(this.world, b) ? ' · COVERED' : ' · EXPOSED') : '';
+      const txt = `${b.name} · ${Math.round(b.strength)}%${tag}${cover}`;
+      if (txt !== o.last) {
+        o.el.textContent = txt;
+        o.el.classList.toggle('fighting', !!b.foe);
+        o.el.classList.toggle('exposed', cover === ' · EXPOSED');
+        o.last = txt;
+      }
+      o.label.visible = this.showLabels;
+      // Every few percent lost leaves a burnt-out vehicle by the road.
+      if (o.hulkAt - b.strength >= 7) {
+        o.hulkAt = b.strength;
+        const h = new THREE.Mesh(groundGeometry(this.hulks.length % 2 ? 'ifv' : 'tank'), this.hulkMat);
+        const hx = b.pos.x + (Math.random() - 0.5) * 500;
+        const hy = b.pos.y + (Math.random() - 0.5) * 500;
+        h.position.set(hx, this.world.terrain.groundAt(hx, hy) - 0.5, -hy);
+        h.rotation.set((Math.random() - 0.5) * 0.3, Math.random() * 6.3, (Math.random() - 0.5) * 0.3);
+        this.scene.add(h);
+        this.hulks.push(h);
+        if (this.hulks.length > 90) this.scene.remove(this.hulks.shift()!);
+      } else if (b.strength > o.hulkAt) o.hulkAt = b.strength;
+    }
+    g.capture.forEach((cap, i) => {
+      let o = this.capObjs.get(i);
+      if (cap <= 0) {
+        if (o) {
+          this.scene.remove(o.obj);
+          o.el.remove();
+          this.capObjs.delete(i);
+        }
+        return;
+      }
+      if (!o) {
+        const el = document.createElement('div');
+        el.className = 'cap-bar';
+        el.innerHTML = '<span></span><i><b></b></i>';
+        const obj = new CSS2DObject(el);
+        obj.center.set(0.5, 2.2);
+        const p = g.at(g.townS[i]);
+        obj.position.set(p.x, this.world.terrain.groundAt(p.x, p.y) + 60, -p.y);
+        this.scene.add(obj);
+        o = { obj, el, bar: el.querySelector('b')! };
+        this.capObjs.set(i, o);
+      }
+      o.el.querySelector('span')!.textContent = `${g.townNames[i]} changing hands ${Math.round(cap * 100)}%`;
+      o.bar.style.width = `${Math.round(cap * 100)}%`;
+    });
+    for (const [id, o] of this.bnObjs) {
+      if (live.has(id)) continue;
+      this.scene.remove(o.root);
+      o.el.remove();
+      this.bnObjs.delete(id);
+    }
+  }
+
+  private clearGhosts(): void {
+    for (const g of this.ghosts.values()) {
+      this.scene.remove(g.root, g.line);
+      g.label.element.remove();
+    }
+    this.ghosts.clear();
+  }
+
+  /** Deliveries on their way: a faint marker where the unit will stand, a dashed road from the depot, and its arrival time. */
+  private syncGhosts(): void {
+    const w = this.world;
+    const live = new Set<number>();
+    for (const g of w.incoming) {
+      live.add(g.uid);
+      let o = this.ghosts.get(g.uid);
+      if (o && o.eta !== g.eta) {
+        this.scene.remove(o.root, o.line);
+        o.label.element.remove();
+        this.ghosts.delete(g.uid);
+        o = undefined;
+      }
+      if (!o) {
+        const t = w.terrain;
+        const y = t.groundAt(g.x, g.y);
+        const root = new THREE.Group();
+        const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: MARKERS.site, depthTest: false, transparent: true, opacity: 0.45, sizeAttenuation: false }));
+        marker.scale.setScalar(0.022);
+        marker.renderOrder = 6;
+        root.add(marker);
+        const el = document.createElement('div');
+        el.className = 'site-label ghost';
+        el.textContent = `${CATALOG[g.type].name} arrives ${hhmm(g.eta)}`;
+        const label = new CSS2DObject(el);
+        label.center.set(0.5, -0.4);
+        label.position.y = 30;
+        root.add(label);
+        root.position.set(g.x, y + 15, -g.y);
+        const pts = [new THREE.Vector3(g.depot.x, t.groundAt(g.depot.x, g.depot.y) + 15, -g.depot.y), new THREE.Vector3(g.x, y + 15, -g.y)];
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color: 0x7fc1ff, dashSize: 300, gapSize: 200, transparent: true, opacity: 0.5, depthTest: false }));
+        line.computeLineDistances();
+        line.renderOrder = 5;
+        this.scene.add(root, line);
+        o = { root, line, label, eta: g.eta };
+        this.ghosts.set(g.uid, o);
+      }
+      o.label.visible = this.showLabels;
+    }
+    for (const [uid, o] of this.ghosts) {
+      if (live.has(uid)) continue;
+      this.scene.remove(o.root, o.line);
+      o.label.element.remove();
+      this.ghosts.delete(uid);
+    }
+  }
+
   private clearBases(): void {
     for (const b of this.baseObjs) {
       this.scene.remove(b.root);
@@ -597,7 +823,7 @@ export class View3D {
    */
   private buildBases(): void {
     const w = this.world;
-    const shown = w.theatre.filter((b) => b.known && b.kind !== 'rear');
+    const shown = w.theatre.filter((b) => b.known && !b.lost && b.kind !== 'rear');
     this.clearBases();
     for (const b of shown) {
       const root = new THREE.Group();
@@ -623,7 +849,11 @@ export class View3D {
         root.add(o);
         return o;
       };
-      const unit = (name: string, x: number, z: number, yaw = 0): THREE.Object3D => at(new THREE.Mesh(groundGeometry(name), paint), x, z, yaw);
+      const unit = (name: string, x: number, z: number, yaw = 0): THREE.Object3D => {
+        const m = new THREE.Mesh(groundGeometry(name), paint);
+        m.scale.setScalar(SHOW_SCALE.ground);
+        return at(m, x, z, yaw);
+      };
       const box = (sx: number, sy: number, sz: number, c: number, x: number, z: number, yaw = 0): THREE.Object3D => {
         const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz).translate(0, sy / 2, 0), plain(c));
         return at(mesh, x, z, yaw);
@@ -636,6 +866,7 @@ export class View3D {
         const g = new THREE.Group();
         g.add(m);
         m.position.y = kind === 'helo' ? 0.2 : 1.6;
+        g.scale.setScalar(SHOW_SCALE.ground);
         at(g, x, z, yaw);
       };
       // Bases out at sea are ships: an assault ship for the helicopters, launch ships for the drones.
@@ -863,17 +1094,26 @@ export class View3D {
           break;
         }
       }
+      // Weapons, radars and vehicles are drawn larger than life (SHOW_SCALE), about their own spot.
+      let body: THREE.Group | undefined;
+      if (s.kind !== 'asset') {
+        body = new THREE.Group();
+        body.add(...root.children);
+        body.scale.setScalar(SHOW_SCALE.ground);
+        root.add(body);
+      } else if (s.role === 'assault') for (const c of root.getObjectByName('laager')?.children ?? []) c.scale.multiplyScalar(2.5);
       const icon = new THREE.Sprite(new THREE.SpriteMaterial({ map: MARKERS.site, depthTest: false, transparent: true, sizeAttenuation: false }));
       icon.scale.setScalar(s.defended ? 0.018 : 0.011);
-      icon.position.y = s.pos.z - ground + 10;
+      const top = s.kind === 'asset' ? s.pos.z - ground + 10 : (s.pos.z - ground) * SHOW_SCALE.ground + 30;
+      icon.position.y = top;
       icon.renderOrder = 5;
       root.add(icon);
       const label = this.siteLabel(s.name, s.kind === 'asset' ? undefined : s);
-      label.position.y = s.pos.z - ground + 10;
+      label.position.y = top;
       if (s.kind === 'launcher') label.visible = false;
       root.add(label);
       this.scene.add(root);
-      this.siteObjs.push({ site: s, root, mats, label, dead: false });
+      this.siteObjs.push({ site: s, root, body, mats, label, dead: false });
     }
   }
 
@@ -938,10 +1178,13 @@ export class View3D {
     const root = new THREE.Group();
     const body = airModel(modelKind(e), e.munition);
     root.add(body);
+    // Only our own aircraft and missiles carry a symbol on the entity itself; everything else is marked where
+    // its radar track is (see syncTracks), so the picture never gives away more than the sensors know.
     const tex = e.side === 'red' ? MARKERS.red : e.side === 'blue' ? MARKERS.blue : MARKERS.neutral;
     const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, sizeAttenuation: false }));
     marker.scale.setScalar(e.munition ? 0.012 : 0.018);
     marker.renderOrder = 6;
+    marker.visible = e.side === 'blue';
     root.add(marker);
     const trail = e.kind === 'tbm' || e.kind === 'arm' ? makeTrail(e.kind === 'tbm' ? 0xffa060 : 0xff7040, 240, 0.8) : null;
     if (trail) this.scene.add(trail.line);
@@ -986,7 +1229,7 @@ export class View3D {
     if (Math.hypot(ea.dest.x - ea.pos.x, ea.dest.y - ea.pos.y) > 1) o.body.lookAt(this.tmp.set(ea.dest.x, g + 2, -ea.dest.y));
     // Like our own units, it grows a little with distance so it can be found from the overview.
     const d = this.camera.position.distanceTo(o.root.position);
-    o.body.scale.setScalar(clamp((d * 0.021) / 150, 1, 8));
+    o.body.scale.setScalar(SHOW_SCALE.ground * sizeK(d));
   }
 
   /** The assault column faces along the road, even halted or forming up; in position it is the laager instead. */
@@ -1018,11 +1261,13 @@ export class View3D {
       const o = this.entityObj(e);
       const visible = this.isVisible(e);
       o.root.visible = visible;
+      o.marker.visible = e.side === 'blue' || this.showTruth;
       toThree(e.pos, o.root.position);
       // Grow with distance so aircraft span about 1.2 degrees and munitions 0.8 on screen, never smaller than real.
       const d = camPos.distanceTo(o.root.position);
       const len = MODEL_LEN[modelKind(e)] ?? (e.munition ? 6 : 16);
-      o.body.scale.setScalar(clamp((d * (e.munition ? 0.014 : 0.021)) / len, 1, 800));
+      const ground = !e.airborne;
+      o.body.scale.setScalar((ground ? SHOW_SCALE.ground : e.munition ? SHOW_SCALE.munition : SHOW_SCALE.air) * sizeK(d) * (len < 3 ? 1.5 : 1));
       if (e.kind === 'helo') this.flyHelo(e, o, ev.simDt);
       else if (e.kind === 'column') this.driveColumn(e as Column, o);
       else if (e.speed > 1) {
@@ -1068,7 +1313,7 @@ export class View3D {
       }
       toThree(m.pos, o.body.position);
       const d = camPos.distanceTo(o.body.position);
-      o.body.scale.setScalar(clamp((d * 0.012) / 4, 1, 500));
+      o.body.scale.setScalar(SHOW_SCALE.munition * sizeK(d));
       this.tmp.set(m.pos.x + m.vel.x, m.pos.z + m.vel.z, -(m.pos.y + m.vel.y));
       o.body.lookAt(this.tmp);
       setTrail(o.trail, m.trail, m.pos);
@@ -1113,11 +1358,22 @@ export class View3D {
         const obj = new CSS2DObject(el);
         obj.center.set(-0.1, 0.5);
         this.scene.add(obj);
-        l = { obj, el, last: '' };
+        const sym = new THREE.Sprite(new THREE.SpriteMaterial({ map: TRACK_MARKERS[tr.ident], depthTest: false, transparent: true, sizeAttenuation: false }));
+        sym.scale.setScalar(0.016);
+        sym.renderOrder = 6;
+        this.scene.add(sym);
+        l = { obj, el, last: '', sym, ident: tr.ident };
         this.trackLabels.set(tr.id, l);
       }
       const p = tr.predict(w.t);
       toThree(p, l.obj.position);
+      l.sym.position.copy(l.obj.position);
+      if (l.ident !== tr.ident) {
+        l.ident = tr.ident;
+        l.sym.material.map = TRACK_MARKERS[tr.ident];
+      }
+      // A track the sensors have lost for a while fades out rather than sitting there looking firm.
+      l.sym.material.opacity = clamp(1 - (w.t - tr.t - 4) / 10, 0.3, 1);
       const text = `${tr.label} ${tr.ident} ${tr.cls}`;
       const key = `${text}|${this.selected === tr.id}`;
       if (key !== l.last) {
@@ -1141,6 +1397,8 @@ export class View3D {
     for (const [id, l] of this.trackLabels) {
       if (seen.has(id)) continue;
       this.scene.remove(l.obj);
+      this.scene.remove(l.sym);
+      l.sym.material.dispose();
       l.el.remove();
       this.trackLabels.delete(id);
     }
@@ -1159,7 +1417,13 @@ export class View3D {
     this.syncArmour();
     for (const b of this.baseObjs) {
       b.label.visible = this.showLabels;
-      if ((b.base.lost || (b.site && !b.site.alive)) && !b.dead) {
+      // Overrun (its town retaken) or written off: it is gone from the map, not left crossed out.
+      if (b.base.lost) {
+        b.root.visible = false;
+        b.label.visible = false;
+        continue;
+      }
+      if (b.site && !b.site.alive && !b.dead) {
         b.dead = true;
         for (const m of b.mats) m.color.multiplyScalar(0.25);
         b.label.element.classList.add('dead');
@@ -1169,12 +1433,13 @@ export class View3D {
       // Mobile units move their site: keep the model on it.
       const p = s.site.pos;
       if (p.x !== s.root.position.x || -p.y !== s.root.position.z) s.root.position.set(p.x, this.world.terrain.groundAt(p.x, p.y), -p.y);
+      if (s.body) s.body.scale.setScalar(SHOW_SCALE.ground * sizeK(this.camera.position.distanceTo(s.root.position)));
       if (!s.site.alive && !s.dead) {
         s.dead = true;
         for (const m of s.mats) m.color.multiplyScalar(0.25);
         s.label.element.classList.add('dead');
       }
-      s.label.visible = this.showLabels && s.site.kind !== 'launcher';
+      s.label.visible = this.showLabels && s.site.kind !== 'launcher' && !(this.world.ground && s.site.role === 'assault');
       if (s.site.role === 'assault') {
         const laager = s.root.getObjectByName('laager');
         const col = this.world.column;
@@ -1206,7 +1471,29 @@ export class View3D {
 
   /** What the player can see of an entity: own side, recent detections, or everything with "show undetected". */
   isVisible(e: Entity): boolean {
-    return (e.airborne || e.kind === 'convoy' || e.kind === 'column') && (this.showTruth || e.side === 'blue' || this.world.t - e.lastDetected < 12);
+    if (!(e.airborne || e.kind === 'convoy' || e.kind === 'column')) return false;
+    if (this.showTruth || e.side === 'blue' || e.kind === 'column' || e.kind === 'convoy') return true;
+    return this.solidTrack(e) !== null;
+  }
+
+  /** A firm, identified track on this entity: then (and only then) its model is drawn. An unknown or pending
+   *  track stays a symbol, so the model never tells the player what the sensors have not worked out. */
+  private solidTrack(e: Entity): Track | null {
+    const w = this.world;
+    if (w.t - e.lastDetected > 6) return null;
+    let best: Track | null = null;
+    let bd = Infinity;
+    for (const tr of w.tracker.tracks) {
+      if (!tr.confirmed || tr.dropped || w.t - tr.t > 4 || tr.sigma > 400) continue;
+      if (tr.ident === 'PEND' || tr.ident === 'UNK') continue;
+      const p = tr.predict(w.t);
+      const d = Math.hypot(p.x - e.pos.x, p.y - e.pos.y, p.z - e.pos.z);
+      if (d < Math.max(500, 3 * tr.sigma) && d < bd) {
+        bd = d;
+        best = tr;
+      }
+    }
+    return best;
   }
 
   /** Clear trees and houses around every site whenever the set of sites changes, so nothing is buried in a forest. */
@@ -1215,7 +1502,7 @@ export class View3D {
     const key = this.world.sites.map((s) => `${Math.round(s.pos.x)},${Math.round(s.pos.y)}`).join(';') + `|${bases.length}`;
     if (key === this.clearedKey) return;
     this.clearedKey = key;
-    for (const s of this.world.sites) this.scenery.clearAround(s.pos.x, s.pos.y, s.radius + (s.kind === 'asset' ? 250 : 60));
+    for (const s of this.world.sites) this.scenery.clearAround(s.pos.x, s.pos.y, s.radius + (s.kind === 'asset' ? 250 : 150));
     // Enemy installations stand in the open too (the air base clears its whole runway).
     for (const b of bases) this.scenery.clearAround(b.x, b.y, b.kind === 'airfield' ? 1300 : 220);
   }
@@ -1232,6 +1519,8 @@ export class View3D {
     this.syncEntities(ev);
     this.syncMissiles();
     this.syncTrackLabels();
+    this.syncGhosts();
+    this.syncGround();
     this.rig.following = this.follow && this.selected !== null;
     this.rig.update(realDt);
     this.controls.update();
@@ -1247,6 +1536,14 @@ export class View3D {
     this.scenery.update(realDt);
     updateHaze(this.scene, this.camera.position.y, this.weather.haze);
     this.camera.updateMatrixWorld();
+    const look = this.tmp.copy(this.controls.target).sub(this.camera.position);
+    const brg = ((Math.atan2(look.x, -look.z) * 180) / Math.PI + 360) % 360;
+    this.compassTape.style.transform = `translateX(${90 - (brg + 180) * 2}px)`;
+    const shown = Math.round(brg) % 360;
+    if (shown !== this.lastBrg) {
+      this.lastBrg = shown;
+      this.compassBrg.textContent = `${String(shown).padStart(3, '0')}°`;
+    }
     this.sound.update(this.world, ev, this.camera, visible, realDt);
     this.composer.render();
     this.labels.render(this.scene, this.camera);

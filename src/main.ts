@@ -13,6 +13,11 @@ import { Lesson, Tutorial, setupFrontLesson } from './ui/tutorial';
 import { WEATHER, WeatherId } from './campaign/weather';
 import { LastStand } from './campaign/laststand';
 import { StandUi } from './ui/laststand-ui';
+import { armoury } from './ui/armoury';
+import type { War } from './campaign/war';
+import { TEMPO } from './sim/tempo';
+import { hhmm } from './campaign/clock';
+import { SECTOR_NAMES } from './campaign/raidgen';
 
 const params = new URLSearchParams(location.search);
 const seed = Number(params.get('seed')) || MAP_SEED;
@@ -41,12 +46,15 @@ let running = false;
 let tutorial: Tutorial | null = null;
 /** The Last Stand run and its panel, while one is on. */
 let stand: LastStand | null = null;
+/** The campaign's living war, while one is on. */
+let war: War | null = null;
 let standUi: StandUi | null = null;
 const view = new View3D(document.getElementById('view')!, world);
+const tempo = new Tempo();
 gfx.mount();
 view.planClock = () => (document.body.dataset.mode === 'plan' ? cui.campaign?.clock : undefined);
 const ppi = new Ppi(document.getElementById('ppi') as HTMLCanvasElement, world);
-const ctl: GameControl = { speed: Number(params.get('speed')) || 1, paused: false, skipQuiet: params.get('skipquiet') !== '0' };
+const ctl: GameControl = { speed: Number(params.get('speed')) || 1, paused: false, skipQuiet: params.get('skipquiet') !== '0', autoPause: params.get('autopause') !== '0' };
 const hud = new Hud(world, view, ppi, ctl);
 
 function show(w: World): void {
@@ -68,6 +76,7 @@ const cui = new CampaignUi({
     w.scenario.doneMsg = 'All reported packages are in and the airspace is clear. End the raid when you are ready.';
     hud.campaign = { day: c.s.day, days: CAMPAIGN_DAYS, objectives: c.s.objectives ?? [], clock0: c.clock, onEndDay: () => {
         running = false;
+        world.abandonRaid();
         cui.endDay(world);
       } };
     show(w);
@@ -78,9 +87,48 @@ const cui = new CampaignUi({
     document.body.dataset.mode = 'battle';
     view.setView('defended');
   },
+  startWar(wr: War, c: Campaign) {
+    endTraining();
+    endStand();
+    war = wr;
+    hud.campaign = {
+      get day() {
+        return c.s.day;
+      },
+      days: CAMPAIGN_DAYS,
+      objectives: [],
+      onEndDay: () => cui.toggleOrders(),
+      clock0: wr.w.clockStart,
+      war: true,
+      warn: () => {
+        const wn = c.s.warn;
+        return wn && wn.at > wr.clock - 30 ? `next enemy operation expected ~${hhmm(wn.at)} from the ${SECTOR_NAMES[wn.sector]}` : 'no enemy operation reported';
+      },
+    };
+    show(wr.w);
+    hud.setWorld(wr.w);
+    wr.onEvent = (msg) => {
+      if (!ctl.autoPause || !running || ctl.paused) return;
+      ctl.paused = true;
+      wr.w.log(`Paused: ${msg}`, 'alert');
+    };
+    wr.onWorld = (w) => {
+      show(w);
+      hud.setWorld(w);
+    };
+    tempo.max = TEMPO.warMax;
+    running = true;
+    document.body.dataset.mode = 'battle';
+    view.setView('defended');
+  },
+  setPlanning(on: boolean) {
+    ctl.paused = on;
+    document.body.classList.toggle('planning', on);
+  },
   toMenu() {
     endTraining();
     endStand();
+    endWar();
     running = false;
     hud.campaign = null;
     show(backdrop());
@@ -94,6 +142,7 @@ const cui = new CampaignUi({
 function startSandbox(type?: MapType): void {
   endTraining();
   endStand();
+  endWar();
   hud.campaign = null;
   terrain = sandboxTerrain(type);
   const wx = params.get('weather');
@@ -110,6 +159,7 @@ function startSandbox(type?: MapType): void {
 function startTraining(lesson: Lesson = 'basics'): void {
   endTraining();
   endStand();
+  endWar();
   hud.campaign = null;
   const c = Campaign.create(424242, 'normal', 'coastal');
   c.buy('EWR');
@@ -139,6 +189,7 @@ function startTraining(lesson: Lesson = 'basics'): void {
 function startLastStand(type?: MapType): void {
   endTraining();
   endStand();
+  endWar();
   hud.campaign = null;
   const st = new LastStand(params.has('seed') ? seed : Math.floor(Math.random() * 1e6) + 1, type);
   stand = st;
@@ -159,6 +210,12 @@ function startLastStand(type?: MapType): void {
       cui.showMenu();
     },
   });
+}
+
+function endWar(): void {
+  war = null;
+  tempo.max = TEMPO.max;
+  document.body.classList.remove('planning');
 }
 
 function endStand(): void {
@@ -196,10 +253,23 @@ else if (mode === 'campaign') {
   get stand() {
     return stand;
   },
+  get war() {
+    return war;
+  },
 };
 
-const tempo = new Tempo();
-const MAX_STEPS_PER_FRAME = 64;
+// The armoury pauses a running battle while it is open.
+document.getElementById('armoury-btn')!.addEventListener('click', () => {
+  const was = ctl.paused;
+  if (running) ctl.paused = true;
+  armoury.open(undefined, () => (ctl.paused = was));
+});
+
+const MAX_STEPS_PER_FRAME = 300;
+/** Real milliseconds a frame may spend stepping the simulation before it gives up on the backlog. */
+const STEP_BUDGET_MS = 14;
+/** Sim seconds per real second while the war jumps through quiet time. */
+const SKIP_PER_S = 3600;
 let acc = 0;
 let last = performance.now();
 let nextDraw = 0;
@@ -225,15 +295,29 @@ function frame(now: number): void {
     ctl.tempo = lv;
     ctl.fastForward = lv > ctl.speed;
     acc += real * Math.max(ctl.speed, lv);
+    // Living war: quiet time with nothing on its way is jumped through at about an hour a second, up to the next event.
+    const skip = war && lv >= TEMPO.warMax ? war.skippable() : 0;
+    if (skip > 30) {
+      war!.jump(Math.min(skip, real * SKIP_PER_S));
+      ctl.tempo = SKIP_PER_S;
+      acc = 0;
+    }
     let n = 0;
+    const t0 = performance.now();
     while (acc >= DT && n < MAX_STEPS_PER_FRAME) {
       world.step(DT);
       acc -= DT;
       n++;
+      if (war && n % 30 === 0) war.update();
+      if (performance.now() - t0 > STEP_BUDGET_MS) break;
     }
     // If the sim cannot keep up with the requested compression, drop the backlog rather than spiral.
-    if (n === MAX_STEPS_PER_FRAME) acc = 0;
+    if (acc >= DT) acc = 0;
   } else acc = 0;
+  if (war && running) {
+    war.update();
+    cui.autosave();
+  }
   view.render();
   ppi.draw();
   if (running) hud.update();

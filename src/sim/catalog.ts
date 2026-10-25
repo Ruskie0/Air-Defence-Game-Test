@@ -41,6 +41,9 @@ export interface DeployedUnit {
   arrives?: number;
   /** Health of the main site (radar, gun, emitter) carried over from an earlier raid (100 when absent). */
   hp?: number;
+  /** Emission control preset of its radar, and whether the crew had it silent. */
+  emcon?: 'on' | 'near' | 'engaged';
+  silent?: boolean;
   /** Exposure carried over from the last battle (the enemy still half remembers where it was firing from). */
   heat?: number;
 }

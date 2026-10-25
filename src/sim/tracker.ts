@@ -263,7 +263,11 @@ export class Tracker {
     const alt = tr.pos.z;
     const agl = alt - w.terrain.groundAt(tr.pos.x, tr.pos.y);
     let cls: TrackClass;
+    // Abnormal kinematics: something already clearly faster than any aircraft (about Mach 1.3) and closing on us
+    // is a missile, whatever else is still unknown about it. No airliner or fighter in cruise flies like that.
+    const abnormal = tr.hits >= 3 && tr.iffM5 === 0 && lo > 450 && inbound(tr, 90000);
     if (tr.jam) cls = 'JAM';
+    else if (abnormal && !(tr.hits >= 6 && (lo > 1300 || (alt > 22000 && lo > 600)))) cls = 'MSL';
     else if (tr.hits < 4) cls = 'UNK';
     else if (tr.hits >= 6 && w.t - tr.born > 2.5 && (lo > 1300 || (alt > 22000 && lo > 600))) cls = 'TBM';
     else if (tr.hits >= 6 && w.t - tr.born > 2.5 && lo > 520) cls = 'MSL';

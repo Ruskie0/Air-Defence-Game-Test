@@ -31,9 +31,12 @@ export class EnemyArmour {
   state: 'massing' | 'moving' | 'assaulting' | 'over' = 'massing';
   outcome: ArmourOutcome | null = null;
   private assaultAt = 0;
+  /** Sim time it began massing. */
+  private readonly t0: number;
 
-  constructor(target: string, from: { x: number; y: number }, to: { x: number; y: number }, takeHp = ARMOUR.takeHp) {
+  constructor(target: string, from: { x: number; y: number }, to: { x: number; y: number }, takeHp = ARMOUR.takeHp, t0 = 0) {
     this.target = target;
+    this.t0 = t0;
     this.takeHp = takeHp;
     const d = Math.hypot(from.x - to.x, from.y - to.y) || 1;
     const m = Math.min(ARMOUR.startM, d * 0.9);
@@ -60,7 +63,7 @@ export class EnemyArmour {
   step(w: World, dt: number): void {
     if (this.state === 'over') return;
     if (this.state === 'massing') {
-      if (w.t < ARMOUR.setOffS) return;
+      if (w.t < this.t0 + ARMOUR.setOffS) return;
       this.state = 'moving';
       w.log(`Enemy armour is moving up the road on ${this.target}, ${(this.distM / 1000).toFixed(0)} km out. Keep the town standing: if the raids knock it below ${this.takeHp}% while they assault it, it falls.`, 'alert');
     }

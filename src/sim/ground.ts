@@ -1,6 +1,6 @@
 import { V3, v3 } from './math';
 import type { Site } from './sites';
-import type { World } from './world';
+import type { Fielded, World } from './world';
 
 /**
  * The ground war: battalions of both sides moving along the road that runs from our airbase through the towns
@@ -21,8 +21,8 @@ export const GROUND = {
   /** A town falls after being held this long uncontested (s). */
   captureS: 1200,
   /** Air damage to our battalions with air defence cover, and without it. */
-  coveredAir: 0.4,
-  openAir: 1.6,
+  coveredAir: 0.5,
+  openAir: 2.2,
   /** Strength lost per second in contact against a full-strength enemy battalion (percent). An even fight breaks one side in about 45 minutes. */
   fire: 100 / 1800,
   /** Damage taken is cut to this share for a battalion holding a town of its own side, holding in the open, or pulling back. */
@@ -473,7 +473,12 @@ export class Ground {
 
   /** Whether one of our air defence units in action covers this battalion. */
   covered(w: World, b: Battalion): boolean {
-    return w.fielded.some((f) => {
+    return !!this.coverBy(w, b);
+  }
+
+  /** The air defence unit in action that covers this battalion, if any: light AD within 6 km, an MR or LR battery set up within 12 km. */
+  coverBy(w: World, b: Battalion): Fielded | undefined {
+    return w.fielded.find((f) => {
       const t = f.unit.type;
       const r = t === 'MR' || t === 'LR' ? 12000 : t === 'SH' || t === 'GUN' || t === 'CIWS' || t === 'LASER' ? 6000 : 0;
       if (!r || !f.sites[0]?.alive || (f.move && f.move.phase !== 'move') || (f.move && (t === 'MR' || t === 'LR'))) return false;

@@ -648,10 +648,12 @@ export class View3D {
       const a = g.at(b.s + 50 * b.dir);
       o.root.rotation.y = Math.atan2(a.x - b.pos.x, a.y - b.pos.y) + Math.PI;
       const tag = b.foe ? ' ⚔' : b.broken ? ' (broken)' : '';
-      const txt = `${b.name} · ${Math.round(b.strength)}%${tag}`;
+      const cover = b.side === 'blue' ? (g.covered(this.world, b) ? ' · COVERED' : ' · EXPOSED') : '';
+      const txt = `${b.name} · ${Math.round(b.strength)}%${tag}${cover}`;
       if (txt !== o.last) {
         o.el.textContent = txt;
         o.el.classList.toggle('fighting', !!b.foe);
+        o.el.classList.toggle('exposed', cover === ' · EXPOSED');
         o.last = txt;
       }
       o.label.visible = this.showLabels;

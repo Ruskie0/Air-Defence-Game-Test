@@ -643,7 +643,9 @@ export class CampaignUi {
     };
     const ours = g.bats.filter((b) => b.side === 'blue' && b.alive).map((b) => {
       const btn = (o: Order, label: string, tip: string): string => `<button data-cui="bnorder" data-id="${b.id}" data-o="${o}" class="${b.order === o ? 'on' : ''}" title="${tip}">${label}</button>`;
-      return `<div class="sys"><div class="sys-h"><b>${esc(b.name)}</b> ${state(b)} <span class="dim">${esc(where(b))}</span></div>
+      const by = g.coverBy(war.w, b);
+      const cover = by ? `<span class="st ok" title="Air defence cover from ${esc(war.w.unitName(by))}: enemy helicopters and drones do half the damage">COVERED</span>` : `<span class="st dead" title="No air defence in action within range (light AD 6 km, a set-up MR or LR battery 12 km): enemy helicopters and drones do more than double the damage. Attach an escort below.">EXPOSED</span>`;
+      return `<div class="sys"><div class="sys-h"><b>${esc(b.name)}</b> ${state(b)} ${cover} <span class="dim">${esc(where(b))}</span></div>
         <div class="sys-b">${bar(b.strength, b.strength >= 50 ? '#78ffaa' : b.strength >= GROUND.breakAt ? '#ffd84d' : '#ff4d4d')} ${Math.round(b.strength)}% ${b.kind === 'armour' ? 'armour' : b.kind === 'arty' ? 'rocket artillery: shells enemy battalions within 60 km every 20 minutes' : 'mech infantry'}
         ${escorts(b.id)}
         ${btn('advance', 'Advance', 'Drive up the road to the objective and fight anything in the way')} ${btn('hold', 'Hold', 'Stop where it is and dig in (a quarter less loss in a fight)')} ${btn('withdraw', 'Withdraw', 'Pull back to the nearest town of ours behind it, or the depot, and refit')}</div></div>`;

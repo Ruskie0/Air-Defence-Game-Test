@@ -1200,7 +1200,7 @@ export class War {
     const raids = w.scenario.raids.filter((r) => !r.launched).map((r) => r.t - w.t);
     // A ground fight or an advance under way: short jumps, so orders, CAS and the guns keep up with it.
     const g = w.ground;
-    const busy = g && g.bats.some((b) => b.alive && (b.foe || (b.side === 'blue' && b.order === 'advance' && b.kind !== 'arty')));
+    const busy = g && (g.objective?.kind === 'push' || g.capture.some((x) => x > 0 && x < 1) || g.bats.some((b) => b.alive && (b.foe || (b.side === 'blue' && b.order === 'advance' && b.kind !== 'arty'))));
     return Math.max(0, Math.min(...due, ...raids, busy ? 300 : Infinity) - 1);
   }
 

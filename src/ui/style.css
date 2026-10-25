@@ -1031,3 +1031,7 @@ table.grp tr { cursor: pointer; }
   height: 100%;
   background: #ffd84d;
 }
+.site-label.bn.exposed {
+  border-color: #ff9f43;
+  color: #ffcf9a;
+}

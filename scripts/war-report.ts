@@ -93,6 +93,8 @@ function shop(): string[] {
         out.push(`PUSH for ${f.towns[push.town].name} after ${((war.clock - push.at) / 60).toFixed(1)} h forming up`);
         push = { town: push.town, at: war.clock, start: man.reduce((t, b) => t + b.strength, 0), gather: false };
         airHurt.clear();
+        war.setObjective('push', push.town);
+        for (const b of man) if (!b.broken) war.orderBattalion(b.id, 'advance');
       }
     } else if (push) {
       war.setObjective('push', push.town);

@@ -610,14 +610,15 @@ export function buildScenery(parent: THREE.Scene, t: Terrain, seed: number, res 
 
   const normals = waterNormals();
   normals.repeat.set(2700, 2700);
+  normals.anisotropy = 8;
+  // Rough enough that the sun's glint spreads over a patch of sea instead of sparkling pixel by pixel (the
+  // sparkles flickered, worse under bloom), and opaque so the shoreline does not shimmer against the land.
   const seaMat = new THREE.MeshStandardMaterial({
     color: 0x1b4253,
-    roughness: 0.12,
-    metalness: 0.1,
-    transparent: true,
-    opacity: 0.9,
+    roughness: 0.34,
+    metalness: 0.05,
     normalMap: normals,
-    normalScale: new THREE.Vector2(0.35, 0.35),
+    normalScale: new THREE.Vector2(0.18, 0.18),
   });
   // Sea level is 0 everywhere: the terrain hides the plane on land, so lakes and any coast get water.
   const sea = new THREE.Mesh(new THREE.PlaneGeometry(size * 12, size * 12), seaMat);

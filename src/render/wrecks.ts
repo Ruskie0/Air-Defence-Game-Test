@@ -94,7 +94,8 @@ export class Wrecks {
   update(dt: number, terrain: Terrain, cam: THREE.Vector3): void {
     for (let i = this.list.length - 1; i >= 0; i--) {
       const w = this.list[i];
-      const s = w.landed < 0 ? clamp(cam.distanceTo(w.pos) / 1400, 1, 80) : clamp(cam.distanceTo(w.pos) / 1400, 1, 20);
+      // Same exaggerated size as live models (View3D SHOW_SCALE and sizeK), so a kill does not shrink.
+      const s = 4 * clamp(Math.pow(cam.distanceTo(w.pos) / 6000, 0.45), 1, 7);
       w.obj.scale.set(s, w.landed < 0 ? s : s * 0.55, s);
       if (dt <= 0) continue;
       w.age += dt;

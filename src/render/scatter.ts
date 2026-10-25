@@ -28,6 +28,10 @@ export interface Scatter {
 
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
 
+/** Trees and buildings are drawn larger than life (like the units) so forests and towns read from the air. */
+const TREE_SCALE = 2.2;
+const BUILD_SCALE = 2;
+
 /** Tags a part: `main` 1 takes the instance colour, 0 the second colour; shade(y) is baked per vertex. */
 function part(g: THREE.BufferGeometry, main: number, shade: (x: number, y: number, z: number) => number): THREE.BufferGeometry {
   const geo = g.index ? g.toNonIndexed() : g;
@@ -127,8 +131,8 @@ export function buildTrees(scene: THREE.Object3D, lc: Land): Scatter[] {
   const t = lc.t;
   const rnd = prng(lc.seed ^ 0x7ee5);
   const mat = partMaterial({ roughness: 0.95, metalness: 0 });
-  const MAX_LEAF = 24000;
-  const MAX_PINE = 20000;
+  const MAX_LEAF = 52000;
+  const MAX_PINE = 44000;
   const leaf = scatterSet(scene, broadleafGeometry(), mat, MAX_LEAF);
   const pine = scatterSet(scene, coniferGeometry(), mat, MAX_PINE);
   const m = new THREE.Matrix4();
@@ -137,7 +141,7 @@ export function buildTrees(scene: THREE.Object3D, lc: Land): Scatter[] {
   const p = new THREE.Vector3();
   const col = new THREE.Color();
   const trunk = new THREE.Color();
-  const R = 26000;
+  const R = 40000;
   const plant = (x: number, y: number, f: number, conifer: boolean): void => {
     const set = conifer ? pine : leaf;
     const n = set.mesh.count;
@@ -146,7 +150,7 @@ export function buildTrees(scene: THREE.Object3D, lc: Land): Scatter[] {
     const open = f < 0.05 ? 1 : 0;
     const hgt = conifer ? 14 + rnd() * 12 : 11 + rnd() * 9 - open * 3;
     const wid = conifer ? hgt * (0.42 + rnd() * 0.12) : hgt * (0.8 + rnd() * 0.3 + open * 0.2);
-    sc.set(wid, hgt, wid * (0.85 + rnd() * 0.3));
+    sc.set(wid, hgt, wid * (0.85 + rnd() * 0.3)).multiplyScalar(TREE_SCALE);
     q.setFromAxisAngle(Y_AXIS, rnd() * 6.28);
     p.set(x, t.groundAt(x, y) - 0.5, -y);
     m.compose(p, q, sc);
@@ -164,7 +168,7 @@ export function buildTrees(scene: THREE.Object3D, lc: Land): Scatter[] {
     set.xy[n * 2 + 1] = y;
     set.mesh.count = n + 1;
   };
-  for (let i = 0; i < 200000 && (leaf.mesh.count < MAX_LEAF || pine.mesh.count < MAX_PINE); i++) {
+  for (let i = 0; i < 500000 && (leaf.mesh.count < MAX_LEAF || pine.mesh.count < MAX_PINE); i++) {
     // Density falls off with range from the base, where the camera spends most of its time.
     const a = rnd() * Math.PI * 2;
     const r = (0.04 + 0.96 * rnd()) * R;
@@ -186,7 +190,7 @@ export function buildTrees(scene: THREE.Object3D, lc: Land): Scatter[] {
     const k = 5 + Math.floor(rnd() * 9);
     for (let j = 0; j < k; j++) {
       const ga = rnd() * Math.PI * 2;
-      const gr = Math.sqrt(rnd()) * 32;
+      const gr = Math.sqrt(rnd()) * 32 * TREE_SCALE;
       const gx = x + Math.cos(ga) * gr;
       const gy = y + Math.sin(ga) * gr;
       plant(gx, gy, f, rnd() < 0.8 ? conifer : !conifer);
@@ -271,7 +275,7 @@ export function buildBuildings(scene: THREE.Object3D, lc: Land): Scatter[] {
   ): void => {
     const n = set.mesh.count;
     if (n >= max) return;
-    sc.set(w, hgt, d);
+    sc.set(w, hgt, d).multiplyScalar(BUILD_SCALE);
     q.setFromAxisAngle(Y_AXIS, yaw);
     // Sink the footing into the slope so no building floats on its downhill side.
     p.set(x, t.groundAt(x, y) - 0.15 * Math.max(w, d) * lc.slopeAt(x, y) - 0.3, -y);
@@ -286,15 +290,16 @@ export function buildBuildings(scene: THREE.Object3D, lc: Land): Scatter[] {
   };
 
   // Towns: houses in plots along a street grid (rows 70 m apart, cross streets every 150 m), blocks in the centre.
-  const ROW = 70;
-  const CROSS = 150;
-  const PLOT = 19;
+  // Everything in town is drawn at BUILD_SCALE: streets, plots and buildings alike, so it reads from altitude.
+  const ROW = 70 * BUILD_SCALE;
+  const CROSS = 150 * BUILD_SCALE;
+  const PLOT = 19 * BUILD_SCALE;
   for (const tw of lc.towns) {
     const g = rnd() * Math.PI;
     const cg = Math.cos(g);
     const sg = Math.sin(g);
     const taken = new Set<string>();
-    const count = Math.round((tw.r * tw.r) / 1600);
+    const count = Math.round((tw.r * tw.r) / (1600 * BUILD_SCALE));
     for (let k = 0; k < count; k++) {
       const a = rnd() * Math.PI * 2;
       const r = Math.abs(rnd() + rnd() - 1) * tw.r * 1.1;
@@ -309,11 +314,11 @@ export function buildBuildings(scene: THREE.Object3D, lc: Land): Scatter[] {
       u = (slot + 0.5) * plot;
       // Leave the cross streets clear.
       const cu = ((u % CROSS) + CROSS) % CROSS;
-      if (cu < 12 || cu > CROSS - 12) continue;
+      if (cu < 12 * BUILD_SCALE || cu > CROSS - 12 * BUILD_SCALE) continue;
       const key = `${row},${side},${big ? 'b' : 'h'}${slot}`;
       if (taken.has(key)) continue;
       taken.add(key);
-      const setback = big ? 24 : 12 + rnd() * 3;
+      const setback = (big ? 24 : 12 + rnd() * 3) * BUILD_SCALE;
       const v = row * ROW + side * setback;
       const x = tw.x + u * cg - v * sg;
       const y = tw.y + u * sg + v * cg;

@@ -141,6 +141,14 @@ function isKill(fate: unknown): boolean {
 }
 
 /** The air model for an entity: recon jets and SEAD decoys look different from the rest of their kind. */
+/**
+ * How much bigger than life things are drawn, so units read at a glance without zooming right in. Models then
+ * grow a little more with distance (sizeK), but much slower than perspective shrinks them: far things do get
+ * smaller on screen, unlike the old constant screen size.
+ */
+export const SHOW_SCALE = { air: 4, munition: 4.5, ground: 3.5 };
+export const sizeK = (d: number): number => clamp(Math.pow(d / 6000, 0.45), 1, 7);
+
 const modelKind = (e: Entity): string => (e.recon ? 'recon' : e.kind === 'cruise' && e.decoy ? 'decoy' : e.kind);
 
 export class View3D {
@@ -190,7 +198,7 @@ export class View3D {
   private readonly entityObjs = new Map<number, EntityObj>();
   private readonly missileObjs = new Map<number, { body: THREE.Object3D; trail: TrailObj }>();
   private readonly trackLabels = new Map<number, { obj: CSS2DObject; el: HTMLDivElement; last: string }>();
-  private readonly siteObjs: { site: Site; root: THREE.Group; mats: { color: THREE.Color }[]; label: CSS2DObject; dead: boolean }[] = [];
+  private readonly siteObjs: { site: Site; root: THREE.Group; body?: THREE.Group; mats: { color: THREE.Color }[]; label: CSS2DObject; dead: boolean }[] = [];
   /** Enemy installations our intel has located: placeholder models and labels, rebuilt when that set changes. */
   private readonly baseObjs: { base: EnemyBase; site: Site | null; root: THREE.Group; label: CSS2DObject; mats: { color: THREE.Color }[]; dead: boolean }[] = [];
   private readonly antennas: { radar: Radar; obj: THREE.Object3D }[] = [];
@@ -200,6 +208,8 @@ export class View3D {
   private readonly siteRing: THREE.Sprite;
   private readonly tmp = new THREE.Vector3();
   private sceneryRes = 1;
+  /** Compass rose over the view; it turns with the camera so north is always marked. */
+  private readonly compass: HTMLDivElement;
   /** The enemy's armoured column attacking one of our towns (World.enemyArmour), built when first seen. */
   private armourObj: { root: THREE.Group; body: THREE.Mesh; label: CSS2DObject } | null = null;
   /** The campaign clock (minutes) while planning, when the shown world has no battle clock of its own. */
@@ -217,6 +227,20 @@ export class View3D {
     this.labels = new CSS2DRenderer();
     this.labels.domElement.className = 'labels3d';
     container.appendChild(this.labels.domElement);
+    this.compass = document.createElement('div');
+    this.compass.className = 'compass';
+    this.compass.title = 'Compass: click to face north';
+    this.compass.innerHTML = `<svg viewBox="-32 -32 64 64" width="64" height="64" aria-hidden="true"><circle r="29" class="ring"/>${[0, 90, 180, 270].map((a) => `<line y1="-29" y2="-23" transform="rotate(${a})"/>`).join('')}${[45, 135, 225, 315].map((a) => `<line y1="-29" y2="-26" transform="rotate(${a})"/>`).join('')}<path d="M0,-21 L5,0 L0,-3 L-5,0Z" class="n"/><path d="M0,21 L5,0 L0,3 L-5,0Z" class="s"/><text y="-12" class="nl">N</text></svg>`;
+    this.compass.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      // Swing round to look north, keeping range and height.
+      const t = this.controls.target;
+      const off = this.tmp.copy(this.camera.position).sub(t);
+      const flat = Math.hypot(off.x, off.z);
+      this.follow = false;
+      this.rig.flyTo(new THREE.Vector3(t.x, this.camera.position.y, t.z + flat), t.clone(), 0.8);
+    });
+    container.appendChild(this.compass);
 
     this.camera = new THREE.PerspectiveCamera(50, 1, 5, 900000);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -514,7 +538,7 @@ export class View3D {
    */
   private buildBases(): void {
     const w = this.world;
-    const shown = w.theatre.filter((b) => b.known && b.kind !== 'rear');
+    const shown = w.theatre.filter((b) => b.known && !b.lost && b.kind !== 'rear');
     this.clearBases();
     for (const b of shown) {
       const root = new THREE.Group();
@@ -540,7 +564,11 @@ export class View3D {
         root.add(o);
         return o;
       };
-      const unit = (name: string, x: number, z: number, yaw = 0): THREE.Object3D => at(new THREE.Mesh(groundGeometry(name), paint), x, z, yaw);
+      const unit = (name: string, x: number, z: number, yaw = 0): THREE.Object3D => {
+        const m = new THREE.Mesh(groundGeometry(name), paint);
+        m.scale.setScalar(SHOW_SCALE.ground);
+        return at(m, x, z, yaw);
+      };
       const box = (sx: number, sy: number, sz: number, c: number, x: number, z: number, yaw = 0): THREE.Object3D => {
         const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz).translate(0, sy / 2, 0), plain(c));
         return at(mesh, x, z, yaw);
@@ -553,6 +581,7 @@ export class View3D {
         const g = new THREE.Group();
         g.add(m);
         m.position.y = kind === 'helo' ? 0.2 : 1.6;
+        g.scale.setScalar(SHOW_SCALE.ground);
         at(g, x, z, yaw);
       };
       // Bases out at sea are ships: an assault ship for the helicopters, launch ships for the drones.
@@ -780,17 +809,26 @@ export class View3D {
           break;
         }
       }
+      // Weapons, radars and vehicles are drawn larger than life (SHOW_SCALE), about their own spot.
+      let body: THREE.Group | undefined;
+      if (s.kind !== 'asset') {
+        body = new THREE.Group();
+        body.add(...root.children);
+        body.scale.setScalar(SHOW_SCALE.ground);
+        root.add(body);
+      } else if (s.role === 'assault') for (const c of root.getObjectByName('laager')?.children ?? []) c.scale.multiplyScalar(2.5);
       const icon = new THREE.Sprite(new THREE.SpriteMaterial({ map: MARKERS.site, depthTest: false, transparent: true, sizeAttenuation: false }));
       icon.scale.setScalar(s.defended ? 0.018 : 0.011);
-      icon.position.y = s.pos.z - ground + 10;
+      const top = s.kind === 'asset' ? s.pos.z - ground + 10 : (s.pos.z - ground) * SHOW_SCALE.ground + 30;
+      icon.position.y = top;
       icon.renderOrder = 5;
       root.add(icon);
       const label = this.siteLabel(s.name, s.kind === 'asset' ? undefined : s);
-      label.position.y = s.pos.z - ground + 10;
+      label.position.y = top;
       if (s.kind === 'launcher') label.visible = false;
       root.add(label);
       this.scene.add(root);
-      this.siteObjs.push({ site: s, root, mats, label, dead: false });
+      this.siteObjs.push({ site: s, root, body, mats, label, dead: false });
     }
   }
 
@@ -903,7 +941,7 @@ export class View3D {
     if (Math.hypot(ea.dest.x - ea.pos.x, ea.dest.y - ea.pos.y) > 1) o.body.lookAt(this.tmp.set(ea.dest.x, g + 2, -ea.dest.y));
     // Like our own units, it grows a little with distance so it can be found from the overview.
     const d = this.camera.position.distanceTo(o.root.position);
-    o.body.scale.setScalar(clamp((d * 0.021) / 150, 1, 8));
+    o.body.scale.setScalar(SHOW_SCALE.ground * sizeK(d));
   }
 
   /** The assault column faces along the road, even halted or forming up; in position it is the laager instead. */
@@ -939,7 +977,8 @@ export class View3D {
       // Grow with distance so aircraft span about 1.2 degrees and munitions 0.8 on screen, never smaller than real.
       const d = camPos.distanceTo(o.root.position);
       const len = MODEL_LEN[modelKind(e)] ?? (e.munition ? 6 : 16);
-      o.body.scale.setScalar(clamp((d * (e.munition ? 0.014 : 0.021)) / len, 1, 800));
+      const ground = !e.airborne;
+      o.body.scale.setScalar((ground ? SHOW_SCALE.ground : e.munition ? SHOW_SCALE.munition : SHOW_SCALE.air) * sizeK(d) * (len < 3 ? 1.5 : 1));
       if (e.kind === 'helo') this.flyHelo(e, o, ev.simDt);
       else if (e.kind === 'column') this.driveColumn(e as Column, o);
       else if (e.speed > 1) {
@@ -985,7 +1024,7 @@ export class View3D {
       }
       toThree(m.pos, o.body.position);
       const d = camPos.distanceTo(o.body.position);
-      o.body.scale.setScalar(clamp((d * 0.012) / 4, 1, 500));
+      o.body.scale.setScalar(SHOW_SCALE.munition * sizeK(d));
       this.tmp.set(m.pos.x + m.vel.x, m.pos.z + m.vel.z, -(m.pos.y + m.vel.y));
       o.body.lookAt(this.tmp);
       setTrail(o.trail, m.trail, m.pos);
@@ -1065,7 +1104,13 @@ export class View3D {
     this.syncArmour();
     for (const b of this.baseObjs) {
       b.label.visible = this.showLabels;
-      if ((b.base.lost || (b.site && !b.site.alive)) && !b.dead) {
+      // Overrun (its town retaken) or written off: it is gone from the map, not left crossed out.
+      if (b.base.lost) {
+        b.root.visible = false;
+        b.label.visible = false;
+        continue;
+      }
+      if (b.site && !b.site.alive && !b.dead) {
         b.dead = true;
         for (const m of b.mats) m.color.multiplyScalar(0.25);
         b.label.element.classList.add('dead');
@@ -1075,6 +1120,7 @@ export class View3D {
       // Mobile units move their site: keep the model on it.
       const p = s.site.pos;
       if (p.x !== s.root.position.x || -p.y !== s.root.position.z) s.root.position.set(p.x, this.world.terrain.groundAt(p.x, p.y), -p.y);
+      if (s.body) s.body.scale.setScalar(SHOW_SCALE.ground * sizeK(this.camera.position.distanceTo(s.root.position)));
       if (!s.site.alive && !s.dead) {
         s.dead = true;
         for (const m of s.mats) m.color.multiplyScalar(0.25);
@@ -1121,7 +1167,7 @@ export class View3D {
     const key = this.world.sites.map((s) => `${Math.round(s.pos.x)},${Math.round(s.pos.y)}`).join(';') + `|${bases.length}`;
     if (key === this.clearedKey) return;
     this.clearedKey = key;
-    for (const s of this.world.sites) this.scenery.clearAround(s.pos.x, s.pos.y, s.radius + (s.kind === 'asset' ? 250 : 60));
+    for (const s of this.world.sites) this.scenery.clearAround(s.pos.x, s.pos.y, s.radius + (s.kind === 'asset' ? 250 : 150));
     // Enemy installations stand in the open too (the air base clears its whole runway).
     for (const b of bases) this.scenery.clearAround(b.x, b.y, b.kind === 'airfield' ? 1300 : 220);
   }
@@ -1153,6 +1199,8 @@ export class View3D {
     this.scenery.update(realDt);
     updateHaze(this.scene, this.camera.position.y, this.weather.haze);
     this.camera.updateMatrixWorld();
+    const look = this.tmp.copy(this.controls.target).sub(this.camera.position);
+    this.compass.style.setProperty('--hdg', `${-Math.atan2(look.x, -look.z)}rad`);
     this.sound.update(this.world, ev, this.camera, visible, realDt);
     this.composer.render();
     this.labels.render(this.scene, this.camera);

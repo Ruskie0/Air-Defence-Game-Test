@@ -505,10 +505,14 @@ export class Effects {
   /** Strong wind lifts dust off open ground around where the camera looks. */
   windDust(w: World, cx: number, cz: number, dt: number, k: number): void {
     if (dt <= 0) return;
-    const n = Math.round(dt * 10 * k + rnd());
+    const n = Math.round(dt * 14 * k + rnd());
     for (let i = 0; i < n; i++) {
-      const x = cx + sym(5000);
-      const z = cz + sym(5000);
+      // A disc round the view whose dust thins out towards its rim, so there is no edge to see.
+      const r = Math.sqrt(rnd()) * 7000;
+      const a = rnd() * Math.PI * 2;
+      const fade = 1 - (r / 7000) ** 2;
+      const x = cx + Math.cos(a) * r;
+      const z = cz + Math.sin(a) * r;
       const g = w.terrain.groundAt(x, -z);
       if (g <= 0.5 || w.terrain.waterAt(x, -z)) continue;
       this.puff({
@@ -521,7 +525,7 @@ export class Effects {
         life: 12 + rnd() * 10,
         size0: 30,
         size1: 220 + rnd() * 160,
-        alpha: 0.16 * k,
+        alpha: 0.16 * k * fade,
         c0: [0.6, 0.53, 0.4],
         c1: [0.68, 0.64, 0.56],
         windK: 1,

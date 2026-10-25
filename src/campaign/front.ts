@@ -18,7 +18,15 @@ export interface Town {
   hp: number;
   /** The last town is the enemy's forward airfield: taking it wins the campaign. */
   airfield?: boolean;
+  /** Clock minute we took it (towns held 24 h are dug in). The starting town is dug in from the start. */
+  heldSince?: number;
 }
+
+/** A town held this long (min) is dug in: armour needs to knock it below DUG_IN_HP to take it, not ARMOUR.takeHp. */
+export const DUG_IN_MIN = 24 * 60;
+export const DUG_IN_HP = 40;
+/** Whether a town of ours is dug in at clock minute `now`. */
+export const dugIn = (t: Town, now: number): boolean => t.ours && t.heldSince !== undefined && now - t.heldSince >= DUG_IN_MIN;
 
 export interface FrontState {
   towns: Town[];
@@ -32,6 +40,8 @@ const TOWN_INCOME = [15, 20, 25, 30];
 /** Ground units may stand within this of the airbase, and within TOWN_ZONE_M of a town we hold. */
 export const AIRBASE_ZONE_M = 35000;
 export const TOWN_ZONE_M = 25000;
+/** A devastated town (raids knocked it to 0%) stays ours but only has this much room to deploy in (m). */
+export const DEVASTATED_ZONE_M = 10000;
 export const OFFENSIVE_COST_M = 30;
 /** The assault force takes the town if it ends the day with at least this much health left. */
 export const ASSAULT_HOLD = 40;
@@ -72,6 +82,7 @@ export function makeTowns(t: Terrain, seed: number): Town[] {
   });
   if (towns.length) {
     towns[0].ours = true;
+    towns[0].heldSince = -DUG_IN_MIN;
     const last = towns[towns.length - 1];
     if (towns.length >= 3) {
       last.airfield = true;
@@ -101,7 +112,7 @@ export const townsHeld = (f: FrontState | undefined): number => f?.towns.filter(
 /** Where ground units may stand: round the airbase and round every town we hold. */
 export function deployZones(f: FrontState | undefined): DeployZone[] {
   const zones: DeployZone[] = [{ x: 0, y: 0, r: AIRBASE_ZONE_M }];
-  for (const tn of f?.towns ?? []) if (tn.ours) zones.push({ x: tn.x, y: tn.y, r: TOWN_ZONE_M });
+  for (const tn of f?.towns ?? []) if (tn.ours) zones.push({ x: tn.x, y: tn.y, r: tn.hp > 0 ? TOWN_ZONE_M : DEVASTATED_ZONE_M });
   return zones;
 }
 
@@ -121,7 +132,7 @@ export function assaultSpot(t: Terrain, f: FrontState, i: number): { x: number; 
 
 /** Daily income from the towns we hold: a battered town pays less. */
 export function townIncome(f: FrontState | undefined): number {
-  return Math.round((f?.towns ?? []).filter((x) => x.ours).reduce((s, x) => s + x.incomeM * (0.5 + x.hp / 200), 0));
+  return Math.round((f?.towns ?? []).filter((x) => x.ours && x.hp > 0).reduce((s, x) => s + x.incomeM * (0.5 + x.hp / 200), 0));
 }
 
 /** Where the assault column sets off: back down the road from its start line, towards the town before it. */

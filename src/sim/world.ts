@@ -73,14 +73,18 @@ export interface WorldOptions {
   weather?: WeatherId;
   /** Level of the enemy's counter-battery fire (campaign day); 0 turns it off. 4 when omitted. */
   counterBattery?: number;
+  /** The enemy's AWACS was shot down recently and has not been replaced: none flies in this battle. */
+  awacsDenied?: boolean;
   /** Campaign clock (minutes since midnight before day 1, as in campaign/clock.ts) at t = 0; absent outside the campaign. */
   clockStart?: number;
+  /** The kind of operation this battle is ('probe', 'strike', 'night'); only combined strikes are timed on target. */
+  pulse?: string;
   /** Campaign front line: the towns we hold (defended), and today's assault force if an offensive is on. */
   towns?: { name: string; x: number; y: number; hp: number }[];
   /** Today's assault force: its start line, the town it goes for, and where its column sets off from (it starts on its start line when omitted). */
   assault?: { x: number; y: number; target: string; from?: { x: number; y: number } };
   /** The enemy's ground offensive on one of our towns, if one is on: the town, and the enemy town it comes from. */
-  enemyAssault?: { target: string; from: { x: number; y: number }; to: { x: number; y: number } };
+  enemyAssault?: { target: string; from: { x: number; y: number }; to: { x: number; y: number }; takeHp?: number };
   /** Where ground units may stand (the sandbox's 60 km circle when omitted). */
   zones?: DeployZone[];
   /** The enemy's installations, which every enemy weapon launches from (a fresh default theatre when omitted). */
@@ -102,6 +106,18 @@ export interface Fielded {
 }
 
 /** Terrain seed of the one map every mode is fought over. */
+/** What dealt damage to our sites, for the debrief. */
+export type HurtBy = 'drones' | 'cruise' | 'tbm' | 'arm' | 'helo' | 'strike' | 'artillery' | 'other';
+
+const HURT_PREFIX: [RegExp, HurtBy][] = [
+  [/^(DRN|LM)-/, 'drones'], [/^(CM|ALCM)-/, 'cruise'], [/^TBM-/, 'tbm'], [/^ARM-/, 'arm'],
+  [/^(HEL|ATGM)-/, 'helo'], [/^(GB|STK)-/, 'strike'], [/^artillery/, 'artillery'],
+];
+
+export function hurtBy(by: string): HurtBy {
+  return HURT_PREFIX.find(([re]) => re.test(by))?.[1] ?? 'other';
+}
+
 /** Campaign reward for each enemy recon drone shot down with photos aboard ($M). */
 export const RECON_BOUNTY_M = 6;
 
@@ -113,6 +129,7 @@ export class World {
   readonly seed: number;
   /** Campaign clock at t = 0 (minutes); the time of day is clockStart + t / 60. Undefined outside the campaign. */
   readonly clockStart?: number;
+  readonly pulse?: string;
   readonly rng: Rng;
   readonly terrain: Terrain;
   /** Enemy installations: where every enemy weapon starts. Shared with the campaign, which keeps the stocks. */
@@ -180,6 +197,8 @@ export class World {
   };
   /** Our positions enemy recon drones got home with, by unit id. */
   readonly reconSeen = new Map<number, Sighting>();
+  /** Damage our sites took this battle, by what dealt it ("what hurt you"). */
+  readonly hurt = new Map<HurtBy, { dmg: number; hits: number; sites: Set<string> }>();
   /** Enemy recon drones shot down with photos aboard: the intel they carried never got home. */
   reconDenied = 0;
   /** Every site's health when the battle started (for the day's objectives). */
@@ -215,6 +234,7 @@ export class World {
     const o: WorldOptions = typeof opts === 'number' ? { seed: opts } : opts;
     this.seed = o.seed ?? MAP_SEED;
     this.clockStart = o.clockStart;
+    this.pulse = o.pulse;
     this.rng = new Rng(this.seed);
     this.mods = modifiers(o.upgrades);
     this.weatherId = o.weather ?? 'clear';
@@ -260,10 +280,13 @@ export class World {
       this.startHp.set(s.name, s.hp);
     }
     if (this.column) this.spawn(this.column);
-    if (o.enemyAssault) this.enemyArmour = new EnemyArmour(o.enemyAssault.target, o.enemyAssault.from, o.enemyAssault.to);
+    if (o.enemyAssault) this.enemyArmour = new EnemyArmour(o.enemyAssault.target, o.enemyAssault.from, o.enemyAssault.to, o.enemyAssault.takeHp);
+    this.redSupport.denied = !!o.awacsDenied;
     this.redSupport.launch(this, o.counterBattery ?? 0);
     sweepCap(this);
     this.scenario = new Scenario(o.raids, this.terrain.layout.rot);
+    this.redSupport.coordinate(this);
+    if (this.redSupport.down) this.log('Enemy AWACS down: raids uncoordinated. Its packages will arrive staggered and its fighters fly blind', 'info');
     if (o.civil ?? true) this.scenario.start(this);
   }
 
@@ -396,7 +419,9 @@ export class World {
         const base = v3(0, 0, this.terrain.groundAt(0, 0));
         const station = v3(u.x, u.y, 8000);
         f.fighters = [];
-        for (let i = 0; i < u.aircraft; i++) {
+        // An airbase knocked out cannot launch or recover fighters.
+        const flying = this.site('Airbase')?.alive === false ? 0 : u.aircraft;
+        for (let i = 0; i < flying; i++) {
           const n = this.fighters.length + 1;
           const start = v3(u.x + (i === 0 ? -12000 : 12000), u.y - 5000 + i * 3000, 8000);
           const fi = new Fighter(`Viper ${n}`, `F${n}`, base, station, start);
@@ -571,6 +596,17 @@ export class World {
     let t = this.pkgTally.get(pkg);
     if (!t) this.pkgTally.set(pkg, (t = { spawned: 0, down: 0, hits: 0, missed: 0, home: 0 }));
     return t;
+  }
+
+  /** A site of ours took `dmg` points of damage from `by` (an entity name, or 'artillery'). */
+  noteHurt(by: string, dmg: number, site: string): void {
+    if (dmg <= 0) return;
+    const k = hurtBy(by);
+    const h = this.hurt.get(k) ?? { dmg: 0, hits: 0, sites: new Set<string>() };
+    h.dmg += dmg;
+    h.hits++;
+    h.sites.add(site);
+    this.hurt.set(k, h);
   }
 
   /** Record how an entity died or left, once. */
@@ -775,6 +811,26 @@ export class World {
     r.emcon = r.emcon === 'on' ? 'near' : r.emcon === 'near' ? 'engaged' : 'on';
     if (r.emcon === 'on' && !r.armSilent) r.emitting = true;
     this.log(`${r.name} emission control: ${EMCON_TEXT[r.emcon]}`, 'info');
+  }
+
+  /** Set a radar's emission preset directly, so a whole selection can share one. */
+  setEmcon(code: string, preset: Radar['emcon']): void {
+    const r = this.radarByCode(code);
+    if (!r || r.emcon === preset) return;
+    r.emcon = preset;
+    if (preset === 'on' && !r.armSilent) r.emitting = true;
+    this.log(`${r.name} emission control: ${EMCON_TEXT[preset]}`, 'info');
+  }
+
+  /** Hold fire on a SAM battery or gun, or release it, to a given state. */
+  setHold(code: string, hold: boolean): void {
+    const fu = this.unit(code);
+    if (fu) {
+      if (fu.hold !== hold) fu.setHold(this, hold);
+      return;
+    }
+    const c = this.ciws.find((x) => x.code === code);
+    if (c && c.auto === hold) this.toggleHold(code);
   }
 
   /** Radars on an automatic emission preset: radiate only while a hostile is close enough to matter. */

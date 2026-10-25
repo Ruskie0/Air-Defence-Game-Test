@@ -1,7 +1,7 @@
 // Headless campaign run with a simple automatic commander, for balancing the economy and the raids.
 // Usage: npm run campaign -- [seed] [--verbose]
 import { Tempo } from '../src/sim/tempo';
-import { Campaign, Difficulty } from '../src/campaign/campaign';
+import { Campaign, Difficulty, setDayThreat } from '../src/campaign/campaign';
 import { PKG, SECTOR_NAMES, sectorOf } from '../src/campaign/raidgen';
 import { CATALOG, UnitType } from '../src/sim/catalog';
 import { DeepStrikeId, deepStrike, deepStrikeError, strikeTargets } from '../src/campaign/deepstrike';
@@ -10,101 +10,17 @@ import { assaultSpot } from '../src/campaign/front';
 import { nearestFree } from '../src/sim/deploy';
 import { hhmm } from '../src/campaign/clock';
 import { scrambleQra } from '../src/sim/support';
+import { commanderShop } from './commander';
+import { timeToGo } from '../src/sim/tewa';
 
 const seed = Number(process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 1);
 const verbose = process.argv.includes('--verbose');
 const logDay = Number(process.argv.find((a) => a.startsWith('--log-day='))?.split('=')[1] ?? 0);
+const thr = process.argv.find((a) => a.startsWith("--threat="));
+if (thr) setDayThreat(Number(thr.split("=")[1]));
 const diff = (process.argv.find((a) => a.startsWith('--diff='))?.split('=')[1] ?? 'normal') as Difficulty;
 const c = Campaign.create(seed, diff);
-
-/** What the automatic commander buys, in order, while it can afford it. */
-function shop(): string[] {
-  const bought: string[] = [];
-  const count = (t: UnitType): number => c.units.filter((u) => u.type === t).length;
-  for (const a of ['Airbase', 'CRC', 'Power plant']) if (c.repair(a)) bought.push(`repair ${a}`);
-  for (const u of c.units) if (c.reload(u)) bought.push(`reload ${CATALOG[u.type].name}`);
-  // Push up the road when there is money to spare, and send a covering group forward with the assault force.
-  const f = c.s.front;
-  if (f && c.s.day >= 2 && count('MR') >= 2 && c.s.money > 140 && !process.argv.includes('--no-offensive') && c.launchOffensive()) {
-    bought.push(`offensive on ${f.towns[f.offensive!].name}`);
-    const at = assaultSpot(c.terrain, f, f.offensive!);
-    const prev = f.offensive! > 0 ? f.towns[f.offensive! - 1] : { x: 0, y: 0 };
-    const d = Math.hypot(at.x - prev.x, at.y - prev.y);
-    const back = (m: number): { x: number; y: number } => ({ x: at.x + ((prev.x - at.x) * m) / d, y: at.y + ((prev.y - at.y) * m) / d });
-    const escort: [UnitType, number, number][] = [['MR', 1, 6000], ['SH', 0, 1500], ['GUN', 0, 1000], ['CIWS', 1, 800]];
-    for (const [t, which, m] of escort) {
-      const us = c.units.filter((u) => u.type === t);
-      const u = us[Math.min(which, us.length - 1)];
-      if (!u) continue;
-      const p = back(m);
-      const q = nearestFree(c.terrain, t, p.x, p.y, c.units, u.uid, 600, c.zones);
-      if (!c.place(c.terrain, u, q.x, q.y)) bought.push(`${t} forward`);
-    }
-  }
-  const wants: [UnitType, () => boolean][] = [
-    ['LR', () => count('LR') < 1],
-    ['EWR', () => count('EWR') < 1],
-    ['GNSS', () => count('GNSS') < 1],
-    ['CAP', () => count('CAP') < 1 && c.s.day >= 3],
-    ['MR', () => count('MR') < 2],
-    ['SH', () => count('SH') < 3],
-    ['CIWS', () => count('CIWS') < 3],
-    ['GUN', () => count('GUN') < 2],
-    ['DECOY', () => count('DECOY') < 1 && c.s.day >= 4],
-    ['JAM', () => count('JAM') < 1 && c.s.day >= 5],
-    ['MR', () => count('MR') < 3],
-    ['SH', () => count('SH') < 4],
-    ['CIWS', () => count('CIWS') < 4],
-    ['LR', () => count('LR') < 2 && c.s.day >= 6],
-  ];
-  for (const [t, want] of wants) {
-    // Save up for the LR battery once it is unlocked rather than spending on extras.
-    if (t !== 'LR' && c.unlocked('LR') && count('LR') < 1 && c.s.money - CATALOG[t].costM < CATALOG.LR.costM) continue;
-    if (want() && c.buy(t)) bought.push(CATALOG[t].name);
-  }
-  for (const u of c.units) {
-    if ((u.type === 'MR' || u.type === 'LR') && u.spares < 4 && c.buySpares(u)) bought.push(`spares ${u.type}`);
-    if (c.replaceAircraft(u)) bought.push('replacement fighter');
-  }
-  const saving = c.unlocked('LR') && count('LR') < 1;
-  // One deep strike a day at the biggest threat in today's plan, when there is money to spare.
-  if (!saving && c.s.money > 70 && !process.argv.includes('--no-strikes')) {
-    // Value of a located installation: what it holds, weighted by how much each kind hurts.
-    const weight: Record<string, number> = { tbm: 3, cruise: 1, strike: 2, sead: 2, recon: 1, helo: 1.5, drone: 0.3 };
-    const value = (id: DeepStrikeId): number => {
-      const b = c.theatre.find((x) => x.id === id)!;
-      return Object.entries(b.stock).reduce((t, [a, n]) => t + Math.floor(n ?? 0) * (weight[a] ?? 1), 0);
-    };
-    const best = strikeTargets(c).map((b) => b.id).filter((id) => !deepStrikeError(c, id) && value(id) > 6).sort((a, b) => value(b) - value(a))[0];
-    if (best) {
-      const r = deepStrike(c, best);
-      if (r) bought.push(`deep strike ${best} (${c.s.deepStrike?.ok ? 'hit' : 'failed'})`);
-    }
-  }
-  // Break up an enemy attack on our front town while its armour masses, when there is money for it.
-  if (c.s.money > 80 && !c.armourStrikeError()) bought.push(`armour strike (${c.strikeArmour()?.includes('broken up') ? 'hit' : 'missed'})`);
-  // Keep a SHORAD unit and a gun with the front town, unless they go forward with an offensive below.
-  const ft = c.s.front?.towns.filter((t) => t.ours).pop();
-  if (ft) {
-    const toward = Math.hypot(ft.x, ft.y);
-    for (const [t, which, m] of [['SH', 1, 1500], ['GUN', 0, 900]] as [UnitType, number, number][]) {
-      const u = c.units.filter((x) => x.type === t)[which];
-      if (!u || Math.hypot(u.x - ft.x, u.y - ft.y) < 4000) continue;
-      const q = nearestFree(c.terrain, t, ft.x - (ft.x * m) / toward, ft.y - (ft.y * m) / toward, c.units, u.uid, 600, c.zones);
-      if (!c.place(c.terrain, u, q.x, q.y)) bought.push(`${t} to ${ft.name}`);
-    }
-  }
-  // Batteries the enemy has a fix on move a couple of kilometres before the next raid.
-  for (const u of c.units) {
-    if (!c.spotted(u) || u.type === 'CAP' || u.type === 'LR') continue;
-    const a = ((u.uid * 137 + c.s.history.length * 61) % 360) * (Math.PI / 180);
-    const q = nearestFree(c.terrain, u.type, u.x + Math.cos(a) * 2000, u.y + Math.sin(a) * 2000, c.units, u.uid, 600, c.zones);
-    if (!c.place(c.terrain, u, q.x, q.y)) bought.push(`${u.type} relocated`);
-  }
-  for (const id of ['pdfuze', 'hardened'] as const) if (!saving && c.s.money > 150 && c.upgrade(id)) bought.push(id);
-  for (const u of c.units) if (!saving && (u.type === 'LR' || u.type === 'MR') && c.s.money > 250 && c.addLauncher(u)) bought.push(`launcher ${u.type}`);
-  return bought;
-}
+const shop = (): string[] => commanderShop(c);
 
 console.log(`Campaign seed ${seed}, ${diff}, enemy ${c.s.enemy.doctrine}`);
 const t0 = Date.now();
@@ -126,6 +42,9 @@ while (!c.s.over) {
   let escorted = process.argv.includes('--no-escort');
   const sweep = !process.argv.includes('--no-sweep');
   const hunt = !process.argv.includes('--no-hunt');
+  // Counterplay: the SAM radars radiate only while a hostile is within reach (EMCON preset 'near').
+  const emcon = process.argv.includes('--emcon');
+  if (emcon) for (const f of w.fielded) if (f.fu?.radar && f.fu.type !== 'SH') w.cycleEmcon(f.fu.radar.code);
   const sent = new Set<unknown>();
   while (!w.scenario.done && w.t < last + 3600) {
     w.step();
@@ -141,10 +60,12 @@ while (!c.s.over) {
         fg.sweep(w, a.base.id);
       }
     }
-    // One fighter goes after the enemy AWACS once it is up and the fighter is on CAP.
-    if (hunt && w.t % 5 < 1 / 60 && w.redSupport.awacsUp && !w.fighters.some((f) => f.state === 'hunt')) {
-      const fg = w.fighters.find((f) => f.state === 'station' && !f.huntError(w, 'awacs'));
-      if (fg) fg.hunt(w, 'awacs');
+    // Hunt the enemy AWACS with the pair only when our picture shows it unescorted and no raid is within about
+    // 5 minutes of the base: leaving the base without CAP is the price.
+    if (hunt && w.t % 5 < 1 / 60 && w.redSupport.escortSeen(w) === 'no escort' && !w.fighters.some((f) => f.state === 'hunt')) {
+      const near = w.tracker.tracks.some((tr) => tr.confirmed && !tr.dropped && tr.ident === 'HOS' && timeToGo(w, tr) < 300);
+      const ready = w.fighters.filter((f) => f.alive && (f.state === 'station' || f.state === 'intercept') && !f.huntError(w, 'awacs'));
+      if (!near) for (const fg of ready.slice(0, 2)) fg.hunt(w, 'awacs');
     }
     // Fighters escort the assault column while it is on the road.
     if (!escorted && w.column?.alive && w.t > 10) {
@@ -176,7 +97,7 @@ while (!c.s.over) {
   console.log(
     `\nDay ${day} ${hhmm(at)} ${slot?.type ?? ''}  budget left after shopping $${Math.round(spent)}M  bought: ${bought.join(', ') || 'nothing'}` +
       `\n  raid: ${plan}` +
-      `\n  enemy SAM: ${w.enemyAd.sites.map((a) => `${a.base.name}${a.site.alive ? '' : ' (destroyed)'}${a.base.known ? '' : ' (unknown)'}`).join(', ') || 'none'}; ${w.logEntries.filter((e) => e.msg.includes('by an enemy SAM')).length} fighters downed; AWACS ${w.deaths.some((e) => e.kind === 'awacs') ? 'shot down' : w.entities.some((e) => e.kind === 'awacs') ? 'flew' : 'none'}, tanker ${w.deaths.some((e) => e.kind === 'tanker') ? 'shot down' : w.entities.some((e) => e.kind === 'tanker') ? 'flew' : 'none'}` +
+      `\n  enemy SAM: ${w.enemyAd.sites.map((a) => `${a.base.name}${a.site.alive ? '' : ' (destroyed)'}${a.base.known ? '' : ' (unknown)'}`).join(', ') || 'none'}; ${w.logEntries.filter((e) => e.msg.includes('by an enemy SAM')).length} fighters downed; hunts ${w.logEntries.filter((e) => e.msg.includes('going deep after the enemy AWACS')).length}, escort ${w.redSupport.escort}; AWACS ${w.redSupport.awacsKilledAt !== null ? 'shot down' : w.entities.some((e) => e.kind === 'awacs') ? 'flew' : 'none'}, tanker ${w.deaths.some((e) => e.kind === 'tanker') ? 'shot down' : w.entities.some((e) => e.kind === 'tanker') ? 'flew' : 'none'}` +
       `\n  counter-battery: ${w.exposure.located.map((l) => `${l.unit}@${Math.round(l.t)}s${l.moved ? ' (moved)' : ''}`).join(', ') || 'none'}` +
       `\n  kills ${r.kills}, leakers ${r.leakers}, missiles ${r.missilesFired} ($${r.missileCostM}M), civil ${r.civilian}, fratricide ${r.fratricide}, ${Math.round(w.t / 60)} min (${Math.round(realS / 60)} real at auto tempo)` +
       `\n  damage: ${dmg}${r.losses.length ? `\n  lost: ${r.losses.join(', ')}` : ''}` +
@@ -187,6 +108,7 @@ while (!c.s.over) {
       `\n  bonus $${r.bonusM ?? 0}M${r.income ? `  income $${r.income}M` : ''}`,
   );
 }
-console.log(`\n${c.s.over.won ? 'WON' : 'LOST'} on day ${c.s.day} (${c.s.history.length} raids): ${c.s.over.reason}  score ${c.score()}  (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+console.log(`\n${c.s.over.won ? 'WON' : c.s.over.draw ? 'DRAW' : 'LOST'} on day ${c.s.day} (${c.s.history.length} raids): ${c.s.over.reason}  score ${c.score()}  (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
 console.log('Towns held:', c.s.front?.towns.filter((t) => t.ours).map((t) => t.name).join(', '));
 console.log('Force at the end:', c.units.map((u) => u.type).join(' '));
+console.log(`Save size: ${(c.save().length / 1024).toFixed(1)} KB`);

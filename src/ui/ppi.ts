@@ -1,6 +1,7 @@
 import { DEG } from '../sim/constants';
 import type { Ident } from '../sim/tracker';
 import type { World } from '../sim/world';
+import type { Site } from '../sim/sites';
 import { IDENT_COLOR } from './colors';
 
 const RANGES = [20, 50, 100, 200];
@@ -14,6 +15,15 @@ export class Ppi {
   rangeKm = 100;
   selected: number | null = null;
   onSelect: (id: number | null) => void = () => {};
+  /** Shift-click on one of our sites. */
+  onSelectSite: (site: Site, add: boolean) => void = () => {};
+  /** Drag a box: our sites inside it. */
+  onBoxSelect: (sites: Site[], add: boolean) => void = () => {};
+  /** Right click: the sim ground point, and whether Alt was held. */
+  onRightClick: ((x: number, y: number, alt: boolean) => void) | null = null;
+  /** Sites to ring as selected. */
+  selectedSites: Site[] = [];
+  private box: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private size = 300;
 
   constructor(canvas: HTMLCanvasElement, world: World) {
@@ -21,7 +31,8 @@ export class Ppi {
     this.g = canvas.getContext('2d')!;
     this.world = world;
     this.relief = this.buildRelief();
-    canvas.addEventListener('pointerdown', (e) => this.click(e));
+    canvas.addEventListener('pointerdown', (e) => this.down(e));
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
       this.cycleRange(e.deltaY > 0 ? 1 : -1);
@@ -77,10 +88,57 @@ export class Ppi {
     return [this.size / 2 + x * s, this.size / 2 - y * s];
   }
 
-  private click(e: PointerEvent): void {
+  /** Canvas pixels of a pointer event. */
+  private at(e: PointerEvent): [number, number] {
     const r = this.canvas.getBoundingClientRect();
-    const mx = ((e.clientX - r.left) / r.width) * this.size;
-    const my = ((e.clientY - r.top) / r.height) * this.size;
+    return [((e.clientX - r.left) / r.width) * this.size, ((e.clientY - r.top) / r.height) * this.size];
+  }
+
+  private down(e: PointerEvent): void {
+    const [x0, y0] = this.at(e);
+    if (e.button === 2) {
+      const s = (this.rangeKm * 1000) / (this.size / 2);
+      this.onRightClick?.((x0 - this.size / 2) * s, (this.size / 2 - y0) * s, e.altKey);
+      return;
+    }
+    if (e.button !== 0) return;
+    this.box = { x0, y0, x1: x0, y1: y0 };
+    const move = (ev: PointerEvent): void => {
+      [this.box!.x1, this.box!.y1] = this.at(ev);
+    };
+    const up = (ev: PointerEvent): void => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      const b = this.box!;
+      this.box = null;
+      if (Math.hypot(b.x1 - b.x0, b.y1 - b.y0) >= 6) {
+        const [ax, bx] = [Math.min(b.x0, b.x1), Math.max(b.x0, b.x1)];
+        const [ay, by] = [Math.min(b.y0, b.y1), Math.max(b.y0, b.y1)];
+        const sites = this.world.sites.filter((s) => {
+          const [x, y] = this.toScreen(s.pos.x, s.pos.y);
+          return s.alive && x >= ax && x <= bx && y >= ay && y <= by;
+        });
+        this.onBoxSelect(sites, ev.shiftKey);
+      } else this.click(ev, x0, y0);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }
+
+  private click(e: PointerEvent, mx: number, my: number): void {
+    if (e.shiftKey) {
+      let site: Site | null = null;
+      let sd = 10;
+      for (const s of this.world.sites) {
+        const [x, y] = this.toScreen(s.pos.x, s.pos.y);
+        const d = Math.hypot(x - mx, y - my);
+        if (s.alive && d < sd) {
+          sd = d;
+          site = s;
+        }
+      }
+      if (site) return this.onSelectSite(site, true);
+    }
     let best: number | null = null;
     let bd = 14;
     for (const tr of this.world.tracker.tracks) {
@@ -219,6 +277,19 @@ export class Ppi {
       }
     }
     g.lineWidth = 1;
+
+    // Selected sites and the selection box.
+    g.strokeStyle = '#7fd4ff';
+    for (const s of this.selectedSites) {
+      const [x, y] = this.toScreen(s.pos.x, s.pos.y);
+      g.strokeRect(x - 6, y - 6, 12, 12);
+    }
+    if (this.box) {
+      const b = this.box;
+      g.setLineDash([3, 3]);
+      g.strokeRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0);
+      g.setLineDash([]);
+    }
 
     // Friendly sites.
     for (const s of w.sites) {

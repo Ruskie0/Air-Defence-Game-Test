@@ -70,7 +70,7 @@ export const BASE_DEFS: Record<BaseKind, BaseDef> = {
   tbm: { name: 'Ballistic missile launch area', stock: { tbm: 8 }, daily: { tbm: 2 }, known: false },
   glcm: { name: 'Cruise missile battery', stock: { cruise: 24 }, daily: { cruise: 9 }, known: false },
   sam: { name: 'SAM site', stock: { sam: 6 }, daily: { sam: 2 }, known: true },
-  rear: { name: 'Rear air base (beyond the map)', stock: { bomber: 3, soj: 2, awacs: 1, tanker: 1 }, daily: { bomber: 0.4, soj: 0.3, awacs: 0.25, tanker: 0.25 }, known: true },
+  rear: { name: 'Rear air base (beyond the map)', stock: { bomber: 3, soj: 2, awacs: 1, tanker: 1 }, daily: { bomber: 0.4, soj: 0.3, awacs: 1, tanker: 0.25 }, known: true },
 };
 
 /** Stocks never grow past this multiple of the starting stock. */

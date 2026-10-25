@@ -14,22 +14,29 @@ import { isNight } from '../campaign/clock';
  */
 export const RED_SUPPORT = {
   /** Kill chance of our missiles on enemy aircraft while the AWACS is up. */
-  warnPk: 0.9,
+  warnPk: 0.85,
   /** Time on station of jammers and SEAD fighters while the tanker is up. */
   stationMult: 1.4,
   /** From which campaign day (or Last Stand wave) each flies. */
   awacsLevel: 4,
+  /** Hours from an AWACS kill until a replacement is on station. */
+  replaceH: 12,
+  /** Packages closer together than this (s) belong to one wave. */
+  waveGapS: 300,
   tankerLevel: 5,
   /** Racetrack distance from the map centre when there is no SAM umbrella to sit over (m). */
   orbitM: 100000,
   /** How far behind the SAM sites the racetrack sits (m), and its half length. */
-  behindM: 12000,
+  behindM: 30000,
   legM: 18000,
   /** It turns for home when one of our fighters closes inside this range, and runs this long before coming back. */
-  runM: 70000,
-  runS: 120,
+  runM: 50000,
+  runS: 60,
+  /** Spare fighters at the forward airfields from which the AWACS gets a pair, or a CAP of four, as escort. */
+  pairAt: 6,
+  capAt: 12,
   /** Chaff and its own self-protection: a missile that reaches it kills this often. */
-  cmPk: 0.75,
+  cmPk: 0.55,
 };
 
 /** A racetrack-flying support aircraft that comes on from the rear base and stays until shot down. */
@@ -65,7 +72,7 @@ abstract class Orbiter extends Air {
     }
     if (w.t < this.runUntil) {
       this.steer(this.entry.x, this.entry.y, dt);
-      this.cmdSpd = 230;
+      this.cmdSpd = 215;
       this.integrate(w, dt);
       return;
     }
@@ -97,6 +104,50 @@ export class Tanker extends Orbiter {
 export class RedSupport {
   private awacs: Awacs | null = null;
   private tanker: Tanker | null = null;
+  /** The level from which the enemy fights with an AWACS: below it, its raids are neither helped nor hurt. */
+  private level = 0;
+  /** No AWACS to put up in this battle: the last one was shot down and its replacement is not here yet. */
+  denied = false;
+  /** Battle time the AWACS was shot down, if it was. */
+  awacsKilledAt: number | null = null;
+
+  /**
+   * The enemy should have an AWACS up by now but has none (shot down, or not replaced yet): its raids are
+   * uncoordinated. Packages arrive staggered, strike jets fly their planned targets, fighter sweeps fly blind.
+   */
+  get down(): boolean {
+    return this.level >= RED_SUPPORT.awacsLevel && !this.awacsUp;
+  }
+
+  /**
+   * Time the day's raids: with the AWACS up each wave's packages arrive together (a time-on-target strike);
+   * with it down, the packages still to come drift apart. Called at battle start and when the AWACS falls.
+   */
+  coordinate(w: World): void {
+    if (this.level < RED_SUPPORT.awacsLevel) return;
+    const tot = w.pulse === undefined || w.pulse === 'strike';
+    const left = w.scenario.raids.filter((r) => !r.launched).sort((a, b) => a.t - b.t);
+    let wave: typeof left = [];
+    const waves: (typeof left)[] = [];
+    for (const r of left) {
+      if (wave.length && r.t - wave[wave.length - 1].t > RED_SUPPORT.waveGapS) {
+        waves.push(wave);
+        wave = [];
+      }
+      wave.push(r);
+    }
+    if (wave.length) waves.push(wave);
+    for (const wv of waves) {
+      const t0 = Math.max(w.t + 5, wv[0].t);
+      wv.forEach((r, i) => {
+        // A combined strike with the AWACS up is timed on target: the packages come in a minute or so apart
+        // rather than spread over the wave. Probes and night raids keep their own timing.
+        // Without it they keep their planned times: spreading them out only drew the raid out and wore the
+        // defence down, which made a kill a loss for us.
+        if (this.awacsUp && tot) r.t = t0 + i * w.rng.range(60, 90);
+      });
+    }
+  }
 
   get awacsUp(): boolean {
     return !!this.awacs?.alive;
@@ -122,13 +173,15 @@ export class RedSupport {
 
   /** Put up whatever the rear base has for this level that is not already flying. */
   launch(w: World, level: number): void {
+    this.level = Math.max(this.level, level);
     const rear = w.theatre.find((b) => b.kind === 'rear' && !b.lost);
     if (!rear) return;
     const center = orbitCenter(w, rear);
     const entry = v3(rear.x, rear.y);
-    if (level >= RED_SUPPORT.awacsLevel && !this.awacsUp && avail(rear, 'awacs') > 0) {
+    if (level >= RED_SUPPORT.awacsLevel && !this.awacsUp && !this.denied && avail(rear, 'awacs') > 0) {
       this.awacs = new Awacs(w.nextName('AEW'), entry, center);
       w.spawn(this.awacs);
+      this.escortAwacs(w, this.awacs);
       w.log('An enemy AWACS is coming on station far back: while it is up, its raids are warned of our shots', 'alert');
     }
     if (level >= RED_SUPPORT.tankerLevel && !this.tankerUp && avail(rear, 'tanker') > 0) {
@@ -138,9 +191,44 @@ export class RedSupport {
     }
   }
 
+  /** The AWACS's fighter escort: 'none', 'pair' or 'cap', by how many fighters the enemy has to spare. */
+  escort: 'none' | 'pair' | 'cap' = 'none';
+  private escorts: RedFighter[] = [];
+
+  /** Fighters to spare at the forward airfields (what is left after today's strike packages) go with the AWACS. */
+  private escortAwacs(w: World, a: Awacs): void {
+    if (!redFighterPk(w)) return;
+    const spare = w.theatre.filter((b) => b.kind === 'airfield' && !b.lost).reduce((n, b) => n + avail(b, 'strike'), 0);
+    const n = spare >= RED_SUPPORT.capAt ? 4 : spare >= RED_SUPPORT.pairAt ? 2 : 0;
+    this.escort = n === 4 ? 'cap' : n === 2 ? 'pair' : 'none';
+    for (let i = 0; i < n; i++) {
+      const p = add(a.pos, polar(i * 90, 2500));
+      p.z = a.pos.z - 1500;
+      const f = new RedFighter(w.nextName('FTR'), p, w.t, a, true);
+      this.escorts.push(f);
+      w.spawn(f);
+    }
+  }
+
+  /** How many of the AWACS's escorts are still with it. */
+  /** What our picture shows of the AWACS's escort, once our sensors have seen the AWACS: null before that. */
+  escortSeen(w: World): string | null {
+    if (!this.awacs || w.t - this.awacs.lastDetected > 60) return null;
+    const n = this.escortLeft;
+    return n === 0 ? 'no escort' : n <= 2 ? `escort: ${n === 1 ? 'one fighter' : 'a pair'}` : `escort: a CAP of ${n}`;
+  }
+
+  get escortLeft(): number {
+    return this.escorts.filter((f) => f.alive).length;
+  }
+
   /** An aircraft shot down: tell the player what it costs the enemy. Its stock is written off at settle. */
   lost(w: World, kind: string): void {
-    if (kind === 'awacs') w.log('Enemy AWACS shot down: its raids lose their early warning', 'engage');
+    if (kind === 'awacs') {
+      this.awacsKilledAt = w.t;
+      w.log(`Enemy AWACS DOWN: raids uncoordinated for ${RED_SUPPORT.replaceH} h, the rest of this raid and the next. Its packages will arrive staggered, its strike jets fly their planned targets and its fighters fly blind`, 'engage');
+      this.coordinate(w);
+    }
     if (kind === 'tanker') w.log('Enemy tanker shot down: its jammers and SEAD fighters will go home sooner', 'engage');
   }
 }
@@ -168,6 +256,11 @@ export const RED_FIGHTER = {
   escortM: 30000,
   /** Time out before it heads home (s). */
   enduranceS: 1500,
+  /** How far a sweep finds our fighters with no AWACS to vector it. */
+  blindM: 15000,
+  /** An AWACS escort meets our fighters this far out from the AWACS, and its missiles are better (a dedicated CAP). */
+  guardM: 60000,
+  guardPk: 0.5,
 };
 
 /** An enemy fighter: escorts a strike jet, or sweeps towards our fighters; fires on our fighters in reach. */
@@ -181,13 +274,18 @@ export class RedFighter extends Air {
   private nextLook = 0;
   private nextShot = 0;
   private egress = false;
+  private guess: V3 | null = null;
 
-  /** `ward`: the strike jet it escorts; none for a sweep. */
-  constructor(name: string, pos: V3, t0: number, ward: Air | null) {
+  /** Escorting the AWACS: it stays as long as the AWACS flies. */
+  private readonly guard: boolean;
+
+  /** `ward`: the strike jet (or AWACS) it escorts; none for a sweep. */
+  constructor(name: string, pos: V3, t0: number, ward: Air | null, guard = false) {
     super(name, pos, bearingDeg(pos, v3()), 250);
     this.home = clone(pos);
     this.ward = ward;
     this.t0 = t0;
+    this.guard = guard;
     this.rcs = 4;
     this.hitRadius = 8;
     this.cmdAlt = 8000;
@@ -203,7 +301,9 @@ export class RedFighter extends Air {
     for (const f of w.fighters) {
       if (!f.alive || !f.airborne) continue;
       const d = hdist(f.pos, this.pos);
-      if (this.ward && hdist(f.pos, ref) > RED_FIGHTER.escortM) continue;
+      if (this.ward && hdist(f.pos, ref) > (this.guard ? RED_FIGHTER.guardM : RED_FIGHTER.escortM)) continue;
+      // Without the AWACS a sweep only finds what its own radar sees.
+      if (!this.ward && w.redSupport.down && d > RED_FIGHTER.blindM) continue;
       if (d < bd) {
         bd = d;
         best = f;
@@ -213,7 +313,7 @@ export class RedFighter extends Air {
   }
 
   update(w: World, dt: number): void {
-    if (!this.egress && (this.aams === 0 || w.t - this.t0 > RED_FIGHTER.enduranceS || (this.ward && !this.ward.alive && w.t - this.t0 > 30))) this.egress = true;
+    if (!this.egress && (this.aams === 0 || (!this.guard && w.t - this.t0 > RED_FIGHTER.enduranceS) || (this.ward && !this.ward.alive && w.t - this.t0 > 30))) this.egress = true;
     if (this.egress) {
       this.steer(this.home.x, this.home.y, dt);
       this.cmdSpd = 260;
@@ -229,7 +329,7 @@ export class RedFighter extends Air {
       if (w.t >= this.nextShot && dist(this.pos, tgt.pos) < RED_FIGHTER.rangeM) {
         this.nextShot = w.t + 20;
         this.aams--;
-        w.spawn(new RedSam(w.nextName('AA'), clone(this.pos), tgt, w.t, redFighterPk(w) || RED_FIGHTER.pk * 0.5, 'an enemy fighter'));
+        w.spawn(new RedSam(w.nextName('AA'), clone(this.pos), tgt, w.t, (this.guard ? RED_FIGHTER.guardPk / RED_FIGHTER.pk : 1) * (redFighterPk(w) || RED_FIGHTER.pk * 0.5), 'an enemy fighter'));
         w.log(`Enemy fighter ${this.name} fires on ${tgt.name}`, 'alert');
         // Firing is a hostile act: our picture marks it hostile.
         for (const tr of w.tracker.tracks) if (!tr.dropped && hdist(tr.predict(w.t), this.pos) < 4000) tr.hostileAct = true;
@@ -241,9 +341,10 @@ export class RedFighter extends Air {
       this.cmdAlt = 7000;
       this.cmdSpd = Math.max(220, this.ward.spd);
     } else {
-      // Sweep: head for where our fighters patrol.
+      // Sweep: vectored by the AWACS onto where our fighters are; without it, a guess at the CAP station they had when it launched.
       const f = w.fighters.find((x) => x.alive);
-      const p = f ? f.station : v3();
+      if (!this.guess) this.guess = f ? clone(f.station) : v3();
+      const p = f && !w.redSupport.down ? f.pos : this.guess;
       this.steer(p.x, p.y, dt);
       this.cmdAlt = 8000;
       this.cmdSpd = 300;

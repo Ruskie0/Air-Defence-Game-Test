@@ -1,8 +1,10 @@
+import type { HurtBy } from '../sim/world';
+import { dismissTip, tip } from './onboard';
 import { loadBest } from '../campaign/laststand';
 import { MEDALS, MedalId, earnedMedals } from '../campaign/medals';
-import { ARMOUR_STRIKE, CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty } from '../campaign/campaign';
+import { ARMOUR_BDE, ARMOUR_STRIKE, FIELD_DRONE_M, CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty, REPAIR_CREW } from '../campaign/campaign';
 import { ARMOUR } from '../sim/enemyarmour';
-import { DELIVERY_H, PULSES, REPAIR_PER_H, hhmm, stamp } from '../campaign/clock';
+import { DELIVERY_H, PULSES, hhmm, stamp } from '../campaign/clock';
 import type { View3D } from '../render/view3d';
 import { CATALOG, DeployedUnit, RANKS, UnitType, rankOf } from '../sim/catalog';
 import { bearingDeg, v3 } from '../sim/math';
@@ -14,7 +16,7 @@ import { objectiveDesc, objectiveName } from '../campaign/objectives';
 import { EVENTS } from '../campaign/events';
 import { DEEP_STRIKES, DeepStrikeId, deepStrike, deepStrikeError, strikeTargets } from '../campaign/deepstrike';
 import { type Asset, BASE_DEFS, assetCount, stockText } from '../sim/theatre';
-import { ASSAULT_HOLD, OFFENSIVE_COST_M, TOWN_THREAT_CUT, TOWN_ZONE_M, nextObjective } from '../campaign/front';
+import { ASSAULT_HOLD, DEVASTATED_ZONE_M, OFFENSIVE_COST_M, TOWN_THREAT_CUT, TOWN_ZONE_M, dugIn, nextObjective } from '../campaign/front';
 
 const SAVE_KEY = 'air-defence-campaign-v1';
 
@@ -168,6 +170,14 @@ export class CampaignUi {
   }
 
   /** Rebuild the preview world after anything on the map changed. */
+  /** Hire an extra repair crew: faster repairs between raids, for money that could buy a unit. */
+  private crewRow(c: Campaign): string {
+    const n = c.s.repairCrews ?? 0;
+    const why = c.crewError();
+    return `<div class="asset"><span>Repair crews <span class="dim">${1 + n} at work, ${c.repairPerH} points an hour</span></span><span></span>
+      <button data-cui="crew" ${why ? 'disabled' : ''} title="${esc(why ?? `Hire another crew for the rest of the war (${money(REPAIR_CREW.costM)}): repairs between raids go ${Math.round(((2 + n) / (1 + n) - 1) * 100)}% faster. That is three quarters of a SHORAD unit.`)}">Hire crew ${money(REPAIR_CREW.costM)}</button></div>`;
+  }
+
   private refreshWorld(): void {
     if (!this.c) return;
     this.host.showPreview(this.c.makeWorld(false));
@@ -204,7 +214,7 @@ export class CampaignUi {
       const why = c.canBuy(t);
       const locked = !c.unlocked(t);
       return `<div class="shop-item ${locked ? 'locked' : ''}">
-        <div class="shop-h"><b>${info.name}</b><span class="mono">${money(info.costM)}</span></div>
+        <div class="shop-h"><b>${info.name}</b><span class="mono">${money(c.price(t))}</span></div>
         <div class="dim">${esc(info.role)}</div>
         <div class="row">${locked ? `<span class="st emcon">Day ${info.unlockDay}</span>` : `<button data-cui="buy" data-type="${t}" ${why ? 'disabled' : ''} title="${esc(why ?? (c.started ? `Buy and place on the map. It reaches the depot ${DELIVERY_H[t]} h after ordering and sits out raids until then` : 'Buy and place on the map'))}">Buy</button>${c.started ? ` <span class="dim">arrives in ${DELIVERY_H[t]} h</span>` : ''}`}</div>
       </div>`;
@@ -282,11 +292,11 @@ export class CampaignUi {
         const cost = c.repairCost(a.name);
         const col = a.hp > 60 ? '#5ee07a' : a.hp > 25 ? '#ffd84d' : '#ff4d4d';
         const done = c.repairDone(a.name);
-        const working = done !== null ? ` <span class="dim" title="Repair crews restore ${REPAIR_PER_H} points an hour">+${Math.round(c.repairing(a.name))} by ${hhmm(done)}</span>` : '';
+        const working = done !== null ? ` <span class="dim" title="Repair crews restore ${c.repairPerH} points an hour">+${Math.round(c.repairing(a.name))} by ${hhmm(done)}</span>` : '';
         return `<div class="asset"><span>${a.name}${working}</span><span class="bar"><i style="width:${a.hp}%;background:${col}"></i></span>
-          ${cost > 0 ? `<button data-cui="repair" data-name="${a.name}" ${s.money > 0 ? '' : 'disabled'} title="Full repair ${money(cost)}; a partial repair uses what you have.${c.started ? ` The crews restore ${REPAIR_PER_H} points an hour.` : ''}">Repair ${money(Math.min(cost, s.money))}</button>` : '<span class="dim">intact</span>'}</div>`;
+          ${cost > 0 ? `<button data-cui="repair" data-name="${a.name}" ${s.money > 0 ? '' : 'disabled'} title="Full repair ${money(cost)}; a partial repair uses what you have.${c.started ? ` The crews restore ${c.repairPerH} points an hour.` : ''}">Repair ${money(Math.min(cost, s.money))}</button>` : '<span class="dim">intact</span>'}</div>`;
       })
-      .join('');
+      .join('') + this.crewRow(c);
 
     const units = c.units
       .map((u) => {
@@ -346,9 +356,11 @@ export class CampaignUi {
     const c = this.c!;
     const warn = c.s.warn;
     const when = warn ? ` <small>expected about ${hhmm(warn.at)}</small>` : '';
+    const lull = c.started ? tip('lull', 'data-cui') : '';
     const waiting = c.started && (c.units.some((u) => u.arrives !== undefined) || c.s.deployment.assets.some((a) => c.repairing(a.name) > 0));
-    return `<button data-cui="start" class="go big-go" title="The clock runs on to the enemy's next operation and the battle starts">Advance to the next raid ▶${when}</button>
-      ${c.started ? `<button data-cui="wait" title="Let an hour pass, to let orders arrive and repairs go on before you reposition. Intel's timings can be out: the enemy may come during the hour">Wait 1 hour${waiting ? '' : ' <small class="dim">nothing pending</small>'}</button>` : ''}`;
+    const down = c.airbaseDownNote();
+    return `${down ? `<p class="warn"><b>${esc(down)}</b></p>` : ''}<button data-cui="start" class="go big-go" title="The clock runs on to the enemy's next operation and the battle starts">Advance to the next raid ▶${when}</button>
+      ${lull}${c.started ? `<button data-cui="wait" title="Let an hour pass, to let orders arrive and repairs go on before you reposition. Intel's timings can be out: the enemy may come during the hour">Wait 1 hour${waiting ? '' : ' <small class="dim">nothing pending</small>'}</button>` : ''}`;
   }
 
   /** The war at a glance: our ground, the road, located enemy installations with what they hold, and where the next raid is expected from. */
@@ -433,15 +445,16 @@ export class CampaignUi {
         const full = b.start ? total({ stock: b.start }) : 0;
         const pct = full ? Math.min(100, (100 * total(b)) / full) : 100;
         const col = pct > 60 ? '#ff6b5b' : pct > 30 ? '#ffb05b' : '#8a8a8a';
-        return `<div class="eb"><span><b>${esc(b.name)}</b> ${b.kind === 'rear' ? '' : `<span class="dim">${km} km</span>`}<br><small>${esc(stockText(b))}</small></span><span class="bar" title="Strength left against what it started the war with"><i style="width:${pct}%;background:${col}"></i></span></div>`;
+        return `<div class="eb"><span><b>${esc(b.name)}</b> ${b.kind === 'rear' ? '' : `<span class="dim">${km} km</span>`}<br><small>${esc(stockText(b))}${c.runwayDown(b.id) ? ` · <b>Runway cratered until ${hhmm(c.runwayDown(b.id)!)}</b>` : ''}</small></span><span class="bar" title="Strength left against what it started the war with"><i style="width:${pct}%;background:${col}"></i></span></div>`;
       })
       .join('');
     const hidden = bases.filter((b) => !b.known && !b.lost);
     const kinds = [...new Set(hidden.map((b) => BASE_DEFS[b.kind].name.toLowerCase()))];
     const lost = Object.entries(c.s.enemyLost ?? {}).filter(([, n]) => n! >= 1) as [Asset, number][];
-    return `<h3>Enemy order of battle <span class="dim">as far as intel knows</span></h3>
+    return `<h3>Enemy order of battle <span class="dim">as far as intel knows</span></h3>${tip('oob', 'data-cui')}
       <div class="enemy-oob">${rows || '<div class="dim">Nothing located yet.</div>'}</div>
       ${hidden.length ? `<p class="dim">Not yet located: ${hidden.length} installation${hidden.length > 1 ? 's' : ''} (${esc(kinds.join(', '))}). Each one shows up once it launches.</p>` : ''}
+      ${c.s.front ? `<div class="eb"><span><b>Armour brigade</b> <span class="dim">up the road</span><br><small>${Math.floor(c.armourStock)} battalion${Math.floor(c.armourStock) === 1 ? '' : 's'}: ${c.armourStock >= ARMOUR_BDE.perAttack ? `enough for ${Math.floor(c.armourStock / ARMOUR_BDE.perAttack)} attack${c.armourStock >= 2 * ARMOUR_BDE.perAttack ? 's' : ''}` : 'too weak to attack until reinforced'}. Beaten-off attacks and armour strikes destroy battalions.</small></span><span class="bar"><i style="width:${Math.min(100, (100 * c.armourStock) / ARMOUR_BDE.start)}%;background:#ff6b5b"></i></span></div>` : ''}
       <p class="dim">Destroyed so far: ${lost.length ? esc(lost.map(([a, n]) => assetCount(a, Math.floor(n))).join(', ')) : 'nothing yet'}. What the enemy loses stays lost; it gets a trickle of reinforcements each night.</p>`;
   }
 
@@ -455,7 +468,7 @@ export class CampaignUi {
       .map((t, i) => {
         const km = (Math.hypot(t.x, t.y) / 1000).toFixed(0);
         const cls = t.ours ? 'good' : i === f.offensive ? 'warn' : 'dim';
-        const st = t.ours ? `ours, ${t.hp}%` : i === f.offensive ? 'offensive on' : i === next ? 'next objective' : 'enemy held';
+        const st = t.ours ? `ours, ${t.hp > 0 ? `${t.hp}%` : '<b>devastated</b>'}${dugIn(t, c.clock) ? ', <b>dug in</b>' : ''}` : i === f.offensive ? 'offensive on' : i === next ? 'next objective' : 'enemy held';
         return `<li class="${cls}"><b>${esc(t.name)}</b> ${km} km · ${st} · +${money(t.incomeM)}/day${t.airfield ? ' · <b>take it to win</b>' : ''}</li>`;
       })
       .join('');
@@ -468,10 +481,30 @@ export class CampaignUi {
           ? `<div class="row"><button data-cui="offensive" class="go" ${why ? 'disabled' : ''} title="${esc(why ?? `The enemy will counter-attack the assault force with drones, missiles, helicopters and jets. It goes in with the next raid: hold it above ${ASSAULT_HOLD}% until the raid ends to take the town. One offensive a day.`)}">Attack ${esc(f.towns[next].name)} ${money(OFFENSIVE_COST_M)}</button>${why ? ` <span class="dim">${esc(why)}</span>` : ''}</div>`
           : '<p class="good">Every town on the road is ours.</p>';
     return `<h3>The front</h3>
-      <p class="dim">Towns we hold pay every day, let units deploy round them, and each one past the first cuts the enemy's raids by ${Math.round(TOWN_THREAT_CUT * 100)}%. Raids also go for our front town: one knocked flat falls.</p>
+      <p class="dim">Towns we hold pay every day, let units deploy round them, and each one past the first cuts the enemy's raids by ${Math.round(TOWN_THREAT_CUT * 100)}%. Raids also go for our front town: one knocked flat is devastated (no income, a ${DEVASTATED_ZONE_M / 1000} km zone) but only falls to enemy armour.</p>
       <ul class="intel road">${road}</ul>
       ${this.pushPanel()}
+      ${this.fieldPanel()}
       ${action}`;
+  }
+
+  /** Before an assault on the enemy airfield: everything the enemy has ready to throw at it. */
+  private fieldPanel(): string {
+    const c = this.c!;
+    const f = c.s.front!;
+    const next = nextObjective(f);
+    if (next < 0 || !f.towns[next].airfield || f.offensive !== null) return '';
+    const force = c.fieldCounterForce();
+    const per: Record<string, number> = {};
+    for (const x of force) per[x.kind] = (per[x.kind] ?? 0) + x.n;
+    const waves = c.fieldArmourWaves();
+    const names: Record<string, string> = { strike: 'strike jets', sead: 'SEAD jets', helo: 'attack helicopters', drones: 'drones', cruise: 'cruise missiles' };
+    const parts = Object.entries(per).map(([k, n]) => `${n} ${names[k] ?? k}`);
+    const teams = force.filter((x) => x.kind === 'drones').map((x) => x.base.known ? x.base.name.toLowerCase() : 'an unlocated drone team');
+    parts.push(waves ? `${waves} armour wave${waves > 1 ? 's' : ''} (−${ARMOUR_BDE.counterHp}% each to the force)` : `no armour (the brigade needs ${2 * ARMOUR_BDE.perAttack} battalions to spare any)`);
+    const field = c.theatre.find((b) => b.kind === 'airfield' && !b.lost);
+    const down = field ? c.runwayDown(field.id) : null;
+    return `<div class="event"><h3>The airfield counter-attack</h3>${down ? `<p class="good"><b>Runway cratered until ${hhmm(down)}</b>: no jets or SEAD can fly from it. Assault now and only helicopters, drones, missiles and armour meet the force.</p>` : '<p class="dim">A deep strike that hits the airfield craters its runway for 24 h: assault inside that window and its jets stay on the ground.</p>'}<p>If we assault ${esc(f.towns[next].name)} now, the enemy throws everything it has ready at the assault force: <b>${esc(parts.join(', ') || 'nothing')}</b>. ${teams.length ? ` Drones come from ${esc(teams.join(' and '))} (only teams within ${FIELD_DRONE_M / 1000} km of the airfield join in).` : ` No drone team is within ${FIELD_DRONE_M / 1000} km of the airfield.`} Deep strikes on the airfield and FARP, AWACS hunts and beating off its armour wear this down first.</p></div>`;
   }
 
   /** The enemy's own attack on one of our towns: when it is coming, and the chance to break it up first. */
@@ -484,7 +517,7 @@ export class CampaignUi {
     if (p.broken) return `<p class="good">The enemy attack on ${esc(town)} was broken up by our strike.</p>`;
     const now = c.pushNow;
     const why = c.armourStrikeError();
-    return `<div class="event"><h3>Enemy armour massing at ${esc(f.towns[p.from]?.name ?? '')}</h3>
+    return `<div class="event"><h3>Enemy armour massing at ${esc(f.towns[p.from]?.name ?? '')}</h3>${tip('armour', 'data-cui')}
       <p>${now ? `It attacks ${esc(town)} with the next raid` : `Intel expects it to attack ${esc(town)} in a later raid today`}, behind drones and missiles aimed at the town. If the raids knock the town below ${ARMOUR.takeHp}% while the armour assaults it, the town falls. Cover it with air defence, or hit the armour before it moves.</p>
       <div class="row"><button data-cui="armourstrike" ${why ? 'disabled' : ''} title="${esc(why ?? `${Math.round(ARMOUR_STRIKE.chance * 100)}% chance to break the attack up before it starts`)}">Strike the armour ${money(ARMOUR_STRIKE.costM)} · ${Math.round(ARMOUR_STRIKE.chance * 100)}%</button>${p.struck ? ' <span class="dim">Our strike missed.</span>' : ''}</div></div>`;
   }
@@ -557,8 +590,8 @@ export class CampaignUi {
     document.body.dataset.mode = 'debrief';
     const dmg = r.damage.filter((d) => d.lost > 0);
     $('debrief-body').innerHTML = `
-      <h2>${over ? (over.won ? `Campaign won${c.s.grade ? `: ${c.s.grade}` : ''}` : 'Campaign lost') : `${r.at !== undefined ? `${esc(stamp(r.at))}, ${r.pulse ? esc(PULSES[r.pulse].name.toLowerCase()) : 'raid'}` : `Day ${r.day}`} debrief`}</h2>
-      ${over ? `<p class="${over.won ? 'good' : 'bad'}"><b>${esc(over.reason)}</b></p>` : ''}
+      <h2>${over ? (over.won ? `Campaign won${c.s.grade ? `: ${c.s.grade}` : ''}` : over.draw ? 'Stalemate' : 'Campaign lost') : `${r.at !== undefined ? `${esc(stamp(r.at))}, ${r.pulse ? esc(PULSES[r.pulse].name.toLowerCase()) : 'raid'}` : `Day ${r.day}`} debrief`}</h2>
+      ${over ? `<p class="${over.won ? 'good' : over.draw ? 'warn' : 'bad'}"><b>${esc(over.reason)}</b></p>` : ''}
       <div class="kv">
         <span>Threats destroyed</span><b>${r.kills}</b>
         ${
@@ -570,6 +603,7 @@ export class CampaignUi {
             : ''
         }
         <span>Leakers (hits on defended or AD sites)</span><b>${r.leakers}</b>
+        ${r.hurt?.length ? `<span>What hurt you</span><b>${r.hurt.map((h) => `<span title="${esc(`${HURT_TIP[h.by]} Hit: ${h.sites.join(', ')}`)}">${esc(HURT_NAME[h.by])} ${h.dmg} dmg (${h.hits} hit${h.hits > 1 ? 's' : ''})</span>`).join(' · ')}<br><span class="dim">${esc(HURT_TIP[r.hurt[0].by])}</span></b>` : ''}
         <span>Missiles fired</span><b>${r.missilesFired} (${money(r.missileCostM)})</b>
         ${r.supportM ? `<span>Support calls (convoys, repairs)</span><b>${money(r.supportM)}</b>` : ''}
         ${r.civilian ? `<span class="bad">Civil airliners shot down</span><b class="bad">${r.civilian}</b>` : ''}
@@ -595,11 +629,11 @@ export class CampaignUi {
         over
           ? `<p>Final score <b>${c.score()}</b> over ${c.s.history.length} raids.</p>
              <div class="menu-opts row"><button data-cui="new" class="go">New campaign</button><button data-cui="menu">Main menu</button></div>`
-          : r.income
+          : (r.grantM ? `<p><b>Emergency grant: ${money(r.grantM)}.</b> The airbase is badly hurt. Crews repair it twice as fast while it is below 40%.</p>` : '') + (r.income
             ? `<p>That was the day's last operation. At 06:00 the income came in: <b>${money(r.income)}</b> from the assets still working and the towns we hold${r.bonusM ? `, after ${money(r.bonusM)} of objective bonuses` : ''}${r.restockM ? `; ${money(r.restockM)} already spent restocking the batteries` : ''}. Budget now <b>${money(c.s.money)}</b>.</p>
              <div class="row"><button data-cui="plan" class="go">Plan day ${c.s.day} ▶</button><button data-cui="menu">Save and quit</button></div>`
             : `<p>Budget now <b>${money(c.s.money)}</b>${r.bonusM ? ` (objective bonuses ${money(r.bonusM)} paid)` : ''}. The day's income comes at 06:00. The clock is stopped at ${hhmm(c.clock)} while you plan for the next operation.</p>
-             <div class="row"><button data-cui="plan" class="go">Plan for the next raid ▶</button><button data-cui="menu">Save and quit</button></div>`
+             <div class="row"><button data-cui="plan" class="go">Plan for the next raid ▶</button><button data-cui="menu">Save and quit</button></div>`)
       }`;
     $('debrief').classList.remove('hidden');
   }
@@ -738,6 +772,9 @@ export class CampaignUi {
       case 'repair':
         c.repair(d.name!);
         break;
+      case 'crew':
+        if (c.hireCrew()) this.note = `Repair crew hired: repairs now run at ${c.repairPerH} points an hour.`;
+        break;
       case 'repairtown':
         c.repairTown(Number(d.i));
         break;
@@ -770,6 +807,9 @@ export class CampaignUi {
         store(c);
         this.host.startBattle(c.startPulse(), c);
         return;
+      case 'tip-ok':
+        dismissTip(d.name!);
+        break;
       case 'wait': {
         const before = c.clock;
         const r = c.wait(60);
@@ -792,3 +832,21 @@ export class CampaignUi {
     this.render();
   }
 }
+
+const HURT_NAME: Record<HurtBy, string> = {
+  drones: 'Attack drones', cruise: 'Cruise missiles', tbm: 'Ballistic missiles', arm: 'Anti-radiation missiles',
+  helo: 'Helicopters', strike: 'Strike jets', artillery: 'Artillery', other: 'Other',
+};
+
+/** One line of advice per kind of weapon that did the most damage. */
+const HURT_TIP: Record<HurtBy, string> = {
+  drones: 'Drones got through: put guns, SHORAD or CIWS right next to what they hit, and jam their GNSS.',
+  cruise: 'Cruise missiles come in low: cover the approaches with SHORAD and CIWS, and keep an early warning radar up.',
+  tbm: 'Only the LR SAM stops ballistic missiles: keep it covering what matters and stocked with missiles.',
+  arm: 'ARMs hit your radars: use the Auto EMCON presets and ARM auto, and place radar decoys.',
+  helo: 'Helicopters pop up close: guns and SHORAD forward, on the side they come from.',
+  strike: 'Strike jets got to their release point: fighters on CAP and an MR SAM on their approach.',
+  artillery: 'Enemy artillery spotted by a SAM site radar: sweep that site with a fighter.',
+  other: 'Mixed damage this raid.',
+};
+

@@ -176,7 +176,7 @@ export class War {
     const g = new Ground(f.towns, st.ground ?? { bats: [], capture: [], nextId: 1 }, {
       owner: (i) => (f.towns[i].ours ? 'blue' : 'red'),
       captured: (i, by) => (by === 'blue' ? this.takeTown(i, Math.round(this.w.ground?.bats.filter((b) => b.side === 'blue' && b.alive && Math.abs(b.s - (this.w.ground?.townS[i] ?? 0)) < GROUND.townR).reduce((m, b) => Math.max(m, b.strength), 0) ?? 70)) : this.townFalls(i)),
-      event: (msg) => this.onEvent?.(msg),
+      event: (msg, pause) => this.onEvent?.(msg, pause),
     });
     if (fresh) {
       // Two of ours at the front town and a third at the depot.
@@ -248,7 +248,8 @@ export class War {
   /** Raised when the world is built again (before the war has begun), so the views can follow it. */
   onWorld: ((w: World) => void) | null = null;
   /** Something that wants the player's decision happened (the game may stop the clock for it). */
-  onEvent: ((msg: string) => void) | null = null;
+  /** Something the player should know about; `pause` marks the few that stop the clock (a new operation, an attack forming up). */
+  onEvent: ((msg: string, pause?: boolean) => void) | null = null;
   private warnedAt: number | undefined;
   private flagged = new Set<number>();
 
@@ -589,7 +590,7 @@ export class War {
     const wn = this.c.s.warn;
     if (wn && wn.at !== this.warnedAt && wn.at > this.clock) {
       this.warnedAt = wn.at;
-      this.onEvent?.(`intel expects an enemy operation about ${hhmm(wn.at)} from the ${SECTOR_NAMES[wn.sector]}`);
+      this.onEvent?.(`intel expects an enemy operation about ${hhmm(wn.at)} from the ${SECTOR_NAMES[wn.sector]}`, true);
     }
     const w = this.w;
     for (const f of w.fielded) {

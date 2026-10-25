@@ -1,9 +1,9 @@
 // The automatic commander's planning: what it buys, repairs, strikes and moves between raids. Shared by the
 // headless campaign report and the browser playthrough (bundled as an IIFE that sets window.commanderShop).
-import { Campaign } from '../src/campaign/campaign';
+import { CAMPAIGN_DAYS, Campaign } from '../src/campaign/campaign';
 import { CATALOG, UnitType } from '../src/sim/catalog';
 import { DeepStrikeId, deepStrike, deepStrikeError, strikeTargets } from '../src/campaign/deepstrike';
-import { OFFENSIVE_COST_M, assaultSpot } from '../src/campaign/front';
+import { OFFENSIVE_COST_M, assaultSpot, nextObjective } from '../src/campaign/front';
 import { nearestFree } from '../src/sim/deploy';
 
 /** What the automatic commander buys, in order, while it can afford it. */
@@ -23,7 +23,17 @@ export function commanderShop(c: Campaign): string[] {
   const pressing = !!last?.front?.some((l) => / and took /.test(l));
   const covered = count('MR') + count('LR') >= 2 && count('SH') >= 1;
   const spare = c.s.money - OFFENSIVE_COST_M >= (pressing ? 0 : 100);
-  if (f && covered && spare && !flag('--no-offensive') && c.launchOffensive()) {
+  // Before the airfield: wear down what would counter-attack it (deep strikes on the airfield and FARP) and only
+  // go in once the jets and helicopters it could throw are few, or on the last days.
+  const nextI = f ? nextObjective(f) : -1;
+  const atField = !!f && nextI >= 0 && !!f.towns[nextI].airfield;
+  const threat = atField ? c.fieldCounterForce().filter((x) => x.kind !== 'drones').reduce((t, x) => t + x.n, 0) : 0;
+  const ready = !atField || threat <= 6 || c.s.day >= CAMPAIGN_DAYS - 1;
+  if (atField && !flag('--no-strikes')) {
+    const prep = strikeTargets(c).filter((b) => (b.kind === 'airfield' || b.kind === 'farp') && !deepStrikeError(c, b.id)).sort((a, b) => (a.kind === 'airfield' ? -1 : 1) - (b.kind === 'airfield' ? -1 : 1))[0];
+    if (prep && deepStrike(c, prep.id)) bought.push(`prep strike ${prep.id} (${c.s.deepStrike?.ok ? 'hit' : 'failed'})`);
+  }
+  if (f && covered && spare && ready && !flag('--no-offensive') && c.launchOffensive()) {
     bought.push(`offensive on ${f.towns[f.offensive!].name}`);
     const at = assaultSpot(c.terrain, f, f.offensive!);
     const prev = f.offensive! > 0 ? f.towns[f.offensive! - 1] : { x: 0, y: 0 };

@@ -20,7 +20,7 @@ import { DAY_START_MIN, DELIVERY_H, PULSES, PulseSlot, PulseType, REPAIR_PER_H, 
 import { cbStrikes } from '../sim/exposure';
 import { ARMOUR } from '../sim/enemyarmour';
 import type { Sighting } from '../sim/entities';
-import { ASSAULT_HOLD, DUG_IN_HP, FrontState, dugIn, OFFENSIVE_COST_M, TAKEN_HP, TOWN_THREAT_CUT, assaultSpot, columnStart, deployZones, frontTown, newFront, nextObjective, townIncome, townsHeld } from './front';
+import { ASSAULT_HOLD, DEVASTATED_ZONE_M, DUG_IN_HP, FrontState, dugIn, OFFENSIVE_COST_M, TAKEN_HP, TOWN_THREAT_CUT, assaultSpot, columnStart, deployZones, frontTown, newFront, nextObjective, townIncome, townsHeld } from './front';
 import { AIRCRAFT, type Asset, type EnemyBase, TALLY_ASSET, assetCount, avail, draw, fallBack, makeTheatre, overrun, reinforce } from '../sim/theatre';
 import { Rng } from '../sim/rng';
 import { DeployZone, inZones } from '../sim/deploy';
@@ -35,7 +35,7 @@ export function setDayThreat(v: number): void {
 
 /** A raid that loses at least this share of its aircraft shakes the enemy: its next 12 h of raids are smaller. */
 /** The enemy armour brigade, a theatre asset: battalions at the start, per attack, reinforcement a night, and losses. */
-export const ARMOUR_BDE = { start: 6, max: 8, perAttack: 2, perNight: 0.5, lostRepulsed: 1, lostStruck: 2 };
+export const ARMOUR_BDE = { start: 6, max: 8, perAttack: 2, perNight: 0.5, lostRepulsed: 1, lostStruck: 2, counterHp: 15 };
 
 export const SHAKEN = { lossShare: 0.4, minFlown: 4, hours: 12, maxCut: 0.35 };
 /** Below this airbase health an emergency grant arrives straight after the raid (once a day), and crews repair the airbase twice as fast. */
@@ -170,6 +170,8 @@ export interface CampaignState {
   /** Day the last offensive went in (one a day). */
   offensiveDay?: number;
   /** The enemy's own ground offensive today: on which of our towns, from which of theirs, in which operation. */
+  /** Armour waves committed against today's airfield assault (each knocks ARMOUR_BDE.counterHp off the force). */
+  armourCounter?: number;
   /** The enemy armour brigade: battalions left (finite, reinforced slowly). Every attack needs ARMOUR_BDE.perAttack. */
   armourStock?: number;
   enemyPush?: { pulse: number; town: number; from: number; struck?: boolean; broken?: boolean } | null;
@@ -405,6 +407,7 @@ export class Campaign {
     this.s.pulses = scheduleDay(this.s.day, this.s.seed);
     this.s.pulseIdx = 0;
     if (this.s.front) this.s.front.offensive = null;
+    this.s.armourCounter = 0;
     // From day 3 the enemy may throw its own armour at our front town in one of the day's combined strikes.
     this.s.enemyPush = null;
     const f = this.s.front;
@@ -798,14 +801,17 @@ export class Campaign {
     const day = this.s.day;
     const rng = new Rng(this.s.seed * 97 + day * 13 + (this.s.pulseIdx ?? 0) * 7);
     const at = assaultSpot(this.terrain, f, f.offensive);
-    // The enemy fights hardest for its forward airfield: everything it has goes at that assault force.
+    // The enemy fights hardest for its forward airfield: everything it has ready goes at that assault force,
+    // and no more than that. Wearing those stocks down first is how the airfield is won.
     const field = f.towns[f.offensive].airfield;
-    const big = (n: number): number => (field ? Math.ceil(n * 1.15) : n);
-    const kinds: [PkgKind, number][] = [['drones', big(Math.min(12, 4 + Math.floor(day / 2)))]];
-    if (day >= 2) kinds.push(['cruise', big(Math.min(5, 2 + Math.floor(day / 4)))]);
-    if (day >= 3 || field) kinds.push(['helo', big(day >= 6 ? 3 : 2)]);
-    if (day >= 4 || field) kinds.push(['strike', big(day >= 8 ? 3 : 2)]);
-    if (field) kinds.push(['sead', 2], ['drones', big(4 + Math.floor(day / 2))]);
+    if (field) {
+      this.fieldCounter(at, rng);
+      return true;
+    }
+    const kinds: [PkgKind, number][] = [['drones', Math.min(12, 4 + Math.floor(day / 2))]];
+    if (day >= 2) kinds.push(['cruise', Math.min(5, 2 + Math.floor(day / 4))]);
+    if (day >= 3) kinds.push(['helo', day >= 6 ? 3 : 2]);
+    if (day >= 4) kinds.push(['strike', day >= 8 ? 3 : 2]);
     const counters: PlannedPkg[] = [];
     kinds.forEach(([kind, size], i) => {
       counters.push({
@@ -827,12 +833,68 @@ export class Campaign {
     return true;
   }
 
+  /** What the enemy can throw at an assault on its airfield: every ready jet and SEAD aircraft, helicopters
+   *  from the FARP, drones from the two nearest teams, cruise missiles, and armour from the brigade. */
+  fieldCounterForce(at = this.fieldSpot()): { kind: PkgKind; base: EnemyBase; n: number }[] {
+    const busy = this.busy(this.pulse?.at, this.s.plan);
+    const free = (b: EnemyBase, a: Asset): number => Math.max(0, avail(b, a) - (AIRCRAFT.includes(a) ? busy.get(`${b.id}:${a}`) ?? 0 : 0));
+    const out: { kind: PkgKind; base: EnemyBase; n: number }[] = [];
+    const live = this.theatre.filter((b) => !b.lost);
+    const dist = (b: EnemyBase): number => (at ? Math.hypot(b.x - at.x, b.y - at.y) : 0);
+    for (const b of live) {
+      if (b.kind === 'airfield') {
+        if (free(b, 'strike')) out.push({ kind: 'strike', base: b, n: free(b, 'strike') });
+        if (free(b, 'sead')) out.push({ kind: 'sead', base: b, n: free(b, 'sead') });
+      }
+      if (b.kind === 'farp' && free(b, 'helo')) out.push({ kind: 'helo', base: b, n: free(b, 'helo') });
+      if (b.kind === 'glcm' && free(b, 'cruise')) out.push({ kind: 'cruise', base: b, n: Math.min(6, free(b, 'cruise')) });
+    }
+    for (const b of live.filter((x) => x.kind === 'drones' && free(x, 'drone')).sort((x, y) => dist(x) - dist(y)).slice(0, 2)) out.push({ kind: 'drones', base: b, n: Math.min(12, free(b, 'drone')) });
+    return out;
+  }
+
+  /** Where the assault on the enemy airfield would go in, if it is the next objective. */
+  private fieldSpot(): { x: number; y: number } | null {
+    const f = this.s.front;
+    const i = f ? nextObjective(f) : -1;
+    return f && i >= 0 && f.towns[i].airfield ? assaultSpot(this.terrain, f, i) : null;
+  }
+
+  private fieldCounter(at: { x: number; y: number }, rng: Rng): void {
+    const counters: PlannedPkg[] = [];
+    const sorties = this.busy(this.pulse?.at, this.s.plan);
+    this.fieldCounterForce(at).forEach(({ kind, base, n }, i) => {
+      const a = PKG[kind].asset!;
+      counters.push({
+        id: this.s.nextPkg++,
+        kind,
+        bearing: (this.layout.rot + rng.range(-30, 30) + 360) % 360,
+        size: n,
+        t: Math.round(90 + i * 120 + rng.range(0, 60)),
+        reported: true,
+        target: 'Assault force',
+        origin: at,
+        counter: true,
+        base: base.id,
+        from: { x: base.x, y: base.y },
+      });
+      if (AIRCRAFT.includes(a)) sorties.set(`${base.id}:${a}`, (sorties.get(`${base.id}:${a}`) ?? 0) + n);
+      else draw(base, a, n);
+    });
+    // The armour brigade throws in what it can spare (two attacks' worth at most); each wave costs the force.
+    const waves = Math.min(2, Math.floor(this.armourStock / ARMOUR_BDE.perAttack));
+    this.s.armourCounter = waves;
+    this.s.plan.push(...counters);
+    this.s.plan.sort((a, b) => a.t - b.t);
+  }
+
   /** Call today's offensive off before the battle, for the money back. */
   cancelOffensive(): boolean {
     const f = this.s.front;
     if (!f || f.offensive === null) return false;
     f.offensive = null;
     this.s.money += OFFENSIVE_COST_M;
+    this.s.armourCounter = 0;
     refundBases(this.s.plan.filter((p) => p.counter), this.theatre);
     this.s.plan = this.s.plan.filter((p) => !p.counter);
     return true;
@@ -1156,15 +1218,19 @@ export class Campaign {
     const frontLines: string[] = [];
     const f = s.front;
     if (f) {
+      const wasHp = new Map(f.towns.map((t) => [t.name, t.hp]));
       for (const tn of f.towns) {
         const site = tn.ours ? w.site(tn.name) : undefined;
         if (site) tn.hp = Math.round(site.hp);
       }
+      // Ground only changes hands to a ground attack: a town the raids knock flat is devastated, not lost.
+      for (const tn of f.towns) if (tn.ours && tn.hp <= 0 && (wasHp.get(tn.name) ?? 0) > 0) frontLines.push(`${tn.name} is devastated: it pays nothing and units can only deploy within ${DEVASTATED_ZONE_M / 1000} km of it until it is repaired. It stays ours unless enemy armour takes it.`);
+      let fallen = -1;
       // The enemy's armour: a town knocked down while it was assaulted falls to it.
       if (w.enemyArmour) {
         const tn = f.towns.find((x) => x.name === w.enemyArmour!.target);
         if (w.enemyArmour.endOfRaid(w) === 'taken') {
-          if (tn) tn.hp = 0;
+          if (tn) fallen = f.towns.indexOf(tn);
           frontLines.push(`Enemy armour overran ${w.enemyArmour.target} after the raids knocked it below ${ARMOUR.takeHp}%.`);
         } else {
           const k = this.loseArmour(ARMOUR_BDE.lostRepulsed);
@@ -1172,7 +1238,6 @@ export class Campaign {
         }
         s.enemyPush = null;
       }
-      const fallen = f.towns.findIndex((tn) => tn.ours && tn.hp <= 0);
       if (fallen >= 0) {
         for (const tn of f.towns.slice(fallen)) {
           if (!tn.ours) continue;
@@ -1184,7 +1249,14 @@ export class Campaign {
       }
       if (f.offensive !== null) {
         const tn = f.towns[f.offensive];
-        const hp = Math.round(w.site('Assault force')?.hp ?? 0);
+        // Armour waves from the brigade wear the force down; each one beaten off costs the brigade a battalion.
+        const waves = s.armourCounter ?? 0;
+        const hp = Math.max(0, Math.round(w.site('Assault force')?.hp ?? 0) - waves * ARMOUR_BDE.counterHp);
+        if (waves) {
+          const k = hp >= ASSAULT_HOLD ? this.loseArmour(waves * ARMOUR_BDE.lostRepulsed) : 0;
+          frontLines.push(`${waves} enemy armour wave${waves > 1 ? 's' : ''} hit the assault force (−${waves * ARMOUR_BDE.counterHp}%)${k ? `; the enemy lost ${k} battalion${k > 1 ? 's' : ''} (${this.armourStock} left)` : ''}.`);
+        }
+        s.armourCounter = 0;
         // The column has to reach its start line first; then the force has to hold.
         const arrived = !w.column || w.assaultOutcome === 'arrived';
         if (hp >= ASSAULT_HOLD && arrived && (fallen < 0 || fallen > f.offensive)) {

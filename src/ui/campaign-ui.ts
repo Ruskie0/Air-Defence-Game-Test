@@ -16,7 +16,7 @@ import { objectiveDesc, objectiveName } from '../campaign/objectives';
 import { EVENTS } from '../campaign/events';
 import { DEEP_STRIKES, DeepStrikeId, deepStrike, deepStrikeError, strikeTargets } from '../campaign/deepstrike';
 import { type Asset, BASE_DEFS, assetCount, stockText } from '../sim/theatre';
-import { ASSAULT_HOLD, OFFENSIVE_COST_M, TOWN_THREAT_CUT, TOWN_ZONE_M, dugIn, nextObjective } from '../campaign/front';
+import { ASSAULT_HOLD, DEVASTATED_ZONE_M, OFFENSIVE_COST_M, TOWN_THREAT_CUT, TOWN_ZONE_M, dugIn, nextObjective } from '../campaign/front';
 
 const SAVE_KEY = 'air-defence-campaign-v1';
 
@@ -468,7 +468,7 @@ export class CampaignUi {
       .map((t, i) => {
         const km = (Math.hypot(t.x, t.y) / 1000).toFixed(0);
         const cls = t.ours ? 'good' : i === f.offensive ? 'warn' : 'dim';
-        const st = t.ours ? `ours, ${t.hp}%${dugIn(t, c.clock) ? ', <b>dug in</b>' : ''}` : i === f.offensive ? 'offensive on' : i === next ? 'next objective' : 'enemy held';
+        const st = t.ours ? `ours, ${t.hp > 0 ? `${t.hp}%` : '<b>devastated</b>'}${dugIn(t, c.clock) ? ', <b>dug in</b>' : ''}` : i === f.offensive ? 'offensive on' : i === next ? 'next objective' : 'enemy held';
         return `<li class="${cls}"><b>${esc(t.name)}</b> ${km} km · ${st} · +${money(t.incomeM)}/day${t.airfield ? ' · <b>take it to win</b>' : ''}</li>`;
       })
       .join('');
@@ -481,10 +481,27 @@ export class CampaignUi {
           ? `<div class="row"><button data-cui="offensive" class="go" ${why ? 'disabled' : ''} title="${esc(why ?? `The enemy will counter-attack the assault force with drones, missiles, helicopters and jets. It goes in with the next raid: hold it above ${ASSAULT_HOLD}% until the raid ends to take the town. One offensive a day.`)}">Attack ${esc(f.towns[next].name)} ${money(OFFENSIVE_COST_M)}</button>${why ? ` <span class="dim">${esc(why)}</span>` : ''}</div>`
           : '<p class="good">Every town on the road is ours.</p>';
     return `<h3>The front</h3>
-      <p class="dim">Towns we hold pay every day, let units deploy round them, and each one past the first cuts the enemy's raids by ${Math.round(TOWN_THREAT_CUT * 100)}%. Raids also go for our front town: one knocked flat falls.</p>
+      <p class="dim">Towns we hold pay every day, let units deploy round them, and each one past the first cuts the enemy's raids by ${Math.round(TOWN_THREAT_CUT * 100)}%. Raids also go for our front town: one knocked flat is devastated (no income, a ${DEVASTATED_ZONE_M / 1000} km zone) but only falls to enemy armour.</p>
       <ul class="intel road">${road}</ul>
       ${this.pushPanel()}
+      ${this.fieldPanel()}
       ${action}`;
+  }
+
+  /** Before an assault on the enemy airfield: everything the enemy has ready to throw at it. */
+  private fieldPanel(): string {
+    const c = this.c!;
+    const f = c.s.front!;
+    const next = nextObjective(f);
+    if (next < 0 || !f.towns[next].airfield || f.offensive !== null) return '';
+    const force = c.fieldCounterForce();
+    const per: Record<string, number> = {};
+    for (const x of force) per[x.kind] = (per[x.kind] ?? 0) + x.n;
+    const waves = Math.min(2, Math.floor(c.armourStock / ARMOUR_BDE.perAttack));
+    const names: Record<string, string> = { strike: 'strike jets', sead: 'SEAD jets', helo: 'attack helicopters', drones: 'drones', cruise: 'cruise missiles' };
+    const parts = Object.entries(per).map(([k, n]) => `${n} ${names[k] ?? k}`);
+    if (waves) parts.push(`${waves} armour wave${waves > 1 ? 's' : ''} (−${waves * ARMOUR_BDE.counterHp}% each to the force)`);
+    return `<div class="event"><h3>The airfield counter-attack</h3><p>If we assault ${esc(f.towns[next].name)} now, the enemy throws everything it has ready at the assault force: <b>${esc(parts.join(', ') || 'nothing')}</b>. Deep strikes on the airfield and FARP, AWACS hunts and beating off its armour wear this down first.</p></div>`;
   }
 
   /** The enemy's own attack on one of our towns: when it is coming, and the chance to break it up first. */

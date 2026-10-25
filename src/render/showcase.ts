@@ -201,9 +201,10 @@ export class Showcase {
   show(spec: ModelSpec): void {
     if (this.model) this.holder.remove(this.model);
     this.model = showcaseModel(spec);
-    this.holder.add(this.model);
+    // Measure it on its own, before the holder's offset for the last model applies to it.
     this.model.updateMatrixWorld(true);
     const bb = new THREE.Box3().setFromObject(this.model);
+    this.holder.add(this.model);
     bb.getSize(this.size);
     const sphere = bb.getBoundingSphere(new THREE.Sphere());
     this.radius = Math.max(0.8, sphere.radius);

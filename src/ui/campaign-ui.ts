@@ -475,6 +475,12 @@ export class CampaignUi {
       });
     }
     out.push(`<circle cx="${sx(0)}" cy="${sy(0)}" r="4" fill="#46d18a"/><text x="${sx(0) + 6}" y="${sy(0) - 5}" fill="#46d18a" font-size="9">Airbase</text>`);
+    // Deliveries on their way: a faint marker where each will stand and when it is due at the depot.
+    for (const g of this.war?.w.incoming ?? []) {
+      const x = sx(g.x).toFixed(1);
+      const y = sy(g.y).toFixed(1);
+      out.push(`<g opacity="0.6"><line x1="${sx(g.depot.x).toFixed(1)}" y1="${sy(g.depot.y).toFixed(1)}" x2="${x}" y2="${y}" stroke="#7fc1ff" stroke-dasharray="2 2"/><rect x="${(Number(x) - 3).toFixed(1)}" y="${(Number(y) - 3).toFixed(1)}" width="6" height="6" fill="none" stroke="#7fc1ff"><title>${esc(CATALOG[g.type].name)} arrives ${hhmm(g.eta)}</title></rect><text x="${(Number(x) + 5).toFixed(1)}" y="${(Number(y) + 3).toFixed(1)}" fill="#7fc1ff" font-size="8">${hhmm(g.eta)}</text></g>`);
+    }
     const total = (st: Partial<Record<Asset, number>>): number => (Object.keys(st) as Asset[]).reduce((t, a) => t + Math.floor((st[a] ?? 0) + 1e-6), 0);
     for (const b of bases) {
       const x = sx(b.x);

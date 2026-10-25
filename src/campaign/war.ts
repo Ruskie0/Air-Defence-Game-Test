@@ -166,6 +166,10 @@ export class War {
 
   /** Raised when the world is built again (before the war has begun), so the views can follow it. */
   onWorld: ((w: World) => void) | null = null;
+  /** Something that wants the player's decision happened (the game may stop the clock for it). */
+  onEvent: ((msg: string) => void) | null = null;
+  private warnedAt: number | undefined;
+  private flagged = new Set<number>();
 
   private rebuild(): void {
     this.w = this.build();
@@ -247,6 +251,23 @@ export class War {
     this.assault();
     this.support();
     this.checkOver();
+    this.events();
+  }
+
+  /** Raise the moments worth stopping the clock for: a fresh intel warning, a unit newly compromised. */
+  private events(): void {
+    const wn = this.c.s.warn;
+    if (wn && wn.at !== this.warnedAt && wn.at > this.clock) {
+      this.warnedAt = wn.at;
+      this.onEvent?.(`intel expects an enemy operation about ${hhmm(wn.at)} from the ${SECTOR_NAMES[wn.sector]}`);
+    }
+    const w = this.w;
+    for (const f of w.fielded) {
+      const bad = w.exposure.compromised(f);
+      if (bad && !this.flagged.has(f.unit.uid)) this.onEvent?.(`${w.unitName(f)} is probably compromised: move it or expect fire`);
+      if (bad) this.flagged.add(f.unit.uid);
+      else this.flagged.delete(f.unit.uid);
+    }
   }
 
   /** Enemy aircraft shot down come off their bases for good; our units destroyed come off the order of battle. */
@@ -332,6 +353,7 @@ export class War {
         l.y += dy;
       }
       const f = w.reinforce(u);
+      this.onEvent?.(`${w.unitName(f)} has reached the depot`);
       if (Math.hypot(to.x - d.x, to.y - d.y) > 300 && !orderMove(w, f, to.x, to.y)) w.log(`${w.unitName(f)} has reached the depot and is driving to its position`, 'info');
       else w.log(`${w.unitName(f)} has reached the depot`, 'info');
     }

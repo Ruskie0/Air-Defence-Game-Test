@@ -53,7 +53,7 @@ const tempo = new Tempo();
 gfx.mount();
 view.planClock = () => (document.body.dataset.mode === 'plan' ? cui.campaign?.clock : undefined);
 const ppi = new Ppi(document.getElementById('ppi') as HTMLCanvasElement, world);
-const ctl: GameControl = { speed: Number(params.get('speed')) || 1, paused: false, skipQuiet: params.get('skipquiet') !== '0' };
+const ctl: GameControl = { speed: Number(params.get('speed')) || 1, paused: false, skipQuiet: params.get('skipquiet') !== '0', autoPause: params.get('autopause') !== '0' };
 const hud = new Hud(world, view, ppi, ctl);
 
 function show(w: World): void {
@@ -105,6 +105,11 @@ const cui = new CampaignUi({
     };
     show(wr.w);
     hud.setWorld(wr.w);
+    wr.onEvent = (msg) => {
+      if (!ctl.autoPause || !running || ctl.paused) return;
+      ctl.paused = true;
+      wr.w.log(`Paused: ${msg}`, 'alert');
+    };
     wr.onWorld = (w) => {
       show(w);
       hud.setWorld(w);
@@ -251,9 +256,11 @@ else if (mode === 'campaign') {
   },
 };
 
-const MAX_STEPS_PER_FRAME = 160;
+const MAX_STEPS_PER_FRAME = 300;
 /** Real milliseconds a frame may spend stepping the simulation before it gives up on the backlog. */
 const STEP_BUDGET_MS = 14;
+/** Sim seconds per real second while the war jumps through quiet time. */
+const SKIP_PER_S = 3600;
 let acc = 0;
 let last = performance.now();
 let nextDraw = 0;
@@ -279,6 +286,13 @@ function frame(now: number): void {
     ctl.tempo = lv;
     ctl.fastForward = lv > ctl.speed;
     acc += real * Math.max(ctl.speed, lv);
+    // Living war: quiet time with nothing on its way is jumped through at about an hour a second, up to the next event.
+    const skip = war && lv >= TEMPO.warMax ? war.skippable() : 0;
+    if (skip > 30) {
+      war!.jump(Math.min(skip, real * SKIP_PER_S));
+      ctl.tempo = SKIP_PER_S;
+      acc = 0;
+    }
     let n = 0;
     const t0 = performance.now();
     while (acc >= DT && n < MAX_STEPS_PER_FRAME) {

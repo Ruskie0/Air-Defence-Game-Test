@@ -33,6 +33,8 @@ export interface GameControl {
   fastForward?: boolean;
   /** The auto tempo's current compression (1 when a threat is close or a missile is in the air). */
   tempo?: number;
+  /** Living war: stop the clock on events that want a decision (intel warning, convoy in, unit compromised). */
+  autoPause?: boolean;
 }
 
 const SPEEDS = [1, 2, 4, 8, 16];
@@ -503,6 +505,9 @@ export class Hud {
       case 'skipquiet':
         this.ctl.skipQuiet = !this.ctl.skipQuiet;
         break;
+      case 'autopause':
+        this.ctl.autoPause = !this.ctl.autoPause;
+        break;
       case 'gnss': {
         const j = w.gnss[Number(d.i)];
         j.on = !j.on;
@@ -640,7 +645,8 @@ export class Hud {
       'speed',
       `<button data-act="pause" class="${this.ctl.paused ? 'on warn' : ''}">${this.ctl.paused ? '▶' : '❚❚'}</button>` +
         SPEEDS.map((s) => `<button data-act="speed" data-v="${s}" class="${!this.ctl.paused && this.ctl.speed === s ? 'on' : ''}">${s}×</button>`).join('') +
-        `<button data-act="skipquiet" class="${this.ctl.skipQuiet ? 'on' : ''}" title="Auto tempo: while the nearest threat is still minutes away, time runs up to ${this.campaign?.war ? 64 : 16}× faster, slowing back to your speed as it closes, and whenever a missile is in the air${this.campaign?.war ? ' or artillery is about to land' : ' or a battery has just been located'}">${this.ctl.fastForward ? `Auto ▸▸ ${this.ctl.tempo}×` : 'Auto tempo'}</button>`,
+        `<button data-act="skipquiet" class="${this.ctl.skipQuiet ? 'on' : ''}" title="Auto tempo: while the nearest threat is still minutes away, time runs up to ${this.campaign?.war ? 64 : 16}× faster, slowing back to your speed as it closes, and whenever a missile is in the air${this.campaign?.war ? ' or artillery is about to land' : ' or a battery has just been located'}">${this.ctl.fastForward ? `Auto ▸▸ ${this.ctl.tempo}×` : 'Auto tempo'}</button>` +
+        (this.campaign?.war ? `<button data-act="autopause" class="${this.ctl.autoPause ? 'on' : ''}" title="Auto pause: stop the clock when intel warns of an enemy operation, a convoy reaches the depot or one of our units is compromised">Auto pause</button>` : ''),
     );
     this.set(
       'wcs',

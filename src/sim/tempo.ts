@@ -9,6 +9,8 @@ export const TEMPO = {
   max: 16,
   /** The campaign's living war runs through quiet hours faster still. */
   warMax: 64,
+  /** ...and faster again when nothing at all is in the air picture (ground columns or moves still on the road). */
+  quietMax: 256,
   /** Seconds of threat travel per step of compression: a threat 60 s out allows 4x, 240 s out 16x. */
   perStepS: 15,
   /** Distance short of a site where a threat counts as arrived (m): weapons reach out about this far. */
@@ -23,7 +25,7 @@ export const TEMPO = {
   holdS: 3,
 };
 
-const LEVELS = [1, 2, 4, 8, 16, 32, 64];
+const LEVELS = [1, 2, 4, 8, 16, 32, 64, 256];
 
 /** Seconds until the nearest hostile or unknown track reaches our ground (Infinity with none in the picture). */
 export function timeToContact(w: World, closingOnly = false): number {
@@ -33,6 +35,8 @@ export function timeToContact(w: World, closingOnly = false): number {
     if (!t.confirmed || t.dropped || t.ident === 'FRD' || t.ident === 'NEU') continue;
     // Living war: an unidentified track up at airliner height is most likely civil traffic until shown otherwise.
     if (closingOnly && t.ident !== 'HOS' && t.ident !== 'SUS' && t.pos.z > TEMPO.civilAltM) continue;
+    // ...and so is one squawking a civil code or classed as civil (a 2D radar gives no height to go by).
+    if (closingOnly && t.ident !== 'HOS' && (t.squawk > 0.5 || t.cls === 'CIV')) continue;
     let d = Infinity;
     let near = !closingOnly;
     for (const s of sites) {
@@ -65,6 +69,7 @@ export function tempoFor(w: World, max: number = TEMPO.max): number {
   // So is artillery about to land on one of our positions.
   if (w.exposure.barrages.some((b) => b.at - w.t < 20)) return 1;
   const tti = timeToContact(w, max > TEMPO.max);
+  if (tti === Infinity && max >= TEMPO.warMax) return TEMPO.quietMax;
   const raw = tti / TEMPO.perStepS;
   let lv = 1;
   for (const l of LEVELS) if (l <= raw) lv = l;

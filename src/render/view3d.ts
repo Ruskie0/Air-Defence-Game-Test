@@ -17,6 +17,8 @@ import type { Site } from '../sim/sites';
 import type { EnemyBase } from '../sim/theatre';
 import { MAP_SEED, type World } from '../sim/world';
 import { IDENT_COLOR } from '../ui/colors';
+import { CATALOG } from '../sim/catalog';
+import { hhmm } from '../campaign/clock';
 import { CameraRig } from './camera';
 import { Effects } from './effects';
 import { type FrameEvents, WorldEvents } from './events';
@@ -209,6 +211,8 @@ export class View3D {
   private readonly tmp = new THREE.Vector3();
   private sceneryRes = 1;
   /** The enemy's armoured column attacking one of our towns (World.enemyArmour), built when first seen. */
+  /** Living war: ghosts of units on order, at the spot they were placed, with the road from the depot. */
+  private readonly ghosts = new Map<number, { root: THREE.Group; line: THREE.Line; label: CSS2DObject; eta: number }>();
   private armourObj: { root: THREE.Group; body: THREE.Mesh; label: CSS2DObject } | null = null;
   /** The campaign clock (minutes) while planning, when the shown world has no battle clock of its own. */
   planClock: (() => number | undefined) | null = null;
@@ -496,6 +500,7 @@ export class View3D {
       l.el.remove();
     }
     this.trackLabels.clear();
+    this.clearGhosts();
     this.selected = null;
     this.buildSites();
     this.buildBases();
@@ -580,6 +585,61 @@ export class View3D {
     const o = new CSS2DObject(el);
     o.center.set(0.5, -0.4);
     return o;
+  }
+
+  private clearGhosts(): void {
+    for (const g of this.ghosts.values()) {
+      this.scene.remove(g.root, g.line);
+      g.label.element.remove();
+    }
+    this.ghosts.clear();
+  }
+
+  /** Deliveries on their way: a faint marker where the unit will stand, a dashed road from the depot, and its arrival time. */
+  private syncGhosts(): void {
+    const w = this.world;
+    const live = new Set<number>();
+    for (const g of w.incoming) {
+      live.add(g.uid);
+      let o = this.ghosts.get(g.uid);
+      if (o && o.eta !== g.eta) {
+        this.scene.remove(o.root, o.line);
+        o.label.element.remove();
+        this.ghosts.delete(g.uid);
+        o = undefined;
+      }
+      if (!o) {
+        const t = w.terrain;
+        const y = t.groundAt(g.x, g.y);
+        const root = new THREE.Group();
+        const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: MARKERS.site, depthTest: false, transparent: true, opacity: 0.45, sizeAttenuation: false }));
+        marker.scale.setScalar(0.022);
+        marker.renderOrder = 6;
+        root.add(marker);
+        const el = document.createElement('div');
+        el.className = 'site-label ghost';
+        el.textContent = `${CATALOG[g.type].name} arrives ${hhmm(g.eta)}`;
+        const label = new CSS2DObject(el);
+        label.center.set(0.5, -0.4);
+        label.position.y = 30;
+        root.add(label);
+        root.position.set(g.x, y + 15, -g.y);
+        const pts = [new THREE.Vector3(g.depot.x, t.groundAt(g.depot.x, g.depot.y) + 15, -g.depot.y), new THREE.Vector3(g.x, y + 15, -g.y)];
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color: 0x7fc1ff, dashSize: 300, gapSize: 200, transparent: true, opacity: 0.5, depthTest: false }));
+        line.computeLineDistances();
+        line.renderOrder = 5;
+        this.scene.add(root, line);
+        o = { root, line, label, eta: g.eta };
+        this.ghosts.set(g.uid, o);
+      }
+      o.label.visible = this.showLabels;
+    }
+    for (const [uid, o] of this.ghosts) {
+      if (live.has(uid)) continue;
+      this.scene.remove(o.root, o.line);
+      o.label.element.remove();
+      this.ghosts.delete(uid);
+    }
   }
 
   private clearBases(): void {
@@ -1232,6 +1292,7 @@ export class View3D {
     this.syncEntities(ev);
     this.syncMissiles();
     this.syncTrackLabels();
+    this.syncGhosts();
     this.rig.following = this.follow && this.selected !== null;
     this.rig.update(realDt);
     this.controls.update();

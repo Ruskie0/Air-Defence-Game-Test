@@ -96,7 +96,7 @@ while (!c.s.over) {
   }
   const skip = war.skippable();
   if (skip > 30) {
-    realS += skip / 64;
+    realS += skip / 3600;
     war.jump(skip);
   } else {
     W.step();

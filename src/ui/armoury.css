@@ -159,6 +159,7 @@
 .arm-detail table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 .arm-detail th,
 .arm-detail td {
@@ -176,6 +177,7 @@
 .arm-detail td {
   font-family: var(--mono);
   font-size: 11.5px;
+  overflow-wrap: anywhere;
 }
 .arm-bars {
   display: grid;

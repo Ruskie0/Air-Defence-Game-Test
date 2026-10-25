@@ -207,7 +207,7 @@ export class Showcase {
     this.radius = Math.max(0.8, sphere.radius);
     this.centreY = sphere.center.y;
     this.holder.position.set(-sphere.center.x, 0, -sphere.center.z);
-    const fr = Math.max(this.size.x, this.size.z) * 0.75 + 1;
+    const fr = Math.max(this.size.x, this.size.z) * 0.62 + 0.5;
     this.floor.scale.setScalar(fr);
     this.grid.scale.setScalar(fr);
     this.zoom = 1;
@@ -247,7 +247,7 @@ export class Showcase {
       if (o.name === 'tailrotor') o.rotation.x += dt * 40;
     });
     const fit = this.radius / Math.sin((this.camera.fov * Math.PI) / 360) / Math.min(1, this.camera.aspect);
-    const d = fit * 1.08 * this.zoom;
+    const d = fit * 0.78 * this.zoom;
     this.camera.near = Math.max(0.02, d / 200);
     this.camera.far = d * 20;
     this.camera.position.set(Math.sin(this.yaw) * Math.cos(this.pitch) * d, this.centreY + Math.sin(this.pitch) * d, Math.cos(this.yaw) * Math.cos(this.pitch) * d);

@@ -18,6 +18,8 @@ import type { Ident, Track } from '../sim/tracker';
 import type { EnemyBase } from '../sim/theatre';
 import { MAP_SEED, type World } from '../sim/world';
 import { IDENT_COLOR } from '../ui/colors';
+import { CATALOG } from '../sim/catalog';
+import { hhmm } from '../campaign/clock';
 import { CameraRig } from './camera';
 import { Effects } from './effects';
 import { type FrameEvents, WorldEvents } from './events';
@@ -233,6 +235,15 @@ export class View3D {
   private readonly compassBrg: HTMLDivElement;
   private lastBrg = -1;
   /** The enemy's armoured column attacking one of our towns (World.enemyArmour), built when first seen. */
+  /** Living war: battalions on the road (enemy models; labels with strength for both sides) and the hulks they leave. */
+  private readonly bnObjs = new Map<number, { root: THREE.Group; label: CSS2DObject; el: HTMLDivElement; last: string; hulkAt: number }>();
+  private readonly hulks: THREE.Mesh[] = [];
+  /** Capture bars over towns changing hands. */
+  private readonly capObjs = new Map<number, { obj: CSS2DObject; el: HTMLDivElement; bar: HTMLElement }>();
+  private readonly hulkMat = new THREE.MeshStandardMaterial({ color: 0x1c1a18, roughness: 1, metalness: 0 });
+  private readonly redBnMat = new THREE.MeshStandardMaterial({ color: 0x8a5a4a, roughness: 0.85, metalness: 0.1 });
+  /** Living war: ghosts of units on order, at the spot they were placed, with the road from the depot. */
+  private readonly ghosts = new Map<number, { root: THREE.Group; line: THREE.Line; label: CSS2DObject; eta: number }>();
   private armourObj: { root: THREE.Group; body: THREE.Mesh; label: CSS2DObject } | null = null;
   /** The campaign clock (minutes) while planning, when the shown world has no battle clock of its own. */
   planClock: (() => number | undefined) | null = null;
@@ -546,6 +557,8 @@ export class View3D {
       l.el.remove();
     }
     this.trackLabels.clear();
+    this.clearGhosts();
+    this.clearGround();
     this.selected = null;
     this.buildSites();
     this.buildBases();
@@ -630,6 +643,169 @@ export class View3D {
     const o = new CSS2DObject(el);
     o.center.set(0.5, -0.4);
     return o;
+  }
+
+  private clearGround(): void {
+    for (const o of this.bnObjs.values()) {
+      this.scene.remove(o.root);
+      o.el.remove();
+    }
+    this.bnObjs.clear();
+    for (const o of this.capObjs.values()) {
+      this.scene.remove(o.obj);
+      o.el.remove();
+    }
+    this.capObjs.clear();
+    for (const h of this.hulks) this.scene.remove(h);
+    this.hulks.length = 0;
+  }
+
+  /** The ground war: enemy battalions as a cluster of vehicles with a marker, a label with strength on every battalion, hulks where they bleed. */
+  private syncGround(): void {
+    const g = this.world.ground;
+    if (!g) return;
+    const live = new Set<number>();
+    for (const b of g.bats) {
+      if (!b.alive) continue;
+      live.add(b.id);
+      let o = this.bnObjs.get(b.id);
+      if (!o) {
+        const root = new THREE.Group();
+        if (b.side === 'red') {
+          for (let i = 0; i < 6; i++) {
+            const m = new THREE.Mesh(groundGeometry(i < 3 ? 'tank' : 'ifv'), this.redBnMat);
+            m.position.set((i % 3) * 26 - 26, 0, Math.floor(i / 3) * 24 - 12);
+            root.add(m);
+          }
+          const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: MARKERS.red, depthTest: false, transparent: true, sizeAttenuation: false }));
+          marker.scale.setScalar(0.016);
+          marker.position.y = 25;
+          marker.renderOrder = 6;
+          root.add(marker);
+        }
+        const el = document.createElement('div');
+        el.className = `site-label bn ${b.side === 'red' ? 'enemy' : ''}`;
+        const label = new CSS2DObject(el);
+        label.center.set(0.5, -0.6);
+        label.position.y = 40;
+        root.add(label);
+        this.scene.add(root);
+        o = { root, label, el, last: '', hulkAt: b.strength };
+        this.bnObjs.set(b.id, o);
+      }
+      const y = this.world.terrain.groundAt(b.pos.x, b.pos.y);
+      o.root.position.set(b.pos.x, y, -b.pos.y);
+      const a = g.at(b.s + 50 * b.dir);
+      o.root.rotation.y = Math.atan2(a.x - b.pos.x, a.y - b.pos.y) + Math.PI;
+      const tag = b.foe ? ' ⚔' : b.broken ? ' (broken)' : '';
+      const cover = b.side === 'blue' ? (g.covered(this.world, b) ? ' · COVERED' : ' · EXPOSED') : '';
+      const txt = `${b.name} · ${Math.round(b.strength)}%${tag}${cover}`;
+      if (txt !== o.last) {
+        o.el.textContent = txt;
+        o.el.classList.toggle('fighting', !!b.foe);
+        o.el.classList.toggle('exposed', cover === ' · EXPOSED');
+        o.last = txt;
+      }
+      o.label.visible = this.showLabels;
+      // Every few percent lost leaves a burnt-out vehicle by the road.
+      if (o.hulkAt - b.strength >= 7) {
+        o.hulkAt = b.strength;
+        const h = new THREE.Mesh(groundGeometry(this.hulks.length % 2 ? 'ifv' : 'tank'), this.hulkMat);
+        const hx = b.pos.x + (Math.random() - 0.5) * 500;
+        const hy = b.pos.y + (Math.random() - 0.5) * 500;
+        h.position.set(hx, this.world.terrain.groundAt(hx, hy) - 0.5, -hy);
+        h.rotation.set((Math.random() - 0.5) * 0.3, Math.random() * 6.3, (Math.random() - 0.5) * 0.3);
+        this.scene.add(h);
+        this.hulks.push(h);
+        if (this.hulks.length > 90) this.scene.remove(this.hulks.shift()!);
+      } else if (b.strength > o.hulkAt) o.hulkAt = b.strength;
+    }
+    g.capture.forEach((cap, i) => {
+      let o = this.capObjs.get(i);
+      if (cap <= 0) {
+        if (o) {
+          this.scene.remove(o.obj);
+          o.el.remove();
+          this.capObjs.delete(i);
+        }
+        return;
+      }
+      if (!o) {
+        const el = document.createElement('div');
+        el.className = 'cap-bar';
+        el.innerHTML = '<span></span><i><b></b></i>';
+        const obj = new CSS2DObject(el);
+        obj.center.set(0.5, 2.2);
+        const p = g.at(g.townS[i]);
+        obj.position.set(p.x, this.world.terrain.groundAt(p.x, p.y) + 60, -p.y);
+        this.scene.add(obj);
+        o = { obj, el, bar: el.querySelector('b')! };
+        this.capObjs.set(i, o);
+      }
+      o.el.querySelector('span')!.textContent = `${g.townNames[i]} changing hands ${Math.round(cap * 100)}%`;
+      o.bar.style.width = `${Math.round(cap * 100)}%`;
+    });
+    for (const [id, o] of this.bnObjs) {
+      if (live.has(id)) continue;
+      this.scene.remove(o.root);
+      o.el.remove();
+      this.bnObjs.delete(id);
+    }
+  }
+
+  private clearGhosts(): void {
+    for (const g of this.ghosts.values()) {
+      this.scene.remove(g.root, g.line);
+      g.label.element.remove();
+    }
+    this.ghosts.clear();
+  }
+
+  /** Deliveries on their way: a faint marker where the unit will stand, a dashed road from the depot, and its arrival time. */
+  private syncGhosts(): void {
+    const w = this.world;
+    const live = new Set<number>();
+    for (const g of w.incoming) {
+      live.add(g.uid);
+      let o = this.ghosts.get(g.uid);
+      if (o && o.eta !== g.eta) {
+        this.scene.remove(o.root, o.line);
+        o.label.element.remove();
+        this.ghosts.delete(g.uid);
+        o = undefined;
+      }
+      if (!o) {
+        const t = w.terrain;
+        const y = t.groundAt(g.x, g.y);
+        const root = new THREE.Group();
+        const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: MARKERS.site, depthTest: false, transparent: true, opacity: 0.45, sizeAttenuation: false }));
+        marker.scale.setScalar(0.022);
+        marker.renderOrder = 6;
+        root.add(marker);
+        const el = document.createElement('div');
+        el.className = 'site-label ghost';
+        el.textContent = `${CATALOG[g.type].name} arrives ${hhmm(g.eta)}`;
+        const label = new CSS2DObject(el);
+        label.center.set(0.5, -0.4);
+        label.position.y = 30;
+        root.add(label);
+        root.position.set(g.x, y + 15, -g.y);
+        const pts = [new THREE.Vector3(g.depot.x, t.groundAt(g.depot.x, g.depot.y) + 15, -g.depot.y), new THREE.Vector3(g.x, y + 15, -g.y)];
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color: 0x7fc1ff, dashSize: 300, gapSize: 200, transparent: true, opacity: 0.5, depthTest: false }));
+        line.computeLineDistances();
+        line.renderOrder = 5;
+        this.scene.add(root, line);
+        o = { root, line, label, eta: g.eta };
+        this.ghosts.set(g.uid, o);
+      }
+      o.label.visible = this.showLabels;
+    }
+    for (const [uid, o] of this.ghosts) {
+      if (live.has(uid)) continue;
+      this.scene.remove(o.root, o.line);
+      o.label.element.remove();
+      this.ghosts.delete(uid);
+    }
   }
 
   private clearBases(): void {
@@ -1263,7 +1439,7 @@ export class View3D {
         for (const m of s.mats) m.color.multiplyScalar(0.25);
         s.label.element.classList.add('dead');
       }
-      s.label.visible = this.showLabels && s.site.kind !== 'launcher';
+      s.label.visible = this.showLabels && s.site.kind !== 'launcher' && !(this.world.ground && s.site.role === 'assault');
       if (s.site.role === 'assault') {
         const laager = s.root.getObjectByName('laager');
         const col = this.world.column;
@@ -1343,6 +1519,8 @@ export class View3D {
     this.syncEntities(ev);
     this.syncMissiles();
     this.syncTrackLabels();
+    this.syncGhosts();
+    this.syncGround();
     this.rig.following = this.follow && this.selected !== null;
     this.rig.update(realDt);
     this.controls.update();

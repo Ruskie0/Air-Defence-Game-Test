@@ -6,8 +6,8 @@ import type { Terrain } from './terrain';
  * enemy weapon starts at one of them and flies the whole way in, nothing appears near our units, and what
  * we shoot down stays lost. Game-level numbers, not a real order of battle.
  */
-export type Asset = 'strike' | 'sead' | 'recon' | 'helo' | 'drone' | 'cruise' | 'tbm' | 'bomber' | 'soj' | 'sam' | 'awacs' | 'tanker';
-export type BaseKind = 'airfield' | 'farp' | 'drones' | 'tbm' | 'glcm' | 'rear' | 'sam';
+export type Asset = 'strike' | 'sead' | 'recon' | 'helo' | 'drone' | 'cruise' | 'tbm' | 'bomber' | 'soj' | 'sam' | 'awacs' | 'tanker' | 'shell';
+export type BaseKind = 'airfield' | 'farp' | 'drones' | 'tbm' | 'glcm' | 'rear' | 'sam' | 'arty';
 
 export interface EnemyBase {
   id: string;
@@ -33,14 +33,14 @@ export const AIRCRAFT: Asset[] = ['strike', 'sead', 'recon', 'helo', 'bomber', '
 /** Which kinds of installation launch each asset. */
 export const HOSTS: Record<Asset, BaseKind[]> = {
   strike: ['airfield'], sead: ['airfield'], recon: ['airfield'], helo: ['farp'], drone: ['drones'],
-  cruise: ['glcm'], tbm: ['tbm'], bomber: ['rear'], soj: ['rear'], sam: ['sam'], awacs: ['rear'], tanker: ['rear'],
+  cruise: ['glcm'], tbm: ['tbm'], bomber: ['rear'], soj: ['rear'], sam: ['sam'], awacs: ['rear'], tanker: ['rear'], shell: ['arty'],
 };
 
 const ASSET_NAMES: Record<Asset, [string, string]> = {
   strike: ['strike jet', 'strike jets'], sead: ['SEAD fighter', 'SEAD fighters'], recon: ['recon drone', 'recon drones'],
   helo: ['attack helicopter', 'attack helicopters'], drone: ['attack drone', 'attack drones'], cruise: ['cruise missile', 'cruise missiles'],
   tbm: ['ballistic missile', 'ballistic missiles'], bomber: ['bomber', 'bombers'], soj: ['stand-off jammer', 'stand-off jammers'], sam: ['SAM missile', 'SAM missiles'],
-  awacs: ['AWACS', 'AWACS'], tanker: ['tanker', 'tankers'],
+  awacs: ['AWACS', 'AWACS'], tanker: ['tanker', 'tankers'], shell: ['barrage', 'barrages'],
 };
 
 /** "3 strike jets", "1 bomber". */
@@ -70,6 +70,7 @@ export const BASE_DEFS: Record<BaseKind, BaseDef> = {
   tbm: { name: 'Ballistic missile launch area', stock: { tbm: 8 }, daily: { tbm: 2 }, known: false },
   glcm: { name: 'Cruise missile battery', stock: { cruise: 24 }, daily: { cruise: 9 }, known: false },
   sam: { name: 'SAM site', stock: { sam: 6 }, daily: { sam: 2 }, known: true },
+  arty: { name: 'Artillery battalion', stock: { shell: 6 }, daily: { shell: 4 }, known: false },
   rear: { name: 'Rear air base (beyond the map)', stock: { bomber: 3, soj: 2, awacs: 1, tanker: 1 }, daily: { bomber: 0.4, soj: 0.3, awacs: 1, tanker: 0.25 }, known: true },
 };
 
@@ -140,6 +141,12 @@ export function makeTheatre(t: Terrain, seed: number, towns: TheatreTown[] = [],
     const away = Math.atan2(tn.x, tn.y);
     add('sam', { x: Math.round(tn.x + Math.sin(away + 0.9) * 1800), y: Math.round(tn.y + Math.cos(away + 0.9) * 1800) }, ` at ${tn.name}`, tn.name);
   }
+  // Artillery close behind the enemy's nearest town: rocket artillery reaching about 60 km, so our forward units are in range.
+  const artyTown = enemyTowns.find((x) => !x.airfield) ?? enemyTowns[0];
+  if (artyTown && !sea) {
+    const { u, v } = t.toLocal(artyTown.x, artyTown.y);
+    add('arty', landNear(t, u + rng.range(-4000, 4000), v + rng.range(4000, 8000)), ` near ${artyTown.name}`);
+  }
   for (const side of [-1, 1]) add('tbm', landNear(t, side * rng.range(20000, 35000), rng.range(118000, 135000)), side < 0 ? ' (west)' : ' (east)');
   add('glcm', landNear(t, rng.range(-15000, 15000), rng.range(105000, 120000)));
   // The rear air base is off the map: its aircraft enter along a corridor at the map edge.
@@ -178,7 +185,7 @@ export function draw(b: EnemyBase, a: Asset, n: number): void {
 }
 
 /** Installations that can pack up and move: the launch teams and batteries, not the airfield. */
-const MOBILE: BaseKind[] = ['drones', 'tbm', 'glcm', 'farp'];
+const MOBILE: BaseKind[] = ['drones', 'tbm', 'glcm', 'farp', 'arty'];
 
 /**
  * Our ground offensive took `town`: what stood in it is overrun. A drone team there is lost with its stock;

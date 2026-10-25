@@ -15,7 +15,7 @@ import { DayObjective, objectiveDesc, objectiveName, objectiveStatus } from '../
 import { hhmm } from '../campaign/clock';
 import { ARMOUR } from '../sim/enemyarmour';
 import { MOBILITY, moveError, moveStatus } from '../sim/mobility';
-import { Exposure } from '../sim/exposure';
+import { ARTY, Exposure } from '../sim/exposure';
 import { ENEMY_AD } from '../sim/enemyad';
 import { avail } from '../sim/theatre';
 import type { Fighter } from '../sim/fighter';
@@ -33,6 +33,8 @@ export interface GameControl {
   fastForward?: boolean;
   /** The auto tempo's current compression (1 when a threat is close or a missile is in the air). */
   tempo?: number;
+  /** Living war: stop the clock on events that want a decision (intel warning, convoy in, unit compromised). */
+  autoPause?: boolean;
 }
 
 const SPEEDS = [1, 2, 4, 8, 16];
@@ -46,7 +48,16 @@ const esc = (s: string): string => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', 
 export class Hud {
   private w: World;
   /** Campaign mode hides the sandbox spawn panel and offers to end the day once the raids are over. */
-  campaign: { day: number; days: number; objectives: DayObjective[]; onEndDay: () => void; clock0?: number } | null = null;
+  campaign: {
+    day: number;
+    days: number;
+    objectives: DayObjective[];
+    onEndDay: () => void;
+    clock0?: number;
+    /** The living war: no raids to end; the button opens the orders overlay instead, and intel's warning shows. */
+    war?: boolean;
+    warn?: () => string;
+  } | null = null;
   /** Last Stand: the wave counter and best score in the top bar. */
   stand: { wave: number; best: number; canCallEarly: boolean; callEarly: () => void } | null = null;
   private readonly view: View3D;
@@ -395,6 +406,8 @@ export class Hud {
       this.nextSlow = 0;
     } else if (e.code === 'KeyX' && this.multi.length) {
       this.scootSelection();
+    } else if (e.code === 'KeyP' && this.campaign?.war) {
+      this.campaign.onEndDay();
     } else if (e.code === 'Escape') {
       if (this.moving) {
         this.stopMove();
@@ -491,6 +504,9 @@ export class Hud {
       }
       case 'skipquiet':
         this.ctl.skipQuiet = !this.ctl.skipQuiet;
+        break;
+      case 'autopause':
+        this.ctl.autoPause = !this.ctl.autoPause;
         break;
       case 'gnss': {
         const j = w.gnss[Number(d.i)];
@@ -624,12 +640,13 @@ export class Hud {
     const rate = this.ctl.paused ? 0 : Math.max(this.ctl.speed, this.ctl.fastForward ? (this.ctl.tempo ?? 1) : 1);
     const tag = rate === 0 ? '<span class="rate paused">PAUSED</span>' : rate > 1 ? `<span class="rate${this.ctl.fastForward ? ' auto' : ''}">▸▸ ${rate}×</span>` : '';
     const wall = this.campaign?.clock0 !== undefined ? `<b>${hhmm(this.campaign.clock0 + w.t / 60)}</b> ` : '';
-    this.set('clock', `${wall}<span class="lbl">T+</span>${fmtTime(w.t)}${tag}`);
+    this.set('clock', this.campaign?.war ? `${wall}${tag}` : `${wall}<span class="lbl">T+</span>${fmtTime(w.t)}${tag}`);
     this.set(
       'speed',
       `<button data-act="pause" class="${this.ctl.paused ? 'on warn' : ''}">${this.ctl.paused ? '▶' : '❚❚'}</button>` +
         SPEEDS.map((s) => `<button data-act="speed" data-v="${s}" class="${!this.ctl.paused && this.ctl.speed === s ? 'on' : ''}">${s}×</button>`).join('') +
-        `<button data-act="skipquiet" class="${this.ctl.skipQuiet ? 'on' : ''}" title="Auto tempo: while the nearest threat is still minutes away, time runs up to 16× faster, slowing back to your speed as it closes, and whenever a missile is in the air or a battery has just been located">${this.ctl.fastForward ? `Auto ▸▸ ${this.ctl.tempo}×` : 'Auto tempo'}</button>`,
+        `<button data-act="skipquiet" class="${this.ctl.skipQuiet ? 'on' : ''}" title="Auto tempo: while the nearest threat is still minutes away, time runs up to ${this.campaign?.war ? 64 : 16}× faster, slowing back to your speed as it closes, and whenever a missile is in the air${this.campaign?.war ? ' or artillery is about to land' : ' or a battery has just been located'}">${this.ctl.fastForward ? `Auto ▸▸ ${this.ctl.tempo}×` : 'Auto tempo'}</button>` +
+        (this.campaign?.war ? `<button data-act="autopause" class="${this.ctl.autoPause ? 'on' : ''}" title="Auto pause: stop the clock when intel warns of an enemy operation, a convoy reaches the depot or one of our units is compromised">Auto pause</button>` : ''),
     );
     this.set(
       'wcs',
@@ -656,6 +673,18 @@ export class Hud {
       : this.stand
         ? `<span class="lbl">WAVE</span><b>${this.stand.wave}</b><span class="dim">best ${this.stand.best}</span> `
         : '';
+    if (this.campaign?.war) {
+      // The living war never runs out of raids: the bar shows what intel expects, and the orders button.
+      const live = w.entities.filter((e) => e.alive && e.side === 'red' && (e.airborne || e.munition)).length;
+      this.set(
+        'raid',
+        day +
+          (live ? `<span class="lbl">ENEMY UP</span><b>${live}</b> ` : '') +
+          `<span class="lbl">INTEL</span><span>${esc(this.campaign.warn?.() ?? '')}</span>` +
+          `<button data-act="endday" class="go" title="Pause and open the orders overlay: buy, repair, restock, strike and launch offensives (P)">Orders (P)</button>`,
+      );
+      return;
+    }
     if (!r) {
       const clear = w.scenario.done;
       this.set(
@@ -774,6 +803,17 @@ export class Hud {
   private exposureTag(f: Fielded): string {
     const w = this.w;
     if (!Exposure.tracked(f) || !f.sites[0]?.alive || w.exposure.level <= 0) return '';
+    if (w.exposure.mode === 'intel') {
+      const h = Math.round(f.heat ?? 0);
+      const col = h > 75 ? '#ff4d4d' : h > 45 ? '#ffb84d' : '#7fc1ff';
+      const shelled = w.exposure.barrages.some((b) => b.uid === f.unit.uid && b.left < ARTY.shells);
+      const tag = shelled
+        ? ' <span class="st dead blink" title="Enemy artillery is shelling this position. Move it.">UNDER FIRE</span>'
+        : w.exposure.compromised(f)
+          ? ' <span class="st dead" title="Our ELINT estimate: the enemy has probably fixed this position from its launches, its emissions or a recon photograph. Its next sorties will go for it, and artillery within 60 km can shell it. Moving more than 400 m breaks the fix. The estimate is sometimes wrong.">COMPROMISED</span>'
+          : '';
+      return `${tag}<span class="heat" title="Exposure ${h}%: launches, and radiating while enemy aircraft are listening, give the position away. At 100% the enemy fixes it for its next sorties. Silence lowers it; moving resets it."><i style="width:${h}%;background:${col}"></i></span>`;
+    }
     const l = w.exposure.pending(w, f.unit.uid);
     if (l && !l.moved && w.t < l.eta) return ` <span class="st dead blink" title="The enemy has located this unit: ${esc(l.weapon)} on its spot. Move it (Scoot) or defend it.">LOCATED ${Math.round(l.eta - w.t)} s</span><button data-act="flyto" data-x="${l.x}" data-y="${l.y}" title="Fly the camera to the located spot">Fly to</button>`;
     const h = Math.round(f.heat ?? 0);
@@ -802,7 +842,20 @@ export class Hud {
       }
     }
     const col = w.column;
-    const aSite = w.sites.find((x) => x.role === 'assault');
+    const aSite = w.ground ? undefined : w.sites.find((x) => x.role === 'assault');
+    const g = w.ground;
+    if (g && g.bats.some((b) => b.alive)) {
+      rows.push('<h3>Ground war <span class="dim">orders: P</span></h3>');
+      for (const b of g.bats.filter((x) => x.alive).sort((x, y) => (x.side === y.side ? x.s - y.s : x.side === 'blue' ? -1 : 1))) {
+        const st = b.foe ? '<span class="st dead blink">FIGHTING</span>' : b.broken ? '<span class="st dead">BROKEN</span>' : b.formUntil !== undefined ? '<span class="st jam">FORMING UP</span>' : b.order === 'advance' ? '<span class="st ok">ADVANCING</span>' : b.order === 'withdraw' ? '<span class="st">PULLING BACK</span>' : '<span class="st emcon">HOLDING</span>';
+        const hp = Math.round(b.strength);
+        rows.push(`<div class="sys ${b.side === 'red' ? 'located' : ''}"><div class="sys-h"><b>${esc(b.name)}</b> ${st} <button data-act="flyto" data-x="${Math.round(b.pos.x)}" data-y="${Math.round(b.pos.y)}" title="Fly the camera to it">Fly to</button></div>
+          <div class="sys-b"><span class="heat" style="width:80px"><i style="width:${hp}%;background:${b.side === 'red' ? '#ff6b5b' : hp >= 50 ? '#78ffaa' : '#ffd84d'}"></i></span> ${hp}%</div></div>`);
+      }
+      g.capture.forEach((cap, i) => {
+        if (cap > 0) rows.push(`<div class="sys located"><div class="sys-b"><b>${esc(g.townNames[i])}</b> changing hands <span class="heat" style="width:80px"><i style="width:${Math.round(cap * 100)}%;background:#ffd84d"></i></span> ${Math.round(cap * 100)}%</div></div>`);
+      });
+    }
     if (aSite) {
       const hp = Math.round(aSite.hp);
       const st = !aSite.alive ? '<span class="st dead">DESTROYED</span>'

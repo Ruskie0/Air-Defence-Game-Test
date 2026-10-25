@@ -191,6 +191,8 @@ export class Drone extends Air {
   readonly kind = 'drone' as const;
   readonly side = 'red' as const;
   diving = false;
+  /** Seconds spent hunting for the target after the last waypoint (a jammed drone can circle a long way off it). */
+  private hunting = 0;
 
   constructor(name: string, pos: V3, route: V3[], target: V3, targetName: string, agl: number) {
     super(name, pos, bearingDeg(pos, route[0] ?? target), 50);
@@ -213,7 +215,9 @@ export class Drone extends Air {
     if (!this.diving) {
       if (this.followWaypoints(dt)) {
         this.steer(tgt.x, tgt.y, dt);
-        if (this.perceivedDist(tgt) < 1600) this.diving = true;
+        this.hunting += dt;
+        // Out of fuel or patience: it dives wherever it thinks it is.
+        if (this.perceivedDist(tgt) < 1600 || this.hunting > 240) this.diving = true;
       }
       this.integrate(w, dt);
     } else {
@@ -221,6 +225,8 @@ export class Drone extends Air {
       const aim = sub(tgt, this.navErr);
       this.vel = scale(norm(sub(aim, this.pos)), 68);
       this.pos = addScaled(this.pos, this.vel, dt);
+      // Reaching the aim point is impact, even where the nav error put it in the air above the ground.
+      if (Math.hypot(aim.x - this.pos.x, aim.y - this.pos.y, aim.z - this.pos.z) < 68 * dt * 1.5) this.pos.z = w.terrain.groundAt(this.pos.x, this.pos.y);
     }
     if (this.pos.z <= w.terrain.groundAt(this.pos.x, this.pos.y) + 1) w.detonate(this);
   }
@@ -260,6 +266,7 @@ export class Cruise extends Air {
       const aim = sub(tgt, this.navErr);
       this.vel = scale(norm(sub(aim, this.pos)), 250);
       this.pos = addScaled(this.pos, this.vel, dt);
+      if (Math.hypot(aim.x - this.pos.x, aim.y - this.pos.y, aim.z - this.pos.z) < 250 * dt * 1.5) this.pos.z = w.terrain.groundAt(this.pos.x, this.pos.y);
     }
     if (this.pos.z <= w.terrain.groundAt(this.pos.x, this.pos.y) + 1) w.detonate(this);
   }
@@ -295,6 +302,23 @@ export class Tbm extends Entity {
     const dir = norm(v3(target.x - pos.x, target.y - pos.y, 0));
     const vz = (target.z - alt + 0.5 * G * tof * tof) / tof;
     return { pos, vel: v3(dir.x * vh, dir.y * vh, vz) };
+  }
+}
+
+/**
+ * Guided artillery rocket from a multiple launcher: a short ballistic arc from the launcher to a fixed position,
+ * a minute and a half of flight that our radars can track and guns can shoot down (C-RAM). Treated as a small
+ * ballistic missile by the tracker and the defence.
+ */
+export class Rocket extends Tbm {
+  constructor(name: string, from: V3, impact: V3, targetName: string) {
+    const d = Math.hypot(impact.x - from.x, impact.y - from.y);
+    const tof = 30 + d / 1000;
+    const dir = norm(v3(impact.x - from.x, impact.y - from.y, 0));
+    const vz = (impact.z - from.z + 0.5 * G * tof * tof) / tof;
+    super(name, from, v3((dir.x * d) / tof, (dir.y * d) / tof, vz), impact, targetName);
+    this.rcs = 0.02;
+    this.warhead = { lethalR: 45, dmg: 30 };
   }
 }
 

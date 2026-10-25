@@ -485,7 +485,8 @@ tbody tr.sel {
 body[data-mode='menu'] :is(#left, #right, #log, #ppi-wrap, #plan-left, #plan-right, #speed, #wcs, #raid, #score, #clock, #menu-btn),
 body[data-mode='plan'] :is(#left, #right, #log, #speed, #wcs),
 body[data-mode='debrief'] :is(#plan-left, #plan-right),
-body[data-mode='battle'] :is(#plan-left, #plan-right),
+body[data-mode='battle']:not(.planning) :is(#plan-left, #plan-right),
+body.planning[data-mode='battle'] :is(#left, #right),
 body[data-mode='sandbox'] :is(#plan-left, #plan-right),
 body[data-mode='training'] :is(#plan-left, #plan-right, #spawn) {
   display: none;
@@ -1060,4 +1061,41 @@ table.grp tr { cursor: pointer; }
   font: 600 11px var(--mono);
   color: var(--accent);
   letter-spacing: 0.04em;
+}
+
+.site-label.ghost {
+  opacity: 0.7;
+  font-style: italic;
+  border-style: dashed;
+}
+.site-label.bn {
+  font-weight: 600;
+}
+.site-label.bn.fighting {
+  color: #ffb05b;
+  border-color: #ffb05b;
+}
+.cap-bar {
+  font: 600 11px var(--font, sans-serif);
+  color: #ffd84d;
+  text-align: center;
+  text-shadow: 0 1px 2px #000;
+  pointer-events: none;
+}
+.cap-bar i {
+  display: block;
+  width: 120px;
+  height: 5px;
+  margin: 2px auto 0;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid #ffd84d;
+}
+.cap-bar b {
+  display: block;
+  height: 100%;
+  background: #ffd84d;
+}
+.site-label.bn.exposed {
+  border-color: #ff9f43;
+  color: #ffcf9a;
 }

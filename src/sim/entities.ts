@@ -316,7 +316,8 @@ export class Arm extends Entity {
     this.target = this.aim;
     this.targetName = emitter.name;
     this.t0 = t0;
-    this.rcs = 0.03;
+    // Head-on RCS of an anti-radiation missile, about a twentieth of a square metre.
+    this.rcs = 0.05;
     this.hitRadius = 0.6;
     this.munition = true;
     this.warhead = { lethalR: 18, dmg: 100 };

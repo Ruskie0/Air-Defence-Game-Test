@@ -57,6 +57,7 @@ interface Tally {
   by: Record<string, number>;
 }
 
+const det = new Map<number, { seen?: number; firm?: number; hos?: number }>();
 const t0 = Date.now();
 const out: [string, Tally][] = [];
 for (const c of CASES) {
@@ -70,10 +71,24 @@ for (const c of CASES) {
       for (const j of w.ewj) j.on = arg('jam') === '1';
       spawnThreat(w, c.threat, (b + terrain.layout.rot) % 360);
       const seen = new Map<number, Entity>();
+      // Distance to go to its aim point when each threat was first seen by a radar, held as a firm track, and declared hostile.
+      const togo = (e: Entity): number => (e.target ? Math.hypot(e.pos.x - e.target.x, e.pos.y - e.target.y, e.pos.z - e.target.z) : Math.hypot(e.pos.x, e.pos.y)) / 1000;
       const t1 = w.t;
       while (w.t - t1 < 900) {
         w.step();
-        for (const e of w.entities) if (c.kinds.includes(e.kind) && e.side === 'red') seen.set(e.id, e);
+        for (const e of w.entities) {
+          if (!c.kinds.includes(e.kind) || e.side !== 'red') continue;
+          seen.set(e.id, e);
+          if (!e.alive) continue;
+          const d = det.get(e.id) ?? {};
+          if (d.seen === undefined && e.lastDetected >= w.t - 0.01) d.seen = togo(e);
+          if (d.firm === undefined || d.hos === undefined) {
+            const tr = w.tracker.tracks.find((t) => t.confirmed && !t.dropped && Math.hypot(t.pos.x - e.pos.x, t.pos.y - e.pos.y) < 600 && Math.abs(t.speed - e.speed) < 0.4 * e.speed);
+            if (tr && d.firm === undefined) d.firm = togo(e);
+            if (tr?.ident === 'HOS' && d.hos === undefined) d.hos = togo(e);
+          }
+          det.set(e.id, d);
+        }
         if (w.t - t1 > 30 && w.pendingCount === 0 && !w.entities.some((e) => e.alive && e.side === 'red' && (e.munition || e.kind === 'sead' || e.kind === 'bomber' || e.kind === 'strike' || e.kind === 'helo'))) break;
       }
       for (const e of seen.values()) {
@@ -90,6 +105,12 @@ for (const c of CASES) {
     }
   }
   out.push([c.name, tally]);
+  const med = (k: 'seen' | 'firm' | 'hos'): string => {
+    const v = [...det.values()].map((d) => d[k]).filter((x): x is number => x !== undefined).sort((a, b) => a - b);
+    return v.length ? `${v[Math.floor(v.length / 2)].toFixed(1)} km (${v.length})` : '-';
+  };
+  if (process.argv.includes('--detect')) console.log(`${c.name}: median distance to go when first seen ${med('seen')}, firm track ${med('firm')}, hostile ${med('hos')}`);
+  det.clear();
 }
 
 console.log(`map ${mapArg ?? 'classic'}, ${reps} x 8 bearings per case, ${((Date.now() - t0) / 1000).toFixed(1)} s\n`);

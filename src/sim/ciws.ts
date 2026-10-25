@@ -1,4 +1,5 @@
 import { DEG, G } from './constants';
+import { isNight } from '../campaign/clock';
 import { V3, add, addScaled, clamp, clone, cross, dirAzEl, dist, dot, len, norm, scale, sub, v3, wrap180 } from './math';
 import type { Entity, Kind } from './entities';
 import type { Radar } from './radar';
@@ -11,11 +12,17 @@ export interface Round {
   t0: number;
   alive: boolean;
   tracer: boolean;
+  /** Entity the round was aimed at (cleared once it has passed it). */
+  tgt?: number;
+  /** Chance this round kills if it passes within the gate of its target. */
+  pk?: number;
+  /** Sim time it killed (or burst on) its target. */
+  hitAt?: number;
 }
 
 /** Quadratic drag coefficient per metre for the visual rounds: v(s) = v0 * exp(-K * s). */
 const K = 1.9e-4;
-const DISPERSION = 2.2e-3; // rad, 1 sigma
+const DISPERSION = 1.2e-3; // rad, 1 sigma: a tight stream, like a Phalanx or C-RAM burst
 
 export type GunKind = 'ciws' | 'gun35' | 'laser';
 
@@ -39,6 +46,8 @@ export interface GunSpec {
   slew: number;
   /** Kill rate per second of fire, by target kind. Kinds not listed are not engaged. */
   killRate: Partial<Record<Kind, number>>;
+  /** Electro-optical sight: it can track and fire without its radar out to this range (m), in clear daylight. */
+  eoRangeM: number;
   /** Laser: seconds of continuous fire before it must cool down, and how long that takes. */
   heatS?: number;
   coolS?: number;
@@ -46,20 +55,23 @@ export interface GunSpec {
 
 export const GUNS: Record<GunKind, GunSpec> = {
   ciws: {
-    kind: 'ciws', label: 'CIWS', rangeM: 2500, ammo: 1550, reloadS: 90, rof: 75, muzzle: 1100, slew: 115,
+    kind: 'ciws', label: 'CIWS', rangeM: 2500, eoRangeM: 5000, ammo: 1550, reloadS: 90, rof: 75, muzzle: 1100, slew: 115,
     killRate: { drone: 1.4, cruise: 1.2, arm: 0.8, tbm: 0.6, sead: 0.5, bomber: 0.3, fighter: 0.5, strike: 0.5, bomb: 1.0, helo: 0.9, atgm: 1.0 },
   },
   gun35: {
-    kind: 'gun35', label: 'Skyburst', rangeM: 4500, ammo: 240, reloadS: 45, rof: 18, muzzle: 1050, slew: 80,
+    kind: 'gun35', label: 'Skyburst', rangeM: 4500, eoRangeM: 6000, ammo: 240, reloadS: 45, rof: 18, muzzle: 1050, slew: 80,
     killRate: { drone: 1.3, cruise: 0.9, arm: 0.45, sead: 0.6, bomber: 0.4, fighter: 0.6, strike: 0.6, bomb: 0.8, helo: 1.2, atgm: 0.5 },
   },
   laser: {
-    kind: 'laser', label: 'Laser', rangeM: 3500, ammo: Infinity, reloadS: 0, rof: 0, muzzle: 0, slew: 60,
+    kind: 'laser', label: 'Laser', rangeM: 3500, eoRangeM: 6000, ammo: Infinity, reloadS: 0, rof: 0, muzzle: 0, slew: 60,
     killRate: { drone: 0.45, cruise: 0.12, bomb: 0.1, helo: 0.12 }, heatS: 12, coolS: 8,
   },
 };
 
 /** How much of its close-range kill rate a weapon keeps at range R (full inside half range, 35% at max). */
+/** Share of a burst expected to pass within the gate (aim and dispersion errors), used to size each round's kill chance. */
+const GATE_SHARE = 0.6;
+
 const falloff = (R: number, max: number): number => (R < 0.5 * max ? 1 : 1 - (0.65 * (R - 0.5 * max)) / (0.5 * max));
 
 /**
@@ -103,6 +115,13 @@ export class Ciws {
     this.maxAmmo = spec.ammo;
   }
 
+  /** How far its EO sight sees now: full by day in clear air, less at night and in rain, nothing in fog. */
+  eoRange(w: World): number {
+    const wx = w.weatherId === 'fog' ? 0 : w.weatherId === 'storm' ? 0.3 : w.weatherId === 'rain' ? 0.6 : 1;
+    const night = w.clockStart !== undefined && isNight(w.clockStart + w.t / 60) ? 0.6 : 1;
+    return this.spec.eoRangeM * wx * night;
+  }
+
   /** Can this weapon engage that kind of target at all? */
   engages(kind: Kind): boolean {
     return (this.spec.killRate[kind] ?? 0) > 0;
@@ -116,9 +135,17 @@ export class Ciws {
     let best: Entity | null = null;
     let bestTgo = Infinity;
     const gun = this.gun;
-    for (const [id, t] of this.radar.firm) {
+    // Candidates: what its own radar holds, plus anything its EO sight can see (the backup when the radar is off,
+    // jammed or has not picked the target up yet).
+    const cands = new Set<Entity>();
+    if (this.radar.isEmitting()) for (const [id, t] of this.radar.firm) {
       if (w.t - t > 1.5) continue;
       const e = w.entityById(id);
+      if (e) cands.add(e);
+    }
+    const eo = this.eoRange(w);
+    if (eo > 0) for (const e of w.entities) if (e.side === 'red' && e.airborne && e.alive && dist(e.pos, gun) < eo && w.terrain.los(gun, e.pos)) cands.add(e);
+    for (const e of cands) {
       if (!e || !e.alive || !e.airborne || e.side !== 'red' || !this.engages(e.kind)) continue;
       const r = sub(e.pos, gun);
       const R = len(r);
@@ -154,7 +181,7 @@ export class Ciws {
       this.ammo = this.maxAmmo;
       w.log(`${this.name} reloaded`, 'info');
     }
-    if (!this.auto || !this.radar.isEmitting()) {
+    if (!this.auto) {
       this.target = null;
       return;
     }
@@ -214,8 +241,10 @@ export class Ciws {
     }
     if (canFire) {
       this.firing = true;
-      this.roll(w, tgt, R, dt);
       this.acc += spec.rof * dt;
+      // Each round that passes through the gate kills with this chance, so a burst kills at the weapon's rate.
+      const rate = (spec.killRate[tgt.kind] ?? 0) * falloff(interceptR, spec.rangeM) * w.mods.pdBonus * (1 + 0.08 * this.rank);
+      const pk = 1 - Math.exp(-rate / (spec.rof * GATE_SHARE));
       const dir = dirAzEl(this.aimAz, this.aimEl);
       const u = norm(cross(dir, v3(0, 0, 1)));
       const vv = cross(u, dir);
@@ -225,7 +254,7 @@ export class Ciws {
         this.burst++;
         w.stats.ciwsRounds++;
         const d = add(dir, add(scale(u, w.rng.gauss() * DISPERSION), scale(vv, w.rng.gauss() * DISPERSION)));
-        this.rounds.push({ pos: clone(gun), vel: scale(norm(d), spec.muzzle), t0: w.t, alive: true, tracer: this.burst % 4 === 0 });
+        this.rounds.push({ pos: clone(gun), vel: scale(norm(d), spec.muzzle), t0: w.t, alive: true, tracer: this.burst % 5 === 0, tgt: tgt.id, pk });
       }
       if (this.ammo === 0) {
         this.reloadUntil = w.t + spec.reloadS;
@@ -242,14 +271,34 @@ export class Ciws {
     if (w.rng.chance(1 - Math.exp(-rate * dt))) w.killEntity(tgt, this.name, this.name, this.spec.kind === 'laser' ? 'laser' : 'gun');
   }
 
-  /** The rounds in flight are for show: kills are decided by roll(). */
+  /** Fly the rounds; a round that passes within the gate of its target gets its kill chance as it goes by. */
   private updateRounds(w: World, dt: number): void {
     if (!this.rounds.length) return;
     for (const r of this.rounds) {
       const sp = len(r.vel);
+      const p0 = r.pos;
       r.vel = scale(r.vel, 1 - K * sp * dt);
       r.vel.z -= G * dt;
       r.pos = addScaled(r.pos, r.vel, dt);
+      if (r.tgt !== undefined) {
+        const e = w.entityById(r.tgt);
+        if (!e || !e.alive) r.tgt = undefined;
+        else {
+          // Closest approach this step, round and target both moving.
+          const e0 = addScaled(e.pos, e.vel, -dt);
+          const d0 = sub(p0, e0);
+          const dv = sub(sub(r.pos, p0), sub(e.pos, e0));
+          const s = clamp(-dot(d0, dv) / Math.max(dot(dv, dv), 1e-9), 0, 1);
+          const miss = len(addScaled(d0, dv, s));
+          const R = dist(this.gun, e.pos);
+          const gate = this.spec.kind === 'gun35' ? 9 : 2.5 + 2.5 * DISPERSION * R;
+          if (miss < gate) {
+            r.tgt = undefined;
+            r.hitAt = w.t;
+            if (w.rng.chance(r.pk ?? 0)) w.killEntity(e, this.name, this.name, 'gun');
+          } else if (s < 1 && dot(sub(r.pos, e.pos), dv) > 0) r.tgt = undefined;
+        }
+      }
       if (w.t - r.t0 > 4.5 || r.pos.z < w.terrain.groundAt(r.pos.x, r.pos.y)) r.alive = false;
     }
     for (let i = this.rounds.length - 1; i >= 0; i--) if (!this.rounds[i].alive) this.rounds.splice(i, 1);

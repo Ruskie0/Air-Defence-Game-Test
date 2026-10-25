@@ -14,7 +14,9 @@ const flag = (f: string): boolean => !!(globalThis as { process?: { argv: string
 export function commanderShop(c: Campaign): string[] {
   const bought: string[] = [];
   const count = (t: UnitType): number => c.units.filter((u) => u.type === t).length;
-  for (const a of ['Airbase', 'CRC', 'Power plant']) if (c.repair(a)) bought.push(`repair ${a}`);
+  // With the airfield next, keep money for the strike and the push: only the airbase gets repaired.
+  const fieldNext = !!c.s.front && nextObjective(c.s.front) >= 0 && !!c.s.front.towns[nextObjective(c.s.front)].airfield;
+  for (const a of fieldNext ? ['Airbase'] : ['Airbase', 'CRC', 'Power plant']) if (c.repair(a)) bought.push(`repair ${a}`);
   for (const u of c.units) if (c.reload(u)) bought.push(`reload ${CATALOG[u.type].name}`);
   // Push up the road when there is money to spare, and send a covering group forward with the assault force.
   const f = c.s.front;
@@ -33,8 +35,9 @@ export function commanderShop(c: Campaign): string[] {
     // crater the runway and go in. From day 8 there is no time to prepare.
     const open = strikeTargets(c).filter((b) => !deepStrikeError(c, b.id));
     const fieldB = open.find((b) => b.kind === 'airfield');
-    const farp = open.find((b) => b.kind === 'farp' && avail(b, 'helo') > 2);
-    const team = open.filter((b) => b.kind === 'drones' && avail(b, 'drone') > 6).sort((x, y) => Math.hypot(x.x - fieldB!.x, x.y - fieldB!.y) - Math.hypot(y.x - fieldB!.x, y.y - fieldB!.y))[0];
+    const af = c.theatre.find((b) => b.kind === 'airfield') ?? { x: 0, y: 0 };
+    const farp = open.find((b) => b.kind === 'farp' && avail(b, 'helo') > 4);
+    const team = open.filter((b) => b.kind === 'drones' && avail(b, 'drone') > 10).sort((x, y) => Math.hypot(x.x - af.x, x.y - af.y) - Math.hypot(y.x - af.x, y.y - af.y))[0];
     const late = c.s.day >= CAMPAIGN_DAYS - 2;
     const prep = late || !fieldB ? fieldB : farp ?? (fieldB ? team : undefined) ?? fieldB;
     if (prep && deepStrike(c, prep.id)) bought.push(`prep strike ${prep.id} (${c.s.deepStrike?.ok ? 'hit' : 'failed'})`);
@@ -45,7 +48,10 @@ export function commanderShop(c: Campaign): string[] {
   // Inside a cratered-runway window the push is worth any money left.
   const window = !!field && c.runwayDown(field.id) !== null;
   const spare = c.s.money - OFFENSIVE_COST_M >= (pressing || window ? 0 : 100);
-  if (f && covered && spare && ready && !flag('--no-offensive') && c.launchOffensive()) {
+  // One battery and a SHORAD unit will do for a push inside the window.
+  const coverOk = covered || (window && count('MR') + count('LR') >= 1 && count('SH') >= 1);
+  if (window && !(coverOk && spare)) bought.push(`window unused (${coverOk ? '' : 'no cover '}${spare ? '' : 'no money '}${c.offensiveError() ?? ''})`);
+  if (f && coverOk && spare && ready && !flag('--no-offensive') && c.launchOffensive()) {
     bought.push(`offensive on ${f.towns[f.offensive!].name}`);
     const at = assaultSpot(c.terrain, f, f.offensive!);
     const prev = f.offensive! > 0 ? f.towns[f.offensive! - 1] : { x: 0, y: 0 };

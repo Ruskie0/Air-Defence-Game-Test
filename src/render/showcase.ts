@@ -250,7 +250,7 @@ export class Showcase {
       if (o.name === 'tailrotor') o.rotation.x += dt * 40;
     });
     const fit = this.radius / Math.sin((this.camera.fov * Math.PI) / 360) / Math.min(1, this.camera.aspect);
-    const d = fit * 0.78 * this.zoom;
+    const d = fit * 1.1 * this.zoom;
     this.camera.near = Math.max(0.02, d / 200);
     this.camera.far = d * 20;
     this.camera.position.set(Math.sin(this.yaw) * Math.cos(this.pitch) * d, this.centreY + Math.sin(this.pitch) * d, Math.cos(this.yaw) * Math.cos(this.pitch) * d);

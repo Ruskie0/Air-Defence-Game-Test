@@ -210,6 +210,9 @@ export class View3D {
   private sceneryRes = 1;
   /** Compass rose over the view; it turns with the camera so north is always marked. */
   private readonly compass: HTMLDivElement;
+  private readonly compassTape: SVGSVGElement;
+  private readonly compassBrg: HTMLDivElement;
+  private lastBrg = -1;
   /** The enemy's armoured column attacking one of our towns (World.enemyArmour), built when first seen. */
   private armourObj: { root: THREE.Group; body: THREE.Mesh; label: CSS2DObject } | null = null;
   /** The campaign clock (minutes) while planning, when the shown world has no battle clock of its own. */
@@ -230,7 +233,19 @@ export class View3D {
     this.compass = document.createElement('div');
     this.compass.className = 'compass';
     this.compass.title = 'Compass: click to face north';
-    this.compass.innerHTML = `<svg viewBox="-32 -32 64 64" width="64" height="64" aria-hidden="true"><circle r="29" class="ring"/>${[0, 90, 180, 270].map((a) => `<line y1="-29" y2="-23" transform="rotate(${a})"/>`).join('')}${[45, 135, 225, 315].map((a) => `<line y1="-29" y2="-26" transform="rotate(${a})"/>`).join('')}<path d="M0,-21 L5,0 L0,-3 L-5,0Z" class="n"/><path d="M0,21 L5,0 L0,3 L-5,0Z" class="s"/><text y="-12" class="nl">N</text></svg>`;
+    // Heading tape: 2 px per degree, drawn from -180 to 540 so any heading has a full window either side.
+    const names: Record<number, string> = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' };
+    let ticks = '';
+    for (let d = -180; d <= 540; d += 5) {
+      const x = (d + 180) * 2;
+      const n = (d + 360) % 360;
+      if (n % 45 === 0) ticks += `<text x="${x}" y="11" class="${n === 0 ? 'nl n' : 'nl'}">${names[n]}</text>`;
+      else if (n % 15 === 0) ticks += `<line x1="${x}" x2="${x}" y1="13" y2="5"/><text x="${x}" y="22" class="dg">${String(n / 10).padStart(2, '0')}</text>`;
+      else ticks += `<line x1="${x}" x2="${x}" y1="13" y2="9"/>`;
+    }
+    this.compass.innerHTML = `<div class="tape"><svg width="1442" height="26" viewBox="0 0 1442 26" aria-hidden="true">${ticks}</svg></div><div class="caret"></div><div class="brg">000°</div>`;
+    this.compassTape = this.compass.querySelector('svg')!;
+    this.compassBrg = this.compass.querySelector('.brg')!;
     this.compass.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       // Swing round to look north, keeping range and height.
@@ -1200,7 +1215,13 @@ export class View3D {
     updateHaze(this.scene, this.camera.position.y, this.weather.haze);
     this.camera.updateMatrixWorld();
     const look = this.tmp.copy(this.controls.target).sub(this.camera.position);
-    this.compass.style.setProperty('--hdg', `${-Math.atan2(look.x, -look.z)}rad`);
+    const brg = ((Math.atan2(look.x, -look.z) * 180) / Math.PI + 360) % 360;
+    this.compassTape.style.transform = `translateX(${90 - (brg + 180) * 2}px)`;
+    const shown = Math.round(brg) % 360;
+    if (shown !== this.lastBrg) {
+      this.lastBrg = shown;
+      this.compassBrg.textContent = `${String(shown).padStart(3, '0')}°`;
+    }
     this.sound.update(this.world, ev, this.camera, visible, realDt);
     this.composer.render();
     this.labels.render(this.scene, this.camera);

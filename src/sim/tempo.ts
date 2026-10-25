@@ -19,6 +19,10 @@ export const TEMPO = {
   passM: 20000,
   /** ...and neither does an unidentified track above this height (m), which is most likely an airliner. */
   civilAltM: 5000,
+  /** Living war: seconds a new track must hold before it slows time. */
+  settleS: 15,
+  /** Living war: an unclassified track faster than this (m/s) is treated as a false plot until it is classified. */
+  phantomMS: 450,
   /** Living war: a track slower than this (m/s) is loitering rather than closing. */
   loiterMS: 15,
   /** Seconds a higher tempo must hold before time speeds up again, so a jittery track does not toggle it. */
@@ -35,6 +39,10 @@ export function timeToContact(w: World, closingOnly = false): number {
     if (!t.confirmed || t.dropped || t.ident === 'FRD' || t.ident === 'NEU') continue;
     // Living war: an unidentified track up at airliner height is most likely civil traffic until shown otherwise.
     if (closingOnly && t.ident !== 'HOS' && t.ident !== 'SUS' && t.pos.z > TEMPO.civilAltM) continue;
+    // A fresh track has to hold for a few seconds first: clutter and false plots come and go without one.
+    if (closingOnly && w.t - t.born < TEMPO.settleS) continue;
+    // A fast plot nobody has classified (no missile, no ballistic arc) is almost always a false track: it does not hold time.
+    if (closingOnly && t.cls === 'UNK' && !t.ballistic && Math.hypot(t.vel.x, t.vel.y) > TEMPO.phantomMS) continue;
     // ...and so is one squawking a civil code or classed as civil (a 2D radar gives no height to go by).
     if (closingOnly && t.ident !== 'HOS' && (t.squawk > 0.5 || t.cls === 'CIV')) continue;
     let d = Infinity;

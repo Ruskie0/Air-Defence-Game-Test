@@ -24,7 +24,10 @@ export const WAR = {
   /** Sim seconds between bookkeeping passes (losses, deliveries, repairs, the enemy planner). */
   tickS: 5,
   /** An operation is this share of the enemy's daily strength, picked at random in the range. */
-  opShare: [0.2, 0.38] as [number, number],
+  opShare: [0.33, 0.5] as [number, number],
+  /** Time on target: the second wave arrives this long after the first (s), and each package within this of its wave. */
+  waveGapS: 480,
+  totSpreadS: 150,
   /** Intel warns of an operation once the enemy has massed this share of it. */
   warnAt: 0.7,
   /** Packages are judged (what got through, what the enemy learns) this long after launch (min). */
@@ -509,6 +512,7 @@ export class War {
       return;
     }
     st.pool = Math.max(0, st.pool - spent);
+    timeOnTarget(plan, rng);
     this.fly(plan);
     if (type === 'strike') sweepCap(this.w);
     this.newOp();
@@ -910,5 +914,24 @@ export class War {
     w.t += s;
     for (const f of w.fielded) if (f.heat && !f.radar?.isEmitting()) f.heat = Math.max(0, f.heat - 0.5 * s);
     this.update();
+  }
+}
+
+/** Rough flight time from launch to our ground per package kind (s): spawn distance over cruise speed. */
+const TRAVEL_S: Partial<Record<PkgKind, number>> = { drones: 1000, decoys: 1000, cruise: 540, strike: 600, helo: 570, sead: 640, soj: 500, bomber: 890, tbm: 300 };
+
+/**
+ * Time on target: an operation's packages launch so they arrive together, in at most two waves, the way a real
+ * combined strike is timed: slow drones go first so they reach us with the missiles and jets, not an hour ahead.
+ * Suppression (decoys, SEAD, the jammer) always leads; about a third of the rest follows in a second wave.
+ */
+function timeOnTarget(plan: PlannedPkg[], rng: Rng): void {
+  const timed = plan.filter((p) => TRAVEL_S[p.kind] !== undefined);
+  if (!timed.length) return;
+  const tot = Math.max(...timed.map((p) => TRAVEL_S[p.kind]!)) + 60;
+  for (const p of timed) {
+    const lead = p.kind === 'decoys' || p.kind === 'sead' || p.kind === 'soj';
+    const wave = !lead && rng.chance(0.35) ? WAR.waveGapS : 0;
+    p.t = tot - TRAVEL_S[p.kind]! + wave + rng.range(0, WAR.totSpreadS);
   }
 }

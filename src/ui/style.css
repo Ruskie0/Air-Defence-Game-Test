@@ -997,3 +997,39 @@ li.warn {
 table.grp td { padding: 1px 4px; white-space: nowrap; }
 table.grp .heat { width: 46px; }
 table.grp tr { cursor: pointer; }
+/* Compass rose over the 3D view, turned by View3D so north always points north. */
+#view .compass {
+  position: absolute;
+  top: 54px;
+  left: 50%;
+  margin-left: -32px;
+  width: 64px;
+  height: 64px;
+  cursor: pointer;
+  z-index: 3;
+  filter: drop-shadow(0 0 3px #000);
+}
+#view .compass svg {
+  transform: rotate(var(--hdg, 0rad));
+}
+#view .compass .ring {
+  fill: rgba(10, 18, 16, 0.55);
+  stroke: rgba(200, 230, 215, 0.6);
+  stroke-width: 1.2;
+}
+#view .compass line {
+  stroke: rgba(200, 230, 215, 0.8);
+  stroke-width: 1.4;
+}
+#view .compass .n {
+  fill: #ff6b5a;
+}
+#view .compass .s {
+  fill: rgba(220, 230, 225, 0.75);
+}
+#view .compass .nl {
+  fill: #fff;
+  font: 700 9px var(--font);
+  text-anchor: middle;
+  dominant-baseline: middle;
+}

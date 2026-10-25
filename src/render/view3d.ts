@@ -214,6 +214,8 @@ export class View3D {
   /** Living war: battalions on the road (enemy models; labels with strength for both sides) and the hulks they leave. */
   private readonly bnObjs = new Map<number, { root: THREE.Group; label: CSS2DObject; el: HTMLDivElement; last: string; hulkAt: number }>();
   private readonly hulks: THREE.Mesh[] = [];
+  /** Capture bars over towns changing hands. */
+  private readonly capObjs = new Map<number, { obj: CSS2DObject; el: HTMLDivElement; bar: HTMLElement }>();
   private readonly hulkMat = new THREE.MeshStandardMaterial({ color: 0x1c1a18, roughness: 1, metalness: 0 });
   private readonly redBnMat = new THREE.MeshStandardMaterial({ color: 0x8a5a4a, roughness: 0.85, metalness: 0.1 });
   /** Living war: ghosts of units on order, at the spot they were placed, with the road from the depot. */
@@ -599,6 +601,11 @@ export class View3D {
       o.el.remove();
     }
     this.bnObjs.clear();
+    for (const o of this.capObjs.values()) {
+      this.scene.remove(o.obj);
+      o.el.remove();
+    }
+    this.capObjs.clear();
     for (const h of this.hulks) this.scene.remove(h);
     this.hulks.length = 0;
   }
@@ -661,6 +668,31 @@ export class View3D {
         if (this.hulks.length > 90) this.scene.remove(this.hulks.shift()!);
       } else if (b.strength > o.hulkAt) o.hulkAt = b.strength;
     }
+    g.capture.forEach((cap, i) => {
+      let o = this.capObjs.get(i);
+      if (cap <= 0) {
+        if (o) {
+          this.scene.remove(o.obj);
+          o.el.remove();
+          this.capObjs.delete(i);
+        }
+        return;
+      }
+      if (!o) {
+        const el = document.createElement('div');
+        el.className = 'cap-bar';
+        el.innerHTML = '<span></span><i><b></b></i>';
+        const obj = new CSS2DObject(el);
+        obj.center.set(0.5, 2.2);
+        const p = g.at(g.townS[i]);
+        obj.position.set(p.x, this.world.terrain.groundAt(p.x, p.y) + 60, -p.y);
+        this.scene.add(obj);
+        o = { obj, el, bar: el.querySelector('b')! };
+        this.capObjs.set(i, o);
+      }
+      o.el.querySelector('span')!.textContent = `${g.townNames[i]} changing hands ${Math.round(cap * 100)}%`;
+      o.bar.style.width = `${Math.round(cap * 100)}%`;
+    });
     for (const [id, o] of this.bnObjs) {
       if (live.has(id)) continue;
       this.scene.remove(o.root);

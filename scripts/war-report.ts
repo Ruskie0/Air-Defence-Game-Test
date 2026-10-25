@@ -21,6 +21,8 @@ const c = Campaign.create(seed, diff);
 const war = new War(c);
 const w = (): typeof war.w => war.w;
 
+let push: { town: number; at: number; start: number } | null = null;
+const results: string[] = [];
 /** What the commander buys, in order, while it can afford it (as the raid campaign's commander did). */
 function shop(): string[] {
   war.sync();
@@ -28,6 +30,9 @@ function shop(): string[] {
   const count = (t: UnitType): number => c.units.filter((u) => u.type === t).length;
   for (const a of ['Airbase', 'CRC', 'Power plant']) if (c.repair(a)) out.push(`repair ${a}`);
   for (const u of c.units) if (c.reload(u)) out.push(`reload ${u.type}`);
+  const noAd = flag('--no-ad');
+  const adTypes: UnitType[] = ['MR', 'SH', 'LR', 'CIWS', 'GUN'];
+  if (flag('--aggressive') && count('CAP') < 1 && c.buy('CAP')) out.push('buy CAP');
   const wants: [UnitType, () => boolean][] = [
     ['LR', () => count('LR') < 1], ['EWR', () => count('EWR') < 1], ['GNSS', () => count('GNSS') < 1],
     ['CAP', () => count('CAP') < 1 && c.s.day >= 3], ['MR', () => count('MR') < 2], ['SH', () => count('SH') < 3],
@@ -37,6 +42,7 @@ function shop(): string[] {
   ];
   for (const [t, want] of wants) {
     if (t !== 'LR' && !(t === 'CAP' && c.s.day >= 4) && c.unlocked('LR') && count('LR') < 1 && c.s.money - c.price(t) < CATALOG.LR.costM) continue;
+    if (noAd && adTypes.includes(t)) continue;
     if (want() && c.buy(t)) out.push(`buy ${t}`);
   }
   for (const u of c.units) if ((u.type === 'MR' || u.type === 'LR') && u.spares < 4 && c.buySpares(u)) out.push(`spares ${u.type}`);
@@ -52,7 +58,31 @@ function shop(): string[] {
   const f = c.s.front;
   const covered = count('MR') + count('LR') >= 2 && count('SH') >= 1;
   const g = w().ground;
-  if (f && g && !flag('--no-offensive')) {
+  if (f && g && flag('--aggressive')) {
+    // Pushing bot: once four manoeuvre battalions are fit, all of them go for the next town, with CAS on whatever is in the way.
+    const man = g.bats.filter((b) => b.side === 'blue' && b.alive && b.kind !== 'arty');
+    const next = nextObjective(f);
+    if (next >= 0 && !push && man.filter((b) => !b.broken && b.strength > 70).length >= 4) {
+      push = { town: next, at: war.clock, start: man.reduce((t, b) => t + b.strength, 0) };
+      out.push(`PUSH for ${f.towns[next].name} with ${man.length} battalions`);
+    }
+    if (push) {
+      war.setObjective('push', push.town);
+      for (const b of man) if (!b.broken && b.order !== 'advance') war.orderBattalion(b.id, 'advance');
+      const red = g.bats.filter((b) => b.side === 'red' && b.alive).sort((a, b) => a.s - b.s)[0];
+      if (red && !war.casError(red.id)) out.push(war.cas(red.id));
+      if (f.towns[push.town].ours) {
+        const lost = push.start - man.reduce((t, b) => t + b.strength, 0);
+        out.push(`TOOK ${f.towns[push.town].name} after ${((war.clock - push.at) / 60).toFixed(1)} game hours, strength lost ${Math.round(lost)}`);
+        results.push(out[out.length - 1]);
+        push = null;
+      } else if (man.every((b) => b.broken || !b.alive)) {
+        out.push(`PUSH FAILED after ${((war.clock - push.at) / 60).toFixed(1)} game hours`);
+        results.push(out[out.length - 1]);
+        push = null;
+      }
+    }
+  } else if (f && g && !flag('--no-offensive')) {
     const blue = g.bats.filter((b) => b.side === 'blue' && b.alive);
     const avg = blue.length ? blue.reduce((t, b) => t + b.strength, 0) / blue.length : 0;
     const next = nextObjective(f);
@@ -66,7 +96,7 @@ function shop(): string[] {
     }
     if (g.objective) for (const b of blue) if (b.order === 'hold' && !b.broken && b.strength > 55) war.orderBattalion(b.id, 'advance');
     const red = g.bats.find((b) => b.side === 'red' && b.alive && b.formUntil !== undefined);
-    if (red && !war.bnStrikeError(red.id) && c.s.money > 60) out.push(war.strikeBattalion(red.id));
+    if (red && !war.casError(red.id)) out.push(war.cas(red.id));
   }
   // Units the enemy has a fix on move a couple of kilometres (the LR battery stays and fights).
   for (const fl of w().fielded) {
@@ -97,7 +127,7 @@ war.onDay = (r) => {
       (r.enemy?.length ? `\n  enemy: ${r.enemy.slice(0, verbose ? 99 : 4).join(' / ')}` : '') +
       (verbose && r.lessons.length ? `\n  lessons: ${r.lessons.join(' / ')}` : '') +
       `\n  real time by cause (min): ${[...slow].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k} ${Math.round(v / 60)}`).join(', ')}` +
-      `\n  real time so far at auto tempo: ${Math.round(realS / 60)} min; artillery barrages ${w().logEntries.filter((e) => e.msg.startsWith('Artillery fire')).length}` +
+      `\n  real time so far at auto tempo: ${Math.round(realS / 60)} min; artillery barrages ${w().logEntries.filter((e) => e.msg.startsWith('Rocket artillery launch')).length}` +
       (verbose ? `\n  theatre: ${c.theatre.map((b) => `${b.id}${b.known ? '*' : ''}${b.lost ? ' LOST' : ''} [${stockText(b)}]`).join('; ')}` : ''),
   );
 };
@@ -110,7 +140,8 @@ while (!c.s.over) {
   if (W.t >= nextShop) {
     const bought = shop();
     if (verbose && bought.length) console.log(`  ${stamp(war.clock)} commander: ${bought.join(', ')}`);
-    nextShop = W.t + 2 * 3600;
+    nextShop = W.t + (push ? 600 : 2 * 3600);
+    if (results.length && flag('--stop-first')) break;
   }
   const skip = war.skippable();
   if (skip > 30) {
@@ -133,6 +164,8 @@ while (!c.s.over) {
     if (verbose) console.log(`  ${ops[ops.length - 1]}`);
   }
 }
+console.log('Pushes:', results.join(' | ') || 'none');
+if (!c.s.over) process.exit(0);
 console.log(`\n${c.s.over!.won ? 'WON' : c.s.over!.draw ? 'DRAW' : 'LOST'} on day ${c.s.day}: ${c.s.over!.reason}  score ${c.score()}`);
 console.log(`Operations flown: ${new Set(ops.map((o) => o.slice(0, 14))).size}; ${raidsSeen} packages. Real time at auto tempo about ${Math.round(realS / 60)} min. CPU ${((Date.now() - t0) / 1000).toFixed(0)} s, ${(simStepped / 3600).toFixed(1)} h stepped.`);
 console.log('Towns held:', c.s.front?.towns.filter((t) => t.ours).map((t) => t.name).join(', '));

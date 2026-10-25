@@ -46,13 +46,14 @@ export const GROUND = {
   thinkS: 60,
   /** Fighting is shown: a burst of fire or a hit this often per contact (s). */
   fxS: 3,
-  /** Our deep strike on a battalion: its cost, chance and what a hit takes off. */
-  strike: { costM: 35, chance: 0.6, hit: 40 },
+  /** Rocket artillery only defends itself in contact, and keeps this far back from the enemy (m). */
+  artyFire: 0.3,
+  artyStandoffM: 9000,
 };
 
 export type Side = 'blue' | 'red';
 export type Order = 'advance' | 'hold' | 'withdraw';
-export type BnKind = 'armour' | 'mech';
+export type BnKind = 'armour' | 'mech' | 'arty';
 
 /** What the save keeps of a battalion. */
 export interface BattalionState {
@@ -95,6 +96,8 @@ export class Battalion implements BattalionState {
   formUntil?: number;
   /** Our battalions are sites: whatever hits the site hits the battalion. */
   site: Site | null = null;
+  /** The site's damage multiplier in formation. */
+  vuln = 1;
   private str: number;
   pos: V3 = v3();
   /** In contact this step, and with whom. */
@@ -171,6 +174,8 @@ export class Ground {
   objective?: GroundState['objective'];
   enemyGoal?: number;
   attackers: number[];
+  /** When the current enemy attack was launched (campaign seconds). */
+  attackFrom?: number;
   nextAttack: number;
   hooks: GroundHooks;
   private nextThink = 0;
@@ -258,7 +263,7 @@ export class Ground {
 
   /** A new battalion of `side` at road distance s. */
   add(side: Side, kind: BnKind, s: number, order: Order = 'hold', goal?: number): Battalion {
-    const name = side === 'blue' ? `${ORD[this.nextId % ORD.length]} ${kind === 'armour' ? 'Armoured' : 'Mech'} Bn` : `Enemy ${kind === 'armour' ? 'tank' : 'motor rifle'} bn ${this.nextId}`;
+    const name = side === 'blue' ? `${ORD[this.nextId % ORD.length]} ${kind === 'armour' ? 'Armoured' : kind === 'arty' ? 'Rocket Arty' : 'Mech'} Bn` : `Enemy ${kind === 'armour' ? 'tank' : kind === 'arty' ? 'rocket' : 'motor rifle'} bn ${this.nextId}`;
     const b = new Battalion({ id: this.nextId++, side, name, kind, s, strength: 100, order, goal });
     this.bats.push(b);
     this.place(b);
@@ -301,7 +306,9 @@ export class Ground {
       if (t >= 0 && this.hooks.owner(t) === f.side && f.order !== 'advance') cut = GROUND.inTown;
       else if (f.order === 'hold') cut = GROUND.holding;
       else if (f.order === 'withdraw') cut = GROUND.withdrawing;
-      const hit = GROUND.fire * dt * (b.strength / 100) * (b.kind === 'armour' ? GROUND.armourFire : 1) * cut;
+      // A broken battalion breaks contact and scatters: the winners do not chase it down.
+      if (f.broken) cut *= 0.25;
+      const hit = GROUND.fire * dt * (b.strength / 100) * (b.kind === 'armour' ? GROUND.armourFire : b.kind === 'arty' ? GROUND.artyFire : 1) * cut;
       f.strength -= hit;
       if (w.t - b.lastFx > GROUND.fxS) {
         b.lastFx = w.t + w.rng.range(0, 2);
@@ -316,6 +323,8 @@ export class Ground {
         if (b.side === 'blue') this.hooks.event(`${b.name} has been destroyed`);
         continue;
       }
+      // Broken, it scatters as it falls back: harder to hit from the air than a battalion in formation.
+      if (b.site) b.site.vuln = b.vuln * (b.broken ? 0.5 : 1);
       // Broken: it falls back to its depot to refit.
       if (b.broken && b.order !== 'withdraw') {
         b.order = 'withdraw';
@@ -361,11 +370,13 @@ export class Ground {
       return;
     }
     let step = Math.sign(d) * Math.min(Math.abs(d), GROUND.speed * dt);
+    // Rocket artillery stays well back from the enemy when it moves up.
+    const keep = b.kind === 'arty' ? GROUND.artyStandoffM : GROUND.standoffM;
     // In contact it can only pull back; it cannot drive through the enemy.
     for (const o of live) {
       if (o.side === b.side) continue;
       const gap = (o.s - b.s) * Math.sign(step);
-      if (gap >= 0 && gap - Math.abs(step) < GROUND.standoffM) step = Math.sign(step) * Math.max(0, gap - GROUND.standoffM);
+      if (gap >= 0 && gap - Math.abs(step) < keep) step = Math.sign(step) * Math.max(0, gap - keep);
     }
     b.s += step;
   }
@@ -408,7 +419,9 @@ export class Ground {
       const att = red.filter((b) => this.attackers.includes(b.id) && !b.broken);
       const avg = att.length ? att.reduce((t, b) => t + b.strength, 0) / att.length : 0;
       const done = this.hooks.owner(this.enemyGoal) === 'red';
-      if (!att.length || avg < GROUND.attackBreak || done) {
+      // It is given time to close and fight before it can be called off (unless every attacker has broken).
+      const young = this.attackFrom !== undefined && now(w) < this.attackFrom + GROUND.formUpS + 3600;
+      if (!att.length || (avg < GROUND.attackBreak && !young) || done) {
         if (!done && att.length) {
           w.log(`The enemy attack on ${this.townNames[this.enemyGoal]} has been beaten off: its battalions are pulling back`, 'kill');
           this.hooks.event(`the enemy attack on ${this.townNames[this.enemyGoal]} has been beaten off`);
@@ -436,11 +449,13 @@ export class Ground {
     if (this.nextAttack < 0) this.nextAttack = now(w) + GROUND.firstAttackS;
     if (target < 0 || now(w) < this.nextAttack) return;
     const ready = red.filter((b) => b.order === 'hold' && Math.abs(b.s - stageS) <= GROUND.townR && b.strength >= GROUND.attackMin);
-    // One stays behind to hold the staging town.
-    if (ready.length < GROUND.attackWith + 1 && !(ready.length >= GROUND.attackWith && stage < 0)) return;
-    const go = ready.sort((a, b) => b.strength - a.strength).slice(0, ready.length - 1);
+    // One stays behind to hold the staging town (with no town to hold, all of them go); never fewer than ATTACK_WITH.
+    const keep = stage >= 0 ? 1 : 0;
+    if (ready.length - keep < GROUND.attackWith) return;
+    const go = ready.sort((a, b) => b.strength - a.strength).slice(0, ready.length - keep);
     this.enemyGoal = target;
     this.attackers = go.map((b) => b.id);
+    this.attackFrom = now(w);
     for (const b of go) {
       b.order = 'advance';
       b.goal = this.townS[target];
@@ -452,9 +467,11 @@ export class Ground {
   }
 
   /** Set our objective: every battalion told to advance heads for it. */
-  setObjective(kind: 'push' | 'hold', town: number): void {
+  setObjective(kind: 'push' | 'hold', town: number): boolean {
+    const same = this.objective?.kind === kind && this.objective.town === town;
     this.objective = { kind, town };
-    for (const b of this.bats) if (b.side === 'blue' && b.alive && b.order === 'advance') b.goal = this.townS[town];
+    for (const b of this.bats) if (b.side === 'blue' && b.alive && b.order === 'advance') b.goal = this.townS[town] - (b.kind === 'arty' ? GROUND.artyStandoffM : 0);
+    return !same;
   }
 
   /** An order to one of our battalions. */
@@ -463,7 +480,8 @@ export class Ground {
     if (o === 'advance') {
       if (!this.objective) return 'Set an objective first';
       if (b.broken) return 'It is broken and must refit first';
-      b.goal = this.townS[this.objective.town];
+      // Rocket artillery moves up to firing positions behind the objective, not onto it.
+      b.goal = this.townS[this.objective.town] - (b.kind === 'arty' ? GROUND.artyStandoffM : 0);
     } else if (o === 'withdraw') {
       // Back to the nearest town of ours behind it, or the depot.
       const behind = this.townS.map((s, i) => ({ s, i })).filter((x) => x.s < b.s - 500 && this.hooks.owner(x.i) === 'blue').map((x) => x.s);

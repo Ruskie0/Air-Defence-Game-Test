@@ -1,4 +1,4 @@
-import { Cruise, Drone } from './entities';
+import { Cruise, Drone, Rocket } from './entities';
 import { ENEMY_AD } from './enemyad';
 import { add, hdist, polar, v3 } from './math';
 import { type Asset, type EnemyBase, basesWith, draw } from './theatre';
@@ -86,7 +86,7 @@ export interface Barrage {
   x: number;
   y: number;
   base: string;
-  /** Sim time the first shell lands, and how many are still to land. */
+  /** Sim time the salvo is fired, and how many rockets are in it. */
   at: number;
   left: number;
 }
@@ -231,22 +231,19 @@ export class Exposure {
     for (let i = this.barrages.length - 1; i >= 0; i--) {
       const b = this.barrages[i];
       if (w.t < b.at) continue;
-      if (b.left === ARTY.shells) {
-        const base = w.theatre.find((x) => x.id === b.base);
-        if (base) w.revealBase(base);
-        w.log(`Artillery fire from the ${base?.name.toLowerCase() ?? 'enemy guns'} is falling on the ${b.unit}'s position`, 'alert');
+      // The launcher fires its salvo: real rockets on a short ballistic arc, which the defence can track and shoot down.
+      const base = w.theatre.find((x) => x.id === b.base);
+      if (base) w.revealBase(base);
+      const from = v3(base?.x ?? b.x, base?.y ?? b.y, 0);
+      from.z = w.terrain.groundAt(from.x, from.y) + 5;
+      w.log(`Rocket artillery launch from the ${base?.name.toLowerCase() ?? 'enemy guns'}: ${b.left} rockets on their way to the ${b.unit}'s position`, 'alert');
+      for (let k = 0; k < b.left; k++) {
+        const p = v3(b.x + w.rng.gauss() * ARTY.spreadM, b.y + w.rng.gauss() * ARTY.spreadM, 0);
+        p.z = w.terrain.groundAt(p.x, p.y);
+        const l = v3(from.x + w.rng.gauss() * 40, from.y + w.rng.gauss() * 40, from.z);
+        w.spawnLater(new Rocket(w.nextName('RKT'), l, p, b.unit), k * ARTY.gapS);
       }
-      const p = v3(b.x + w.rng.gauss() * ARTY.spreadM, b.y + w.rng.gauss() * ARTY.spreadM, 0);
-      p.z = w.terrain.groundAt(p.x, p.y);
-      w.effect(p, 'ground');
-      for (const s of w.sites) {
-        if (!s.alive || s.role === 'town') continue;
-        const d = hdist(s.pos, p);
-        if (d < ARTY.blastM + s.radius) s.damage(w, ARTY.dmg * (1 - d / (ARTY.blastM + s.radius + 1)), 'artillery');
-      }
-      b.left--;
-      b.at = w.t + ARTY.gapS;
-      if (b.left <= 0) this.barrages.splice(i, 1);
+      this.barrages.splice(i, 1);
     }
   }
 

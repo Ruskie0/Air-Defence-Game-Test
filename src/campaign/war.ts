@@ -4,8 +4,11 @@ import type { Sighting } from '../sim/entities';
 import { GROUND, Ground, type GroundState, type Order } from '../sim/ground';
 import { orderMove } from '../sim/mobility';
 import { RED_SUPPORT, sweepCap } from '../sim/redair';
+import { ENEMY_AD } from '../sim/enemyad';
+import { ARTY } from '../sim/exposure';
+import { hdist } from '../sim/math';
 import { Rng } from '../sim/rng';
-import { AIRCRAFT, type Asset, TALLY_ASSET, assetCount, avail, draw, fallBack, overrun, reinforce } from '../sim/theatre';
+import { AIRCRAFT, type Asset, TALLY_ASSET, assetCount, avail, basesWith, draw, fallBack, overrun, reinforce } from '../sim/theatre';
 import type { Fielded, Stats, World } from '../sim/world';
 import { ARMOUR_BDE, CAMPAIGN_DAYS, CIVIL_LIMIT, Campaign, DayReport, EMERGENCY, SHAKEN } from './campaign';
 import { DAY_START_MIN, PULSES, PulseType, REPAIR_PER_H, TURNAROUND_H, hhmm, isNight } from './clock';
@@ -40,6 +43,30 @@ export const WAR = {
   depotM: 1500,
 };
 
+/** Close air support from the CAP squadron. Game-level numbers. */
+export const CAS = {
+  reachM: 160000,
+  /** Transit speed (m/s), and rearming once home (s). */
+  speed: 230,
+  rearmS: 1500,
+  /** Chance per jet of being lost to each enemy SAM site covering the target, and to each enemy fighter up. */
+  samLoss: 0.18,
+  fighterLoss: 0.05,
+  /** Strength each surviving jet takes off the battalion (percent). */
+  hitPerJet: [8, 12] as [number, number],
+};
+
+/** Our rocket artillery battalion. Game-level numbers. */
+export const BLUE_ARTY = {
+  rangeM: 60000,
+  /** Minutes between salvos, rocket flight time (s), and what a salvo takes off (percent). */
+  cycleMin: 20,
+  flightS: 80,
+  hit: [6, 10] as [number, number],
+  /** Chance each salvo draws counter-battery fire. */
+  counterChance: 0.35,
+};
+
 /** A package in the air, until it is judged. */
 export interface Flight {
   pkg: PlannedPkg;
@@ -62,8 +89,13 @@ export interface WarState {
   pushAt?: number;
   /** The ground war: battalions, capture bars, our objective. */
   ground?: GroundState;
-  /** Day of our last deep strike on a battalion (one a day). */
-  bnStrikeDay?: number;
+  /** CAS sorties out: the squadron, the battalion, when they reach it and when the pair is back on station (clock). */
+  cas?: { uid: number; bn: number; at: number; back: number; done?: boolean }[];
+  /** Our rocket batteries: when each can fire again, and salvos in the air (clock). */
+  artyReady?: Record<number, number>;
+  salvos?: { bn: number; at: number }[];
+  /** The last objective logged, so a repeated order is not logged again. */
+  lastObjective?: string;
   /** The day so far, for the 06:00 report. */
   day: { front: string[]; enemy: string[]; lessons: string[]; losses: string[]; hp: Record<string, number> };
 }
@@ -143,6 +175,7 @@ export class War {
       g.add('blue', 'armour', fs - 400);
       g.add('blue', 'mech', fs - 900);
       g.add('blue', 'mech', g.blueDepot);
+      g.add('blue', 'arty', Math.max(g.blueDepot, fs - GROUND.artyStandoffM));
       const red = f.towns.map((t, i) => (t.ours ? -1 : i)).filter((i) => i >= 0);
       // The enemy garrisons its nearest town and has one more coming up: it needs reinforcements before it can attack.
       if (red.length) g.add('red', 'armour', g.townS[red[0]] + 400);
@@ -151,6 +184,7 @@ export class War {
     for (const b of g.bats) if (b.side === 'blue' && b.alive) {
       const p = g.place(b);
       b.site = w.addBattalionSite(b.name, p.x, p.y, b.strength);
+      b.vuln = b.site.vuln;
     }
     w.ground = g;
   }
@@ -249,8 +283,8 @@ export class War {
     if (!t) return 'No such town';
     if (kind === 'push' && (t.ours || town !== f.towns.findIndex((x) => !x.ours))) return 'Push for the next town up the road the enemy holds';
     if (kind === 'hold' && !t.ours) return 'Hold a town we hold';
-    g.setObjective(kind, town);
-    this.w.log(kind === 'push' ? `Objective: take ${t.name}. Battalions ordered to advance head for it; it falls ${Math.round(GROUND.captureS / 60)} minutes after we hold it uncontested.` : `Objective: hold ${t.name}. Battalions ordered to advance move up to it and dig in.`, 'raid');
+    const key = `${kind}${town}`;
+    if (g.setObjective(kind, town) && key !== this.st.lastObjective && (this.st.lastObjective = key)) this.w.log(kind === 'push' ? `Objective: take ${t.name}. Battalions ordered to advance head for it; it falls ${Math.round(GROUND.captureS / 60)} minutes after we hold it uncontested.` : `Objective: hold ${t.name}. Battalions ordered to advance move up to it and dig in.`, 'raid');
     return null;
   }
 
@@ -262,33 +296,125 @@ export class War {
     return g.order(b, o);
   }
 
-  /** A deep strike on an enemy battalion out of contact (forming up, holding a town, on the road): one a day. */
-  strikeBattalion(id: number): string {
-    const c = this.c;
-    const g = this.w.ground;
-    const b = g?.bats.find((x) => x.id === id && x.side === 'red' && x.alive);
-    const err = this.bnStrikeError(id);
-    if (err || !b) return err ?? 'No such battalion';
-    c.s.money -= GROUND.strike.costM;
-    this.st.bnStrikeDay = c.s.day;
-    const rng = new Rng(c.s.seed * 89 + c.s.day * 13 + id);
-    if (!rng.chance(GROUND.strike.chance)) return `The strike on ${b.name} missed.`;
-    b.strength -= GROUND.strike.hit;
-    const p = b.pos;
-    for (let k = 0; k < 6; k++) this.w.effect({ x: p.x + rng.gauss() * 300, y: p.y + rng.gauss() * 300, z: p.z }, 'ground');
-    const line = `Our deep strike hit ${b.name}: it is down to ${Math.round(b.strength)}%.`;
-    this.w.log(line, 'kill');
-    this.st.day.front.push(line);
+  /** Why the CAP squadron cannot fly close air support on this enemy battalion now, or null if it can. */
+  casError(id: number): string | null {
+    const b = this.w.ground?.bats.find((x) => x.id === id && x.side === 'red' && x.alive);
+    if (!b) return 'No such battalion';
+    const sq = this.casSquadron();
+    if (!sq) return this.w.fielded.some((f) => f.unit.type === 'CAP') ? 'No fighters ready: on a sortie, rearming or lost' : 'Needs a CAP squadron';
+    if (Math.hypot(b.pos.x, b.pos.y) > CAS.reachM) return `Beyond the fighters' reach (${CAS.reachM / 1000} km)`;
+    return null;
+  }
+
+  /** A CAP squadron with at least two fighters on station or on the ground ready, not on a CAS sortie. */
+  private casSquadron(): Fielded | undefined {
+    return this.w.fielded.find((f) => f.unit.type === 'CAP' && !this.st.cas?.some((x) => x.uid === f.unit.uid) && (f.fighters?.filter((x) => x.alive && (x.state === 'station' || (x.state === 'ground' && x.groundUntil <= this.w.t + 60))).length ?? 0) >= 2);
+  }
+
+  /**
+   * Close air support: the CAP pair leaves its station, flies out through whatever enemy SAM sites cover the
+   * battalion and past any enemy fighters up, attacks, and comes home to rearm. The air picture over the base
+   * has a gap while it is away. Abstracted: the pair is off the map for the sortie, and the risk and the damage
+   * are rolled when it reaches the target.
+   */
+  cas(id: number): string {
+    const err = this.casError(id);
+    if (err) return err;
+    const b = this.w.ground!.bats.find((x) => x.id === id)!;
+    const sq = this.casSquadron()!;
+    const jets = sq.fighters!.filter((x) => x.alive).slice(0, 2);
+    const out = Math.hypot(b.pos.x, b.pos.y) / CAS.speed;
+    for (const j of jets) {
+      j.state = 'ground';
+      j.airborne = false;
+      j.groundUntil = this.w.t + 2 * out + CAS.rearmS;
+    }
+    (this.st.cas ??= []).push({ uid: sq.unit.uid, bn: id, at: this.clock + out / 60, back: this.clock + (2 * out + CAS.rearmS) / 60 });
+    const line = `${this.w.unitName(sq)} is flying close air support against ${b.name}: over the target in about ${Math.max(1, Math.round(out / 60))} minutes, back on station in ${Math.round((2 * out + CAS.rearmS) / 60)}.`;
+    this.w.log(line, 'info');
     return line;
   }
 
-  bnStrikeError(id: number): string | null {
-    const b = this.w.ground?.bats.find((x) => x.id === id && x.side === 'red' && x.alive);
-    if (!b) return 'No such battalion';
-    if (b.foe) return 'It is in contact with our troops: too close for a deep strike';
-    if (this.st.bnStrikeDay === this.c.s.day) return 'One battalion strike a day';
-    if (this.c.s.money < GROUND.strike.costM) return 'Not enough money';
-    return null;
+  /** CAS sorties reaching their target: enemy SAM sites and fighters take their chance, the survivors attack. */
+  private casStep(): void {
+    const st = this.st;
+    if (!st.cas?.length) return;
+    const w = this.w;
+    const now = this.clock;
+    for (const sor of st.cas) {
+      if (sor.done || now < sor.at) continue;
+      sor.done = true;
+      const f = this.fielded(sor.uid);
+      const b = w.ground?.bats.find((x) => x.id === sor.bn && x.alive);
+      const jets = f?.fighters?.filter((x) => x.alive && x.state === 'ground').slice(0, 2) ?? [];
+      if (!b || !jets.length) continue;
+      const rng = new Rng(this.c.s.seed * 31 + Math.round(now));
+      const sams = w.enemyAd.sites.filter((a) => a.site.alive && hdist(a.site.pos, b.pos) < ENEMY_AD.samRangeM).length;
+      const fighters = w.entities.filter((e) => e.alive && e.kind === 'redfighter').length;
+      const pLoss = 1 - Math.pow(1 - CAS.samLoss, sams) * Math.pow(1 - CAS.fighterLoss, Math.min(4, fighters));
+      let left = 0;
+      for (const j of jets) {
+        if (rng.chance(pLoss)) {
+          j.alive = false;
+          w.setFate(j, 'missile', sams ? 'enemy SAM' : 'enemy fighter');
+          w.log(`${j.name} shot down on the CAS sortie over ${b.name}${sams ? ` (${sams} enemy SAM site${sams > 1 ? 's' : ''} covering it)` : ''}`, 'damage');
+        } else left++;
+      }
+      if (!left) continue;
+      const hit = left * rng.range(...CAS.hitPerJet);
+      b.strength -= hit;
+      for (let k = 0; k < 4 * left; k++) w.effect({ x: b.pos.x + rng.gauss() * 250, y: b.pos.y + rng.gauss() * 250, z: b.pos.z }, 'ground');
+      const line = `Close air support hit ${b.name}: −${Math.round(hit)}%, down to ${Math.round(b.strength)}%.`;
+      w.log(line, 'kill');
+      st.day.front.push(line);
+    }
+    st.cas = st.cas.filter((x) => now < x.back);
+  }
+
+  /**
+   * Our rocket artillery: every so often each battery shells the enemy battalion in reach that matters most (one
+   * fighting ours, then one forming up, then the nearest). Its launches give it away: the enemy's own rocket
+   * artillery may answer with counter-battery fire.
+   */
+  private artyStep(): void {
+    const g = this.w.ground;
+    if (!g) return;
+    const w = this.w;
+    const st = this.st;
+    const now = this.clock;
+    const red = g.bats.filter((b) => b.side === 'red' && b.alive);
+    for (const a of g.bats) {
+      if (a.side !== 'blue' || a.kind !== 'arty' || !a.alive || a.broken || a.foe) continue;
+      const ready = (st.artyReady ??= {})[a.id] ?? 0;
+      if (now < ready) continue;
+      const inReach = red.filter((r) => hdist(r.pos, a.pos) <= BLUE_ARTY.rangeM);
+      const tgt = inReach.find((r) => r.foe) ?? inReach.find((r) => r.formUntil !== undefined) ?? inReach.sort((x, y) => hdist(x.pos, a.pos) - hdist(y.pos, a.pos))[0];
+      if (!tgt) continue;
+      st.artyReady[a.id] = now + BLUE_ARTY.cycleMin;
+      (st.salvos ??= []).push({ bn: tgt.id, at: now + BLUE_ARTY.flightS / 60 });
+      for (let k = 0; k < 3; k++) w.effect({ x: a.pos.x + w.rng.gauss() * 60, y: a.pos.y + w.rng.gauss() * 60, z: a.pos.z + 5 }, 'small');
+      w.log(`${a.name} fires a rocket salvo at ${tgt.name}`, 'engage');
+      // The launch gives it away: counter-battery fire from enemy rocket artillery in reach.
+      if (w.rng.chance(BLUE_ARTY.counterChance) && a.site) {
+        const base = basesWith(this.c.theatre, 'shell', 1, a.pos).find((x) => Math.hypot(x.x - a.pos.x, x.y - a.pos.y) <= ARTY.rangeM);
+        if (base && !w.exposure.barrages.some((x) => x.unit === a.name)) {
+          draw(base, 'shell', 1);
+          w.exposure.barrages.push({ uid: -a.id, unit: a.name, x: a.pos.x, y: a.pos.y, base: base.id, at: w.t + w.rng.range(...ARTY.callS), left: ARTY.shells });
+          w.log(`Enemy counter-battery radar has located ${a.name}: expect rockets on it in a few minutes. Move it or accept the fire.`, 'alert');
+          this.onEvent?.(`${a.name} has been located by counter-battery radar`);
+        }
+      }
+    }
+    if (!st.salvos?.length) return;
+    for (const sv of st.salvos) {
+      if (now < sv.at) continue;
+      const b = g.bats.find((x) => x.id === sv.bn && x.alive);
+      if (!b) continue;
+      const hit = w.rng.range(...BLUE_ARTY.hit);
+      b.strength -= hit;
+      for (let k = 0; k < 6; k++) w.effect({ x: b.pos.x + w.rng.gauss() * 200, y: b.pos.y + w.rng.gauss() * 200, z: b.pos.z }, 'ground');
+    }
+    st.salvos = st.salvos.filter((x) => now < x.at);
   }
 
   // ------------------------------------------------------------- the clock
@@ -319,8 +445,28 @@ export class War {
     this.judge();
     this.planner(dMin);
     this.support();
+    this.moveArtillery();
+    this.casStep();
+    this.artyStep();
     this.checkOver();
     this.events();
+  }
+
+  /** The enemy's rocket artillery battalion moves with the front: it sets up a few kilometres behind its staging town. */
+  private moveArtillery(): void {
+    const g = this.w.ground;
+    const f = this.c.s.front;
+    if (!g || !f) return;
+    const red = f.towns.map((t, i) => (t.ours ? -1 : i)).filter((i) => i >= 0);
+    const at = red.length ? g.at(g.townS[red[0]] + 8000, 3000) : g.at(g.redDepot, 3000);
+    for (const b of this.c.theatre) {
+      if (b.kind !== 'arty' || b.lost || Math.hypot(b.x - at.x, b.y - at.y) < 500) continue;
+      b.x = Math.round(at.x);
+      b.y = Math.round(at.y);
+      // A new firing position: it has to give itself away again.
+      b.known = false;
+      this.w.layoutSeq++;
+    }
   }
 
   /** Raise the moments worth stopping the clock for: a fresh intel warning, a unit newly compromised. */
@@ -599,7 +745,7 @@ export class War {
       const b = g.at(sAt + 8000);
       return (Math.atan2(b.x - a.x, b.y - a.y) * 180) / Math.PI;
     };
-    const ours = g.bats.filter((b) => b.side === 'blue' && b.alive && b.site);
+    const ours = g.bats.filter((b) => b.side === 'blue' && b.alive && b.site && !b.broken);
     // The most forward of ours is the one they go for.
     const prey = ours.sort((a, b) => b.s - a.s)[0];
     if (prey && rng.chance(0.65)) {
@@ -827,6 +973,7 @@ export class War {
       const b = g.add('blue', kind, g.blueDepot);
       const p = g.place(b);
       b.site = w.addBattalionSite(b.name, p.x, p.y, 100);
+      b.vuln = b.site.vuln;
       g.add('red', s.day % 2 ? 'mech' : 'armour', g.redDepot);
       w.log(`${b.name} has reached our depot by the airbase. Intel reports a fresh enemy battalion at its depot too.`, 'info');
     }

@@ -305,6 +305,23 @@ export class Tbm extends Entity {
   }
 }
 
+/**
+ * Guided artillery rocket from a multiple launcher: a short ballistic arc from the launcher to a fixed position,
+ * a minute and a half of flight that our radars can track and guns can shoot down (C-RAM). Treated as a small
+ * ballistic missile by the tracker and the defence.
+ */
+export class Rocket extends Tbm {
+  constructor(name: string, from: V3, impact: V3, targetName: string) {
+    const d = Math.hypot(impact.x - from.x, impact.y - from.y);
+    const tof = 30 + d / 1000;
+    const dir = norm(v3(impact.x - from.x, impact.y - from.y, 0));
+    const vz = (impact.z - from.z + 0.5 * G * tof * tof) / tof;
+    super(name, from, v3((dir.x * d) / tof, (dir.y * d) / tof, vz), impact, targetName);
+    this.rcs = 0.02;
+    this.warhead = { lethalR: 45, dmg: 30 };
+  }
+}
+
 /** Anti-radiation missile: homes on an emitter; flies to a memorised position if the emitter goes silent. */
 export class Arm extends Entity {
   readonly kind = 'arm' as const;

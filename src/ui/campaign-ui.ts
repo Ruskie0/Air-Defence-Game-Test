@@ -476,6 +476,31 @@ export class CampaignUi {
       });
     }
     out.push(`<circle cx="${sx(0)}" cy="${sy(0)}" r="4" fill="#46d18a"/><text x="${sx(0) + 6}" y="${sy(0) - 5}" fill="#46d18a" font-size="9">Airbase</text>`);
+    // The ground war: the front line across the road, every battalion with its strength, and capture bars on towns changing hands.
+    const g = this.war?.w.ground;
+    if (g) {
+      const fb = g.frontS('blue');
+      const fr = g.frontS('red');
+      const mid = (fb + Math.min(fr, g.length)) / 2;
+      const a = g.at(mid - 200);
+      const b = g.at(mid + 200);
+      const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const nx = (-(b.y - a.y) / L) * 6000;
+      const ny = ((b.x - a.x) / L) * 6000;
+      const m = g.at(mid);
+      out.push(`<line x1="${sx(m.x - nx).toFixed(1)}" y1="${sy(m.y - ny).toFixed(1)}" x2="${sx(m.x + nx).toFixed(1)}" y2="${sy(m.y + ny).toFixed(1)}" stroke="#ffd84d" stroke-width="2" stroke-dasharray="4 2"><title>Front line</title></line>`);
+      for (const bn of g.bats.filter((x) => x.alive)) {
+        const x = sx(bn.pos.x);
+        const y = sy(bn.pos.y);
+        const col = bn.side === 'blue' ? '#4da6ff' : '#ff6b5b';
+        out.push(`<g><rect x="${(x - 4).toFixed(1)}" y="${(y - 3).toFixed(1)}" width="8" height="6" fill="${col}" stroke="#000" stroke-width="0.5"><title>${esc(bn.name)}: ${Math.round(bn.strength)}%${bn.foe ? ', fighting' : ''}</title></rect><rect x="${(x - 4).toFixed(1)}" y="${(y + 4).toFixed(1)}" width="${(8 * bn.strength / 100).toFixed(1)}" height="1.5" fill="${col}"/></g>`);
+      }
+      g.capture.forEach((cap, i) => {
+        if (cap <= 0) return;
+        const t = f!.towns[i];
+        out.push(`<rect x="${(sx(t.x) - 10).toFixed(1)}" y="${(sy(t.y) - 12).toFixed(1)}" width="20" height="3" fill="#3a3a2a"/><rect x="${(sx(t.x) - 10).toFixed(1)}" y="${(sy(t.y) - 12).toFixed(1)}" width="${(20 * cap).toFixed(1)}" height="3" fill="#ffd84d"><title>${esc(t.name)} changing hands: ${Math.round(cap * 100)}%</title></rect>`);
+      });
+    }
     // Deliveries on their way: a faint marker where each will stand and when it is due at the depot.
     for (const g of this.war?.w.incoming ?? []) {
       const x = sx(g.x).toFixed(1);
@@ -613,13 +638,13 @@ export class CampaignUi {
     const ours = g.bats.filter((b) => b.side === 'blue' && b.alive).map((b) => {
       const btn = (o: Order, label: string, tip: string): string => `<button data-cui="bnorder" data-id="${b.id}" data-o="${o}" class="${b.order === o ? 'on' : ''}" title="${tip}">${label}</button>`;
       return `<div class="sys"><div class="sys-h"><b>${esc(b.name)}</b> ${state(b)} <span class="dim">${esc(where(b))}</span></div>
-        <div class="sys-b">${bar(b.strength, b.strength >= 50 ? '#78ffaa' : b.strength >= GROUND.breakAt ? '#ffd84d' : '#ff4d4d')} ${Math.round(b.strength)}% ${b.kind === 'armour' ? 'armour' : 'mech infantry'}
+        <div class="sys-b">${bar(b.strength, b.strength >= 50 ? '#78ffaa' : b.strength >= GROUND.breakAt ? '#ffd84d' : '#ff4d4d')} ${Math.round(b.strength)}% ${b.kind === 'armour' ? 'armour' : b.kind === 'arty' ? 'rocket artillery: shells enemy battalions within 60 km every 20 minutes' : 'mech infantry'}
         ${btn('advance', 'Advance', 'Drive up the road to the objective and fight anything in the way')} ${btn('hold', 'Hold', 'Stop where it is and dig in (a quarter less loss in a fight)')} ${btn('withdraw', 'Withdraw', 'Pull back to the nearest town of ours behind it, or the depot, and refit')}</div></div>`;
     }).join('') || '<p class="dim">No battalions left. A new one reaches the depot every morning.</p>';
     const theirs = g.bats.filter((b) => b.side === 'red' && b.alive).map((b) => {
-      const err = war.bnStrikeError(b.id);
+      const err = war.casError(b.id);
       return `<div class="sys located"><div class="sys-h"><b>${esc(b.name)}</b> ${state(b)} <span class="dim">${esc(where(b))}</span></div>
-        <div class="sys-b">${bar(b.strength, '#ff6b5b')} ${Math.round(b.strength)}% <button data-cui="bnstrike" data-id="${b.id}" ${err ? 'disabled' : ''} title="${esc(err ?? `Deep strike: ${Math.round(GROUND.strike.chance * 100)}% chance to knock ${GROUND.strike.hit}% off it. Best while it forms up.`)}">Strike ${money(GROUND.strike.costM)}</button></div></div>`;
+        <div class="sys-b">${bar(b.strength, '#ff6b5b')} ${Math.round(b.strength)}% <button data-cui="bncas" data-id="${b.id}" ${err ? 'disabled' : ''} title="${esc(err ?? 'Close air support: a CAP pair flies through enemy SAMs and fighters, knocks 15-25% off the battalion, and comes home to rearm. The air over the base has a gap meanwhile.')}">CAS</button></div></div>`;
     }).join('');
     const attack = g.enemyGoal !== undefined ? `<p class="warn"><b>Enemy attack on ${esc(f.towns[g.enemyGoal].name)}.</b> Get our battalions into the town (holding it halves their losses) and keep the air over them clear: enemy helicopters, drones and jets hunt battalions outside our air defence.</p>` : '';
     return `<h3>The ground war</h3>
@@ -964,8 +989,8 @@ export class CampaignUi {
         if (err) this.note = err;
         break;
       }
-      case 'bnstrike':
-        if (this.war) this.note = this.war.strikeBattalion(Number(d.id));
+      case 'bncas':
+        if (this.war) this.note = this.war.cas(Number(d.id));
         break;
       case 'offensive':
         if (this.war || !c.launchOffensive()) return;

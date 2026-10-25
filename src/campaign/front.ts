@@ -18,7 +18,15 @@ export interface Town {
   hp: number;
   /** The last town is the enemy's forward airfield: taking it wins the campaign. */
   airfield?: boolean;
+  /** Clock minute we took it (towns held 24 h are dug in). The starting town is dug in from the start. */
+  heldSince?: number;
 }
+
+/** A town held this long (min) is dug in: armour needs to knock it below DUG_IN_HP to take it, not ARMOUR.takeHp. */
+export const DUG_IN_MIN = 24 * 60;
+export const DUG_IN_HP = 40;
+/** Whether a town of ours is dug in at clock minute `now`. */
+export const dugIn = (t: Town, now: number): boolean => t.ours && t.heldSince !== undefined && now - t.heldSince >= DUG_IN_MIN;
 
 export interface FrontState {
   towns: Town[];
@@ -72,6 +80,7 @@ export function makeTowns(t: Terrain, seed: number): Town[] {
   });
   if (towns.length) {
     towns[0].ours = true;
+    towns[0].heldSince = -DUG_IN_MIN;
     const last = towns[towns.length - 1];
     if (towns.length >= 3) {
       last.airfield = true;

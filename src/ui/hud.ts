@@ -824,7 +824,7 @@ export class Hud {
         : arm.state === 'assaulting' ? '<span class="st dead blink">ASSAULTING</span>'
         : arm.state === 'moving' ? `<span class="st jam">${(arm.distM / 1000).toFixed(1)} KM OUT</span>` : '<span class="st">MASSING</span>';
       rows.push(`<h3>Enemy attack on ${esc(arm.target)}</h3><div class="sys located"><div class="sys-h"><b>Enemy armour</b> ${st} <button data-act="flyto" data-x="${Math.round(arm.pos.x)}" data-y="${Math.round(arm.pos.y)}" title="Fly the camera to the enemy column">Fly to</button></div>
-        <div class="sys-b">${esc(arm.target)} <span class="heat" style="width:80px"><i style="width:${hp}%;background:${hp >= ARMOUR.takeHp ? '#ffd84d' : '#ff4d4d'}"></i></span> ${hp}% <span class="dim">(falls if below ${ARMOUR.takeHp}% while it is assaulted)</span></div></div>`);
+        <div class="sys-b">${esc(arm.target)} <span class="heat" style="width:80px"><i style="width:${hp}%;background:${hp >= arm.takeHp ? '#ffd84d' : '#ff4d4d'}"></i></span> ${hp}% <span class="dim">(${arm.takeHp < ARMOUR.takeHp ? '<b>Dug in</b>: ' : ''}falls if below ${arm.takeHp}% while it is assaulted)</span></div></div>`);
     }
     if (this.campaign?.objectives.length) {
       rows.push('<h3>Objectives</h3>');

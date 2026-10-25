@@ -2,7 +2,7 @@ import type { HurtBy } from '../sim/world';
 import { dismissTip, tip } from './onboard';
 import { loadBest } from '../campaign/laststand';
 import { MEDALS, MedalId, earnedMedals } from '../campaign/medals';
-import { ARMOUR_STRIKE, CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty, REPAIR_CREW } from '../campaign/campaign';
+import { ARMOUR_BDE, ARMOUR_STRIKE, CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty, REPAIR_CREW } from '../campaign/campaign';
 import { ARMOUR } from '../sim/enemyarmour';
 import { DELIVERY_H, PULSES, hhmm, stamp } from '../campaign/clock';
 import type { View3D } from '../render/view3d';
@@ -16,7 +16,7 @@ import { objectiveDesc, objectiveName } from '../campaign/objectives';
 import { EVENTS } from '../campaign/events';
 import { DEEP_STRIKES, DeepStrikeId, deepStrike, deepStrikeError, strikeTargets } from '../campaign/deepstrike';
 import { type Asset, BASE_DEFS, assetCount, stockText } from '../sim/theatre';
-import { ASSAULT_HOLD, OFFENSIVE_COST_M, TOWN_THREAT_CUT, TOWN_ZONE_M, nextObjective } from '../campaign/front';
+import { ASSAULT_HOLD, OFFENSIVE_COST_M, TOWN_THREAT_CUT, TOWN_ZONE_M, dugIn, nextObjective } from '../campaign/front';
 
 const SAVE_KEY = 'air-defence-campaign-v1';
 
@@ -454,6 +454,7 @@ export class CampaignUi {
     return `<h3>Enemy order of battle <span class="dim">as far as intel knows</span></h3>${tip('oob', 'data-cui')}
       <div class="enemy-oob">${rows || '<div class="dim">Nothing located yet.</div>'}</div>
       ${hidden.length ? `<p class="dim">Not yet located: ${hidden.length} installation${hidden.length > 1 ? 's' : ''} (${esc(kinds.join(', '))}). Each one shows up once it launches.</p>` : ''}
+      ${c.s.front ? `<div class="eb"><span><b>Armour brigade</b> <span class="dim">up the road</span><br><small>${Math.floor(c.armourStock)} battalion${Math.floor(c.armourStock) === 1 ? '' : 's'}: ${c.armourStock >= ARMOUR_BDE.perAttack ? `enough for ${Math.floor(c.armourStock / ARMOUR_BDE.perAttack)} attack${c.armourStock >= 2 * ARMOUR_BDE.perAttack ? 's' : ''}` : 'too weak to attack until reinforced'}. Beaten-off attacks and armour strikes destroy battalions.</small></span><span class="bar"><i style="width:${Math.min(100, (100 * c.armourStock) / ARMOUR_BDE.start)}%;background:#ff6b5b"></i></span></div>` : ''}
       <p class="dim">Destroyed so far: ${lost.length ? esc(lost.map(([a, n]) => assetCount(a, Math.floor(n))).join(', ')) : 'nothing yet'}. What the enemy loses stays lost; it gets a trickle of reinforcements each night.</p>`;
   }
 
@@ -467,7 +468,7 @@ export class CampaignUi {
       .map((t, i) => {
         const km = (Math.hypot(t.x, t.y) / 1000).toFixed(0);
         const cls = t.ours ? 'good' : i === f.offensive ? 'warn' : 'dim';
-        const st = t.ours ? `ours, ${t.hp}%` : i === f.offensive ? 'offensive on' : i === next ? 'next objective' : 'enemy held';
+        const st = t.ours ? `ours, ${t.hp}%${dugIn(t, c.clock) ? ', <b>dug in</b>' : ''}` : i === f.offensive ? 'offensive on' : i === next ? 'next objective' : 'enemy held';
         return `<li class="${cls}"><b>${esc(t.name)}</b> ${km} km · ${st} · +${money(t.incomeM)}/day${t.airfield ? ' · <b>take it to win</b>' : ''}</li>`;
       })
       .join('');

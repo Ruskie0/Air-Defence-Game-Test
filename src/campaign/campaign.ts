@@ -20,7 +20,7 @@ import { DAY_START_MIN, DELIVERY_H, PULSES, PulseSlot, PulseType, REPAIR_PER_H, 
 import { cbStrikes } from '../sim/exposure';
 import { ARMOUR } from '../sim/enemyarmour';
 import type { Sighting } from '../sim/entities';
-import { ASSAULT_HOLD, FrontState, OFFENSIVE_COST_M, TAKEN_HP, TOWN_THREAT_CUT, assaultSpot, columnStart, deployZones, frontTown, newFront, nextObjective, townIncome, townsHeld } from './front';
+import { ASSAULT_HOLD, DUG_IN_HP, FrontState, dugIn, OFFENSIVE_COST_M, TAKEN_HP, TOWN_THREAT_CUT, assaultSpot, columnStart, deployZones, frontTown, newFront, nextObjective, townIncome, townsHeld } from './front';
 import { AIRCRAFT, type Asset, type EnemyBase, TALLY_ASSET, assetCount, avail, draw, fallBack, makeTheatre, overrun, reinforce } from '../sim/theatre';
 import { Rng } from '../sim/rng';
 import { DeployZone, inZones } from '../sim/deploy';
@@ -34,6 +34,9 @@ export function setDayThreat(v: number): void {
 }
 
 /** A raid that loses at least this share of its aircraft shakes the enemy: its next 12 h of raids are smaller. */
+/** The enemy armour brigade, a theatre asset: battalions at the start, per attack, reinforcement a night, and losses. */
+export const ARMOUR_BDE = { start: 6, max: 8, perAttack: 2, perNight: 0.5, lostRepulsed: 1, lostStruck: 2 };
+
 export const SHAKEN = { lossShare: 0.4, minFlown: 4, hours: 12, maxCut: 0.35 };
 /** Below this airbase health an emergency grant arrives straight after the raid (once a day), and crews repair the airbase twice as fast. */
 export const EMERGENCY = { belowHp: 40, perHpM: 3, repairX: 2 };
@@ -167,6 +170,8 @@ export interface CampaignState {
   /** Day the last offensive went in (one a day). */
   offensiveDay?: number;
   /** The enemy's own ground offensive today: on which of our towns, from which of theirs, in which operation. */
+  /** The enemy armour brigade: battalions left (finite, reinforced slowly). Every attack needs ARMOUR_BDE.perAttack. */
+  armourStock?: number;
   enemyPush?: { pulse: number; town: number; from: number; struck?: boolean; broken?: boolean } | null;
   /** How the war ended on the clock: a ceasefire after the last day, graded by the ground we hold. */
   grade?: 'Bronze' | 'Silver' | 'Gold';
@@ -407,9 +412,21 @@ export class Campaign {
     const ft = f && front ? f.towns.indexOf(front) : -1;
     const rng = new Rng(this.s.seed * 7307 + this.s.day * 211);
     const strikes = this.s.pulses.map((p, i) => (p.type === 'strike' ? i : -1)).filter((i) => i >= 0);
-    if (f && ft >= 0 && ft + 1 < f.towns.length && this.s.day >= 3 && strikes.length && rng.chance(Math.min(0.6, 0.2 + 0.04 * this.s.day))) {
+    if (f && ft >= 0 && ft + 1 < f.towns.length && this.s.day >= 3 && strikes.length && this.armourStock >= ARMOUR_BDE.perAttack && rng.chance(Math.min(0.6, 0.2 + 0.04 * this.s.day))) {
       this.s.enemyPush = { pulse: strikes[rng.int(0, strikes.length - 1)], town: ft, from: ft + 1 };
     }
+  }
+
+  /** Battalions the enemy armour brigade has left. */
+  get armourStock(): number {
+    return this.s.armourStock ?? ARMOUR_BDE.start;
+  }
+
+  /** Take battalions off the brigade; returns how many were lost. */
+  private loseArmour(n: number): number {
+    const k = Math.min(n, this.armourStock);
+    this.s.armourStock = this.armourStock - k;
+    return k;
   }
 
   /** The enemy's ground offensive if it goes in with the coming raid (and has not been broken up). */
@@ -439,9 +456,10 @@ export class Campaign {
     const town = this.s.front!.towns[p.town].name;
     if (ok) {
       p.broken = true;
+      const k = this.loseArmour(ARMOUR_BDE.lostStruck);
       refundBases(this.s.plan.filter((x) => x.push), this.theatre);
       this.s.plan = this.s.plan.filter((x) => !x.push);
-      return `Our strike caught the armour massing for ${town}: the attack has been broken up.`;
+      return `Our strike caught the armour massing for ${town}: the attack has been broken up and ${k} battalion${k === 1 ? '' : 's'} destroyed (${this.armourStock} left).`;
     }
     return `Our strike on the armour massing for ${town} missed. The attack is still coming.`;
   }
@@ -992,7 +1010,8 @@ export class Campaign {
       enemyAssault: (() => {
         const p = withRaids ? this.pushNow : null;
         if (!p || !f) return undefined;
-        return { target: f.towns[p.town].name, from: { x: f.towns[p.from].x, y: f.towns[p.from].y }, to: { x: f.towns[p.town].x, y: f.towns[p.town].y } };
+        const tn = f.towns[p.town];
+        return { target: tn.name, from: { x: f.towns[p.from].x, y: f.towns[p.from].y }, to: { x: tn.x, y: tn.y }, takeHp: dugIn(tn, this.clock) ? DUG_IN_HP : ARMOUR.takeHp };
       })(),
       assault: off ? { ...assaultSpot(this.terrain, f!, f!.offensive!), target: off.name, from: columnStart(this.terrain, f!, f!.offensive!) } : undefined,
       zones: this.zones,
@@ -1147,7 +1166,10 @@ export class Campaign {
         if (w.enemyArmour.endOfRaid(w) === 'taken') {
           if (tn) tn.hp = 0;
           frontLines.push(`Enemy armour overran ${w.enemyArmour.target} after the raids knocked it below ${ARMOUR.takeHp}%.`);
-        } else frontLines.push(`The enemy attack on ${w.enemyArmour.target} was beaten off: the town held${tn ? ` at ${tn.hp}%` : ''}.`);
+        } else {
+          const k = this.loseArmour(ARMOUR_BDE.lostRepulsed);
+          frontLines.push(`The enemy attack on ${w.enemyArmour.target} was beaten off: the town held${tn ? ` at ${tn.hp}%` : ''}, and the enemy lost ${k} armoured battalion${k === 1 ? '' : 's'} (${this.armourStock} left).`);
+        }
         s.enemyPush = null;
       }
       const fallen = f.towns.findIndex((tn) => tn.ours && tn.hp <= 0);
@@ -1156,6 +1178,7 @@ export class Campaign {
           if (!tn.ours) continue;
           tn.ours = false;
           tn.hp = 100;
+          delete tn.heldSince;
           frontLines.push(`${tn.name} has fallen to the enemy. We lose its income and the ground round it.`);
         }
       }
@@ -1167,6 +1190,7 @@ export class Campaign {
         if (hp >= ASSAULT_HOLD && arrived && (fallen < 0 || fallen > f.offensive)) {
           tn.ours = true;
           tn.hp = TAKEN_HP;
+          tn.heldSince = end;
           frontLines.push(`The assault force held (${hp}%) and took ${tn.name}: +$${tn.incomeM}M a day, and units can now deploy round it.`);
           const before = th.map((b) => ({ ...b.stock }));
           enemyLines.push(...overrun(th, tn.name, f.towns.find((x) => !x.ours)));
@@ -1351,6 +1375,7 @@ export class Campaign {
       } else s.downMornings = 0;
       s.deployment.units = s.deployment.units.filter((u) => !u.loan);
       reinforce(this.theatre, this.diff.threat);
+      s.armourStock = Math.min(ARMOUR_BDE.max, this.armourStock + ARMOUR_BDE.perNight);
       this.replan();
       if (s.autoRestock) report.restockM = this.restock();
     }

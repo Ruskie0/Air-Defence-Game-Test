@@ -84,7 +84,7 @@ export interface WorldOptions {
   /** Today's assault force: its start line, the town it goes for, and where its column sets off from (it starts on its start line when omitted). */
   assault?: { x: number; y: number; target: string; from?: { x: number; y: number } };
   /** The enemy's ground offensive on one of our towns, if one is on: the town, and the enemy town it comes from. */
-  enemyAssault?: { target: string; from: { x: number; y: number }; to: { x: number; y: number } };
+  enemyAssault?: { target: string; from: { x: number; y: number }; to: { x: number; y: number }; takeHp?: number };
   /** Where ground units may stand (the sandbox's 60 km circle when omitted). */
   zones?: DeployZone[];
   /** The enemy's installations, which every enemy weapon launches from (a fresh default theatre when omitted). */
@@ -280,7 +280,7 @@ export class World {
       this.startHp.set(s.name, s.hp);
     }
     if (this.column) this.spawn(this.column);
-    if (o.enemyAssault) this.enemyArmour = new EnemyArmour(o.enemyAssault.target, o.enemyAssault.from, o.enemyAssault.to);
+    if (o.enemyAssault) this.enemyArmour = new EnemyArmour(o.enemyAssault.target, o.enemyAssault.from, o.enemyAssault.to, o.enemyAssault.takeHp);
     this.redSupport.denied = !!o.awacsDenied;
     this.redSupport.launch(this, o.counterBattery ?? 0);
     sweepCap(this);

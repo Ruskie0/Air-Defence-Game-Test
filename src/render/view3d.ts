@@ -14,6 +14,7 @@ import { V3, clamp, polar } from '../sim/math';
 import type { Radar } from '../sim/radar';
 import type { Ciws } from '../sim/ciws';
 import type { Site } from '../sim/sites';
+import type { Ident, Track } from '../sim/tracker';
 import type { EnemyBase } from '../sim/theatre';
 import { MAP_SEED, type World } from '../sim/world';
 import { IDENT_COLOR } from '../ui/colors';
@@ -69,6 +70,16 @@ function markerTex(color: string, shape: 'circle' | 'diamond' | 'square' | 'dot'
     else g.stroke();
   });
 }
+
+/** Track symbols by identity: what the radar picture says, not what is really there. */
+const TRACK_MARKERS: Record<Ident, THREE.CanvasTexture> = {
+  HOS: markerTex(IDENT_COLOR.HOS, 'diamond'),
+  SUS: markerTex(IDENT_COLOR.SUS, 'diamond'),
+  PEND: markerTex(IDENT_COLOR.PEND, 'square'),
+  UNK: markerTex(IDENT_COLOR.UNK, 'square'),
+  NEU: markerTex(IDENT_COLOR.NEU, 'square'),
+  FRD: markerTex(IDENT_COLOR.FRD, 'circle'),
+};
 
 const MARKERS = {
   red: markerTex('#ff5050', 'diamond'),
@@ -197,7 +208,7 @@ export class View3D {
   onGroundHover: ((p: V3 | null) => void) | null = null;
   private readonly entityObjs = new Map<number, EntityObj>();
   private readonly missileObjs = new Map<number, { body: THREE.Object3D; trail: TrailObj }>();
-  private readonly trackLabels = new Map<number, { obj: CSS2DObject; el: HTMLDivElement; last: string }>();
+  private readonly trackLabels = new Map<number, { obj: CSS2DObject; el: HTMLDivElement; last: string; sym: THREE.Sprite; ident: Ident }>();
   private readonly siteObjs: { site: Site; root: THREE.Group; mats: { color: THREE.Color }[]; label: CSS2DObject; dead: boolean }[] = [];
   /** Enemy installations our intel has located: placeholder models and labels, rebuilt when that set changes. */
   private readonly baseObjs: { base: EnemyBase; site: Site | null; root: THREE.Group; label: CSS2DObject; mats: { color: THREE.Color }[]; dead: boolean }[] = [];
@@ -492,7 +503,7 @@ export class View3D {
     this.fx.reset();
     this.wrecks.reset();
     for (const l of this.trackLabels.values()) {
-      this.scene.remove(l.obj);
+      this.scene.remove(l.obj, l.sym);
       l.el.remove();
     }
     this.trackLabels.clear();
@@ -938,10 +949,13 @@ export class View3D {
     const root = new THREE.Group();
     const body = airModel(modelKind(e), e.munition);
     root.add(body);
+    // Only our own aircraft and missiles carry a symbol on the entity itself; everything else is marked where
+    // its radar track is (see syncTracks), so the picture never gives away more than the sensors know.
     const tex = e.side === 'red' ? MARKERS.red : e.side === 'blue' ? MARKERS.blue : MARKERS.neutral;
     const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, sizeAttenuation: false }));
     marker.scale.setScalar(e.munition ? 0.012 : 0.018);
     marker.renderOrder = 6;
+    marker.visible = e.side === 'blue';
     root.add(marker);
     const trail = e.kind === 'tbm' || e.kind === 'arm' ? makeTrail(e.kind === 'tbm' ? 0xffa060 : 0xff7040, 240, 0.8) : null;
     if (trail) this.scene.add(trail.line);
@@ -1018,6 +1032,7 @@ export class View3D {
       const o = this.entityObj(e);
       const visible = this.isVisible(e);
       o.root.visible = visible;
+      o.marker.visible = e.side === 'blue' || this.showTruth;
       toThree(e.pos, o.root.position);
       // Grow with distance so aircraft span about 1.2 degrees and munitions 0.8 on screen, never smaller than real.
       const d = camPos.distanceTo(o.root.position);
@@ -1113,11 +1128,22 @@ export class View3D {
         const obj = new CSS2DObject(el);
         obj.center.set(-0.1, 0.5);
         this.scene.add(obj);
-        l = { obj, el, last: '' };
+        const sym = new THREE.Sprite(new THREE.SpriteMaterial({ map: TRACK_MARKERS[tr.ident], depthTest: false, transparent: true, sizeAttenuation: false }));
+        sym.scale.setScalar(0.016);
+        sym.renderOrder = 6;
+        this.scene.add(sym);
+        l = { obj, el, last: '', sym, ident: tr.ident };
         this.trackLabels.set(tr.id, l);
       }
       const p = tr.predict(w.t);
       toThree(p, l.obj.position);
+      l.sym.position.copy(l.obj.position);
+      if (l.ident !== tr.ident) {
+        l.ident = tr.ident;
+        l.sym.material.map = TRACK_MARKERS[tr.ident];
+      }
+      // A track the sensors have lost for a while fades out rather than sitting there looking firm.
+      l.sym.material.opacity = clamp(1 - (w.t - tr.t - 4) / 10, 0.3, 1);
       const text = `${tr.label} ${tr.ident} ${tr.cls}`;
       const key = `${text}|${this.selected === tr.id}`;
       if (key !== l.last) {
@@ -1141,6 +1167,8 @@ export class View3D {
     for (const [id, l] of this.trackLabels) {
       if (seen.has(id)) continue;
       this.scene.remove(l.obj);
+      this.scene.remove(l.sym);
+      l.sym.material.dispose();
       l.el.remove();
       this.trackLabels.delete(id);
     }
@@ -1206,7 +1234,29 @@ export class View3D {
 
   /** What the player can see of an entity: own side, recent detections, or everything with "show undetected". */
   isVisible(e: Entity): boolean {
-    return (e.airborne || e.kind === 'convoy' || e.kind === 'column') && (this.showTruth || e.side === 'blue' || this.world.t - e.lastDetected < 12);
+    if (!(e.airborne || e.kind === 'convoy' || e.kind === 'column')) return false;
+    if (this.showTruth || e.side === 'blue' || e.kind === 'column' || e.kind === 'convoy') return true;
+    return this.solidTrack(e) !== null;
+  }
+
+  /** A firm, identified track on this entity: then (and only then) its model is drawn. An unknown or pending
+   *  track stays a symbol, so the model never tells the player what the sensors have not worked out. */
+  private solidTrack(e: Entity): Track | null {
+    const w = this.world;
+    if (w.t - e.lastDetected > 6) return null;
+    let best: Track | null = null;
+    let bd = Infinity;
+    for (const tr of w.tracker.tracks) {
+      if (!tr.confirmed || tr.dropped || w.t - tr.t > 4 || tr.sigma > 400) continue;
+      if (tr.ident === 'PEND' || tr.ident === 'UNK') continue;
+      const p = tr.predict(w.t);
+      const d = Math.hypot(p.x - e.pos.x, p.y - e.pos.y, p.z - e.pos.z);
+      if (d < Math.max(500, 3 * tr.sigma) && d < bd) {
+        bd = d;
+        best = tr;
+      }
+    }
+    return best;
   }
 
   /** Clear trees and houses around every site whenever the set of sites changes, so nothing is buried in a forest. */

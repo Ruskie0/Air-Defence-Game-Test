@@ -2,7 +2,7 @@ import type { HurtBy } from '../sim/world';
 import { dismissTip, tip } from './onboard';
 import { loadBest } from '../campaign/laststand';
 import { MEDALS, MedalId, earnedMedals } from '../campaign/medals';
-import { ARMOUR_BDE, ARMOUR_STRIKE, CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty, REPAIR_CREW } from '../campaign/campaign';
+import { ARMOUR_BDE, ARMOUR_STRIKE, FIELD_DRONE_M, CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty, REPAIR_CREW } from '../campaign/campaign';
 import { ARMOUR } from '../sim/enemyarmour';
 import { DELIVERY_H, PULSES, hhmm, stamp } from '../campaign/clock';
 import type { View3D } from '../render/view3d';
@@ -500,10 +500,11 @@ export class CampaignUi {
     const waves = c.fieldArmourWaves();
     const names: Record<string, string> = { strike: 'strike jets', sead: 'SEAD jets', helo: 'attack helicopters', drones: 'drones', cruise: 'cruise missiles' };
     const parts = Object.entries(per).map(([k, n]) => `${n} ${names[k] ?? k}`);
+    const teams = force.filter((x) => x.kind === 'drones').map((x) => x.base.known ? x.base.name.toLowerCase() : 'an unlocated drone team');
     parts.push(waves ? `${waves} armour wave${waves > 1 ? 's' : ''} (−${ARMOUR_BDE.counterHp}% each to the force)` : `no armour (the brigade needs ${2 * ARMOUR_BDE.perAttack} battalions to spare any)`);
     const field = c.theatre.find((b) => b.kind === 'airfield' && !b.lost);
     const down = field ? c.runwayDown(field.id) : null;
-    return `<div class="event"><h3>The airfield counter-attack</h3>${down ? `<p class="good"><b>Runway cratered until ${hhmm(down)}</b>: no jets or SEAD can fly from it. Assault now and only helicopters, drones, missiles and armour meet the force.</p>` : '<p class="dim">A deep strike that hits the airfield craters its runway for 24 h: assault inside that window and its jets stay on the ground.</p>'}<p>If we assault ${esc(f.towns[next].name)} now, the enemy throws everything it has ready at the assault force: <b>${esc(parts.join(', ') || 'nothing')}</b>. Deep strikes on the airfield and FARP, AWACS hunts and beating off its armour wear this down first.</p></div>`;
+    return `<div class="event"><h3>The airfield counter-attack</h3>${down ? `<p class="good"><b>Runway cratered until ${hhmm(down)}</b>: no jets or SEAD can fly from it. Assault now and only helicopters, drones, missiles and armour meet the force.</p>` : '<p class="dim">A deep strike that hits the airfield craters its runway for 24 h: assault inside that window and its jets stay on the ground.</p>'}<p>If we assault ${esc(f.towns[next].name)} now, the enemy throws everything it has ready at the assault force: <b>${esc(parts.join(', ') || 'nothing')}</b>. ${teams.length ? ` Drones come from ${esc(teams.join(' and '))} (only teams within ${FIELD_DRONE_M / 1000} km of the airfield join in).` : ` No drone team is within ${FIELD_DRONE_M / 1000} km of the airfield.`} Deep strikes on the airfield and FARP, AWACS hunts and beating off its armour wear this down first.</p></div>`;
   }
 
   /** The enemy's own attack on one of our towns: when it is coming, and the chance to break it up first. */

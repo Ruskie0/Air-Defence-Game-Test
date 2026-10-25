@@ -37,6 +37,9 @@ export function setDayThreat(v: number): void {
 /** The enemy armour brigade, a theatre asset: battalions at the start, per attack, reinforcement a night, and losses. */
 export const ARMOUR_BDE = { start: 6, max: 8, perAttack: 2, perNight: 0.5, lostRepulsed: 1, lostStruck: 2, counterHp: 15 };
 
+/** Drone teams within this distance of the enemy airfield (m) join its defence against an assault. */
+export const FIELD_DRONE_M = 40000;
+
 export const SHAKEN = { lossShare: 0.4, minFlown: 4, hours: 12, maxCut: 0.35 };
 /** Below this airbase health an emergency grant arrives straight after the raid (once a day), and crews repair the airbase twice as fast. */
 export const EMERGENCY = { belowHp: 40, perHpM: 3, repairX: 2 };
@@ -860,7 +863,10 @@ export class Campaign {
       if (b.kind === 'farp' && free(b, 'helo')) out.push({ kind: 'helo', base: b, n: free(b, 'helo') });
       if (b.kind === 'glcm' && free(b, 'cruise')) out.push({ kind: 'cruise', base: b, n: Math.min(6, free(b, 'cruise')) });
     }
-    for (const b of live.filter((x) => x.kind === 'drones' && free(x, 'drone')).sort((x, y) => dist(x) - dist(y)).slice(0, 2)) out.push({ kind: 'drones', base: b, n: Math.min(12, free(b, 'drone')) });
+    // Only drone teams close enough to the airfield join its defence.
+    const af = live.find((b) => b.kind === 'airfield');
+    const near = (b: EnemyBase): boolean => !af || Math.hypot(b.x - af.x, b.y - af.y) <= FIELD_DRONE_M;
+    for (const b of live.filter((x) => x.kind === 'drones' && free(x, 'drone') && near(x)).sort((x, y) => dist(x) - dist(y)).slice(0, 2)) out.push({ kind: 'drones', base: b, n: Math.min(12, free(b, 'drone')) });
     return out;
   }
 

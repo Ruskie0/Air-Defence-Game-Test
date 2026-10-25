@@ -49,7 +49,7 @@ export function commanderShop(c: Campaign): string[] {
   const window = !!field && c.runwayDown(field.id) !== null;
   const spare = c.s.money - OFFENSIVE_COST_M >= (pressing || window ? 0 : 100);
   // One battery and a SHORAD unit will do for a push inside the window.
-  const coverOk = covered || (window && count('MR') + count('LR') >= 1 && count('SH') >= 1);
+  const coverOk = covered || (window && count('MR') + count('LR') + count('SH') >= 1);
   if (window && !(coverOk && spare)) bought.push(`window unused (${coverOk ? '' : 'no cover '}${spare ? '' : 'no money '}${c.offensiveError() ?? ''})`);
   if (f && coverOk && spare && ready && !flag('--no-offensive') && c.launchOffensive()) {
     bought.push(`offensive on ${f.towns[f.offensive!].name}`);

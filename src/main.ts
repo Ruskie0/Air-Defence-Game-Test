@@ -68,6 +68,7 @@ const cui = new CampaignUi({
     w.scenario.doneMsg = 'All reported packages are in and the airspace is clear. End the raid when you are ready.';
     hud.campaign = { day: c.s.day, days: CAMPAIGN_DAYS, objectives: c.s.objectives ?? [], clock0: c.clock, onEndDay: () => {
         running = false;
+        world.abandonRaid();
         cui.endDay(world);
       } };
     show(w);

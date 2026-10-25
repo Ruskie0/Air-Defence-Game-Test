@@ -129,7 +129,7 @@ export class Scenario {
     }
     const last = this.raids.length ? Math.max(...this.raids.map((r) => r.t)) : 0;
     if (!this.done && this.raids.every((r) => r.launched) && w.t > last + 60) {
-      const threats = w.pendingCount > 0 || w.entities.some((e) => e.alive && e.side === 'red') || (!!w.enemyArmour && !w.enemyArmour.over);
+      const threats = w.pendingCount > 0 || w.entities.some((e) => w.isThreat(e)) || (!!w.enemyArmour && !w.enemyArmour.over);
       if (!threats) {
         this.done = true;
         w.log(this.doneMsg, 'raid');

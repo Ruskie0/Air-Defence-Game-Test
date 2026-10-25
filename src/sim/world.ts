@@ -731,6 +731,27 @@ export class World {
     this.tracker.markHostileAct(this, from.pos);
   }
 
+  /** A live enemy that keeps the raid open: anything attacking, but not the AWACS, the tanker or the AWACS's
+   *  own guard fighters, which orbit far out and never come in. */
+  isThreat(e: Entity): boolean {
+    if (!e.alive || e.side !== 'red') return false;
+    if (e.kind === 'awacs' || e.kind === 'tanker') return false;
+    if (e.kind === 'redfighter' && (e as unknown as { guard: boolean }).guard) return false;
+    return true;
+  }
+
+  /** The player ends the raid early: every enemy munition still in the air, and every attack aircraft still
+   *  inbound, counts as a leaker. Returns how many. */
+  abandonRaid(): number {
+    let n = 0;
+    for (const e of this.entities) {
+      if (!this.isThreat(e) || e.kind === 'drone' && (e as { recon?: boolean }).recon) continue;
+      if (e.munition || ((e.kind === 'strike' || e.kind === 'bomber' || e.kind === 'helo' || e.kind === 'drone') && Math.hypot(e.vel.x, e.vel.y) > 1 && e.pos.x * e.vel.x + e.pos.y * e.vel.y < 0)) n++;
+    }
+    this.stats.leakers += n;
+    return n;
+  }
+
   launchArm(from: Entity, em: Emitter): void {
     const dir = norm(add(sub(em.pos, from.pos), v3(0, 0, 4000)));
     const arm = new Arm(this.nextName('ARM'), from.pos, add(from.vel, scale(dir, 300)), em, this.t);

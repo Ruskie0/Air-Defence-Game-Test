@@ -277,7 +277,7 @@ export class RedFighter extends Air {
   private guess: V3 | null = null;
 
   /** Escorting the AWACS: it stays as long as the AWACS flies. */
-  private readonly guard: boolean;
+  readonly guard: boolean;
 
   /** `ward`: the strike jet (or AWACS) it escorts; none for a sweep. */
   constructor(name: string, pos: V3, t0: number, ward: Air | null, guard = false) {

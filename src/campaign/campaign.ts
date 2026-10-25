@@ -27,7 +27,7 @@ import { DeployZone, inZones } from '../sim/deploy';
 
 export const CAMPAIGN_DAYS = 10;
 /** Scale on the enemy's threat points for a whole day, shared between its operations (balance). */
-export const DAY_THREAT = 1.9;
+export const DAY_THREAT = 1.6;
 /** Our strike on the enemy's armour while it masses for an attack on one of our towns. */
 export const ARMOUR_STRIKE = { costM: 35, chance: 0.6 };
 /** What the enemy remembers of a position it photographed or located is good for this long (minutes). */
@@ -736,7 +736,7 @@ export class Campaign {
     const at = assaultSpot(this.terrain, f, f.offensive);
     // The enemy fights hardest for its forward airfield: everything it has goes at that assault force.
     const field = f.towns[f.offensive].airfield;
-    const big = (n: number): number => (field ? Math.ceil(n * 1.5) : n);
+    const big = (n: number): number => (field ? Math.ceil(n * 1.3) : n);
     const kinds: [PkgKind, number][] = [['drones', big(Math.min(12, 4 + Math.floor(day / 2)))]];
     if (day >= 2) kinds.push(['cruise', big(Math.min(5, 2 + Math.floor(day / 4)))]);
     if (day >= 3 || field) kinds.push(['helo', big(day >= 6 ? 3 : 2)]);

@@ -146,8 +146,8 @@ function isKill(fate: unknown): boolean {
  * grow a little more with distance (sizeK), but much slower than perspective shrinks them: far things do get
  * smaller on screen, unlike the old constant screen size.
  */
-export const SHOW_SCALE = { air: 4, munition: 4.5, ground: 3.5 };
-export const sizeK = (d: number): number => clamp(Math.pow(d / 6000, 0.45), 1, 7);
+export const SHOW_SCALE = { air: 4, munition: 4.5, ground: 5 };
+export const sizeK = (d: number): number => clamp(Math.pow(d / 1500, 0.5), 1, 9);
 
 const modelKind = (e: Entity): string => (e.recon ? 'recon' : e.kind === 'cruise' && e.decoy ? 'decoy' : e.kind);
 

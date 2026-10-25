@@ -95,7 +95,7 @@ export class Wrecks {
     for (let i = this.list.length - 1; i >= 0; i--) {
       const w = this.list[i];
       // Same exaggerated size as live models (View3D SHOW_SCALE and sizeK), so a kill does not shrink.
-      const s = 4 * clamp(Math.pow(cam.distanceTo(w.pos) / 6000, 0.45), 1, 7);
+      const s = 4 * clamp(Math.pow(cam.distanceTo(w.pos) / 1500, 0.5), 1, 9);
       w.obj.scale.set(s, w.landed < 0 ? s : s * 0.55, s);
       if (dt <= 0) continue;
       w.age += dt;

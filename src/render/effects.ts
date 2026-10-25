@@ -960,9 +960,9 @@ export class Effects {
         }
         // Every Gatling round draws a faint streak and every fourth a bright tracer, so the burst reads as a hose.
         if ((!r.tracer && gun35) || n >= max) continue;
-        const b = r.tracer ? k : 0.3 * k;
+        const b = r.tracer ? k : 0.45 * k;
         const o = n * 6;
-        const tl = gun35 ? 0.05 : 0.035;
+        const tl = gun35 ? 0.05 : 0.06;
         this.trPos[o] = r.pos.x;
         this.trPos[o + 1] = r.pos.z;
         this.trPos[o + 2] = -r.pos.y;

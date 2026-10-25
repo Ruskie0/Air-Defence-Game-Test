@@ -72,6 +72,26 @@ export const BLUE_ARTY = {
   counterChance: 0.35,
 };
 
+/** Game minutes the clock rolls per real second in the cut between engagements. */
+const CUT_PER_S = 2400;
+const CUT_BUDGET_MS = 8;
+
+/** An engagement: from an enemy operation's launch until the player (or standing orders) closes it. */
+export interface Engagement {
+  /** Campaign minute and sim second it opened. */
+  start: number;
+  t0: number;
+  brief: string[];
+  fired: boolean;
+  delegated?: boolean;
+  clearAt?: number;
+  kills0: number;
+  leakers0: number;
+  missiles0: number;
+  hp0: number;
+  summary?: string;
+}
+
 /** A package in the air, until it is judged. */
 export interface Flight {
   pkg: PlannedPkg;
@@ -118,6 +138,18 @@ export class War {
   onOver: (() => void) | null = null;
   /** Raised at 06:00 with the day's report. */
   onDay: ((r: DayReport) => void) | null = null;
+  /**
+   * Campaign days, Falcon BMS style. 'cut': nothing is being fought and the clock rolls on between engagements
+   * (the ground war resolves meanwhile). 'prompt': an enemy operation has launched and waits on Command or
+   * Delegate. 'live': the player commands the engagement in real time. 'delegate': the same simulation runs
+   * headless under standing orders. The engagement stays open after the last hostile until the player ends it.
+   */
+  phase: 'cut' | 'prompt' | 'live' | 'delegate' = 'cut';
+  /** The engagement under way, if any. */
+  eng: Engagement | null = null;
+  /** Called when an engagement needs Command or Delegate, and when a delegated one is over. */
+  onPrompt: ((e: Engagement) => void) | null = null;
+  onDelegated: ((e: Engagement) => void) | null = null;
   private nextTick = 0;
   private escortDrawn = 0;
   private lastClock: number;
@@ -894,6 +926,85 @@ export class War {
       if (a && p.base && AIRCRAFT.includes(a)) (c.s.sorties ??= []).push({ key: `${p.base}:${a}`, n: p.size, until: now + p.t / 60 + 90 + (TURNAROUND_H[a] ?? 6) * 60 });
     }
     w.redSupport.coordinate(w);
+    this.engage(plan);
+  }
+
+  /** An operation launched: it opens an engagement, or joins the one under way. */
+  private engage(plan: PlannedPkg[]): void {
+    const lines = plan.filter((p) => p.kind !== 'dark').map((p) => `${PKG[p.kind].name} ×${p.size} from the ${SECTOR_NAMES[sectorOf(p.bearing)]}${p.target ? ` at ${p.target}` : ''}`);
+    if (!lines.length) return;
+    if (this.eng) {
+      this.eng.brief.push(...lines);
+      this.w.log(`Another enemy operation has launched and joins this engagement: ${lines.join('; ')}`, 'alert');
+      return;
+    }
+    const s = this.w.stats;
+    this.eng = { start: this.clock, t0: this.w.t, brief: lines, fired: false, kills0: s.kills, leakers0: s.leakers, missiles0: s.fired.LR + s.fired.MR + s.fired.SH + s.fired.AAM, hp0: this.w.sites.filter((x) => x.kind === 'asset').reduce((t, x) => t + x.hp, 0) };
+    this.phase = 'prompt';
+    this.onPrompt?.(this.eng);
+  }
+
+  /** Everything hostile is down or gone, nothing more is due, and no missile is flying. */
+  engagementClear(): boolean {
+    const w = this.w;
+    return this.quiet() && !w.scenario.raids.some((r) => !r.launched);
+  }
+
+  /** Take the engagement in hand (live) or leave it to standing orders (delegate). */
+  decide(command: boolean): void {
+    if (this.phase !== 'prompt' || !this.eng) return;
+    this.phase = command ? 'live' : 'delegate';
+    this.eng.delegated = !command;
+  }
+
+  /** Close the engagement (the player's End engagement, or a delegated one once clear): returns its summary. */
+  endEngagement(): string {
+    const e = this.eng;
+    if (!e) return '';
+    const s = this.w.stats;
+    const hp = this.w.sites.filter((x) => x.kind === 'asset').reduce((t, x) => t + x.hp, 0);
+    const mins = Math.round((this.w.t - e.t0) / 60);
+    e.summary = `${hhmm(e.start)} to ${hhmm(this.clock)} (${mins} min): ${s.kills - e.kills0} kills, ${s.leakers - e.leakers0} leakers, ${(s.fired.LR + s.fired.MR + s.fired.SH + s.fired.AAM) - e.missiles0} missiles fired, ${Math.round(e.hp0 - hp)} damage to our sites.`;
+    this.w.log(`Engagement over, ${e.summary}`, 'info');
+    this.st.day.enemy.push(`Engagement ${e.summary}`);
+    this.eng = null;
+    this.phase = 'cut';
+    return e.summary;
+  }
+
+  /**
+   * Delegated engagement: step the same simulation headless, as fast as the budget allows. It ends on its own
+   * two minutes after the last hostile is gone. Returns true while it is still running.
+   */
+  delegateStep(budgetMs: number, dt: number): boolean {
+    if (this.phase !== 'delegate') return false;
+    const t0 = performance.now();
+    const w = this.w;
+    while (performance.now() - t0 < budgetMs) {
+      for (let k = 0; k < 60; k++) {
+        w.step(dt);
+        if (k % 30 === 0) this.update();
+      }
+      if (this.engagementClear()) {
+        this.eng!.clearAt ??= w.t;
+        if (w.t - this.eng!.clearAt >= 120) {
+          const e = this.eng!;
+          this.endEngagement();
+          this.onDelegated?.(e);
+          return false;
+        }
+      } else if (this.eng) this.eng.clearAt = undefined;
+      if (this.phase !== 'delegate') return false;
+    }
+    return true;
+  }
+
+  /** Between engagements: roll the clock on (the ground war resolves meanwhile) until something opens one. */
+  cutStep(realS: number): void {
+    if (this.phase !== 'cut') return;
+    // In 30 s slices within a few milliseconds of real time, so the page stays responsive.
+    const t0 = performance.now();
+    for (let left = realS * CUT_PER_S; left > 0 && this.phase === 'cut' && performance.now() - t0 < CUT_BUDGET_MS; left -= 30) this.jump(30);
   }
 
   // ------------------------------------------------------------- the ground war
@@ -1215,6 +1326,7 @@ export class War {
       w.ground?.step(w, dt);
       this.escortStep(dt);
       if (left > 30) this.update();
+      if (this.phase !== 'cut') break;
     }
     for (const f of w.fielded) if (f.heat && !f.radar?.isEmitting()) f.heat = Math.max(0, f.heat - 0.5 * s);
     this.update();

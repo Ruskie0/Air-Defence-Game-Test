@@ -7,6 +7,7 @@ import { DT } from './sim/constants';
 import { MAP_TYPE_LIST, MapType, Terrain, typeForSeed } from './sim/terrain';
 import { MAP_SEED, World } from './sim/world';
 import { CampaignUi, loadSaved } from './ui/campaign-ui';
+import { EngagementCard } from './ui/engagement';
 import { GameControl, Hud } from './ui/hud';
 import { Ppi } from './ui/ppi';
 import { Lesson, Tutorial, setupFrontLesson } from './ui/tutorial';
@@ -56,6 +57,7 @@ view.planClock = () => (document.body.dataset.mode === 'plan' ? cui.campaign?.cl
 const ppi = new Ppi(document.getElementById('ppi') as HTMLCanvasElement, world);
 const ctl: GameControl = { speed: Number(params.get('speed')) || 1, paused: false, skipQuiet: params.get('skipquiet') !== '0', autoPause: params.get('autopause') !== '0' };
 const hud = new Hud(world, view, ppi, ctl);
+const engCard = new EngagementCard(ctl, () => war);
 
 function show(w: World): void {
   world = w;
@@ -107,16 +109,15 @@ const cui = new CampaignUi({
     };
     show(wr.w);
     hud.setWorld(wr.w);
-    wr.onEvent = (msg) => {
-      if (!ctl.autoPause || !running || ctl.paused) return;
-      ctl.paused = true;
-      wr.w.log(`Paused: ${msg}`, 'alert');
-    };
+    // Campaign days: no auto-pause pop-ups; the engagement prompts are the stops.
+    wr.onEvent = null;
+    wr.onPrompt = (e) => engCard.prompt(e);
+    wr.onDelegated = (e) => engCard.done(e);
     wr.onWorld = (w) => {
       show(w);
       hud.setWorld(w);
     };
-    tempo.max = TEMPO.warMax;
+    tempo.max = 4;
     running = true;
     document.body.dataset.mode = 'battle';
     view.setView('defended');
@@ -269,7 +270,6 @@ const MAX_STEPS_PER_FRAME = 300;
 /** Real milliseconds a frame may spend stepping the simulation before it gives up on the backlog. */
 const STEP_BUDGET_MS = 14;
 /** Sim seconds per real second while the war jumps through quiet time. */
-const SKIP_PER_S = 3600;
 let acc = 0;
 let last = performance.now();
 let nextDraw = 0;
@@ -289,18 +289,23 @@ function frame(now: number): void {
   const real = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (running && !ctl.paused) {
-    // Auto tempo: fast while the nearest threat is minutes out, back to the chosen speed as it closes.
+    if (war && war.phase !== 'live') {
+      // Campaign days: between engagements the clock cuts forward; a delegated engagement runs headless; a
+      // prompt waits on the player.
+      if (war.phase === 'cut') war.cutStep(real);
+      else if (war.phase === 'delegate') war.delegateStep(STEP_BUDGET_MS, DT);
+      ctl.tempo = 1;
+      acc = 0;
+    } else {
+    // Auto tempo: fast while the nearest threat is minutes out, back to the chosen speed as it closes. In a
+    // commanded engagement it may reach 4x on the approach, and runs at 1x from the first shot.
+    if (war?.eng && !war.eng.fired && world.missiles.length) war.eng.fired = true;
+    if (war) tempo.max = war.eng?.fired ? 1 : 4;
     const lv = ctl.skipQuiet && !tutorial ? tempo.update(world) : 1;
     if ((ctl.tempo ?? 1) >= 8 && lv <= 2) world.log('Contact closing: back to normal speed', 'alert');
     ctl.tempo = lv;
     ctl.fastForward = lv > ctl.speed;
-    acc += real * Math.max(ctl.speed, lv);
-    // Living war: quiet time with nothing on its way is jumped through at about an hour a second, up to the next event.
-    const skip = war && lv >= TEMPO.warMax ? war.skippable() : 0;
-    if (skip > 30) {
-      war!.jump(Math.min(skip, real * SKIP_PER_S));
-      ctl.tempo = SKIP_PER_S;
-      acc = 0;
+    acc += real * Math.max(war ? Math.min(ctl.speed, 4) : ctl.speed, lv);
     }
     let n = 0;
     const t0 = performance.now();
@@ -317,6 +322,7 @@ function frame(now: number): void {
   if (war && running) {
     war.update();
     cui.autosave();
+    engCard.update(war);
   }
   view.render();
   ppi.draw();

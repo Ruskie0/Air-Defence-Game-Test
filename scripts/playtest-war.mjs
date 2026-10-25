@@ -36,10 +36,15 @@ const t0 = Date.now();
 let last = '';
 while (Date.now() - t0 < runS * 1000) {
   await page.waitForTimeout(5000);
+  if (await page.locator('[data-eng="command"]').count()) {
+    await page.screenshot({ path: 'playtest/w3-prompt.png' });
+    console.log('prompt:', (await page.locator('#eng-card').textContent()).slice(0, 200));
+    await page.click('[data-eng="command"]');
+  }
   const st = await page.evaluate(() => {
     const g = window.game;
     const w = g.war.w;
-    return `${document.querySelector('#clock')?.textContent} | ${document.querySelector('#raid')?.textContent?.slice(0, 120)} | red ${w.entities.filter((e) => e.alive && e.side === 'red').length} | tempo ${g.ctl.tempo} t ${Math.round(w.t)} paused ${g.ctl.paused}`;
+    return `${g.war.phase} | ${document.querySelector('#clock')?.textContent} | ${document.querySelector('#raid')?.textContent?.slice(0, 120)} | red ${w.entities.filter((e) => e.alive && e.side === 'red').length} | tempo ${g.ctl.tempo} t ${Math.round(w.t)} paused ${g.ctl.paused}`;
   });
   if (st !== last) console.log(st);
   last = st;

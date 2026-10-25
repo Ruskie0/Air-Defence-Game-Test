@@ -190,7 +190,9 @@ export class CampaignUi {
     };
     war.onDay = () => {
       if (!c.s.over) store(c);
-      if (this.ordersOpen) this.render();
+      // Campaign days: the evening debrief and the morning orders (the clock is stopped while they are open).
+      if (!c.s.over) this.openOrders();
+      else if (this.ordersOpen) this.render();
     };
     this.host.startWar(war, c);
     this.openOrders();

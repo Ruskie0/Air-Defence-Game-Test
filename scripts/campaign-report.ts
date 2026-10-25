@@ -1,7 +1,7 @@
 // Headless campaign run with a simple automatic commander, for balancing the economy and the raids.
 // Usage: npm run campaign -- [seed] [--verbose]
 import { Tempo } from '../src/sim/tempo';
-import { Campaign, Difficulty } from '../src/campaign/campaign';
+import { Campaign, Difficulty, setDayThreat } from '../src/campaign/campaign';
 import { PKG, SECTOR_NAMES, sectorOf } from '../src/campaign/raidgen';
 import { CATALOG, UnitType } from '../src/sim/catalog';
 import { DeepStrikeId, deepStrike, deepStrikeError, strikeTargets } from '../src/campaign/deepstrike';
@@ -16,6 +16,8 @@ import { timeToGo } from '../src/sim/tewa';
 const seed = Number(process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 1);
 const verbose = process.argv.includes('--verbose');
 const logDay = Number(process.argv.find((a) => a.startsWith('--log-day='))?.split('=')[1] ?? 0);
+const thr = process.argv.find((a) => a.startsWith("--threat="));
+if (thr) setDayThreat(Number(thr.split("=")[1]));
 const diff = (process.argv.find((a) => a.startsWith('--diff='))?.split('=')[1] ?? 'normal') as Difficulty;
 const c = Campaign.create(seed, diff);
 const shop = (): string[] => commanderShop(c);

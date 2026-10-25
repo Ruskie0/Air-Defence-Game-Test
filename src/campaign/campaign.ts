@@ -27,7 +27,16 @@ import { DeployZone, inZones } from '../sim/deploy';
 
 export const CAMPAIGN_DAYS = 10;
 /** Scale on the enemy's threat points for a whole day, shared between its operations (balance). */
-export const DAY_THREAT = 1.75;
+export let DAY_THREAT = 1.75;
+/** Override the threat scale (headless sweeps). */
+export function setDayThreat(v: number): void {
+  DAY_THREAT = v;
+}
+
+/** A raid that loses at least this share of its aircraft shakes the enemy: its next 12 h of raids are smaller. */
+export const SHAKEN = { lossShare: 0.4, minFlown: 4, hours: 12, maxCut: 0.35 };
+/** Below this airbase health an emergency grant arrives at 06:00, and crews repair the airbase twice as fast. */
+export const EMERGENCY = { belowHp: 40, perHpM: 3, repairX: 2 };
 /** Our strike on the enemy's armour while it masses for an attack on one of our towns. */
 export const ARMOUR_STRIKE = { costM: 35, chance: 0.6 };
 /** What the enemy remembers of a position it photographed or located is good for this long (minutes). */
@@ -42,9 +51,9 @@ export type Difficulty = 'easy' | 'normal' | 'hard';
 
 /** What each difficulty changes: the enemy's daily threat budget, our income and the starting budget. */
 export const DIFFICULTY: Record<Difficulty, { name: string; desc: string; threat: number; income: number; start: number }> = {
-  easy: { name: 'Recruit', desc: 'Smaller raids and a bigger budget.', threat: 0.75, income: 1.2, start: 220 },
-  normal: { name: 'Regular', desc: 'The intended balance.', threat: 1, income: 1, start: 160 },
-  hard: { name: 'Veteran', desc: 'Bigger raids, a tighter budget.', threat: 1.3, income: 0.85, start: 130 },
+  easy: { name: 'Easy', desc: 'Smaller raids and a little more money.', threat: 0.914, income: 1.05, start: 180 },
+  normal: { name: 'Normal', desc: 'The intended balance.', threat: 1, income: 1, start: 160 },
+  hard: { name: 'Hard', desc: 'Bigger raids, a tighter budget.', threat: 1.057, income: 0.95, start: 150 },
 };
 
 /** One raid's outcome (several a day on the continuous clock). */
@@ -77,6 +86,8 @@ export interface DayReport {
   front?: string[];
   /** Spent by the automatic restock this morning ($M). */
   restockM?: number;
+  /** Emergency grant paid at 06:00 because the airbase is badly hurt ($M). */
+  grantM?: number;
   /** What the enemy took away from the day. */
   lessons: string[];
   /** Crews that went up a rank. */
@@ -130,6 +141,8 @@ export interface CampaignState {
   theatre?: EnemyBase[];
   /** Enemy aircraft we have shot down, and stock our deep strikes and offensives destroyed, over the campaign. */
   enemyLost?: Partial<Record<Asset, number>>;
+  /** After a costly raid the enemy flies smaller raids until `until` (clock minutes), by `cut`. */
+  shaken?: { until: number; cut: number } | null;
   /** The campaign clock (minutes since midnight before day 1): now, in the lull between raids. Absent in old saves. */
   clock?: number;
   /** Today's enemy operations, and which one comes next. */
@@ -324,7 +337,8 @@ export class Campaign {
       const a = this.s.deployment.assets.find((x) => x.name === name);
       if (!a) continue;
       // Whole points only, so health stays a whole number.
-      const n = Math.floor(Math.min(left, pts, 100 - a.hp));
+      const x = name === 'Airbase' && a.hp < EMERGENCY.belowHp ? EMERGENCY.repairX : 1;
+      const n = Math.floor(Math.min(left, pts * x, 100 - a.hp));
       a.hp += n;
       reps[name] = left - n;
       if (reps[name] < 1 || a.hp >= 100) {
@@ -434,7 +448,7 @@ export class Campaign {
     const idx = this.s.pulseIdx ?? 0;
     const plan = planDay(this.s.day, this.s.seed + idx * 7177 + salt, this.s.enemy, this.s.nextPkg, this.layout.rot, 1, WEATHER[this.s.weather ?? 'clear'].noDrones, {
       ...PULSES[slot.type].opts,
-      budget: (this.s.dayBudget ?? this.dayThreat()) * slot.share * scale,
+      budget: (this.s.dayBudget ?? this.dayThreat()) * slot.share * scale * (1 - this.shakenCut(slot.at)),
     });
     this.s.nextPkg += plan.length;
     return plan;
@@ -538,6 +552,18 @@ export class Campaign {
   repairCost(name: string): number {
     const a = this.s.deployment.assets.find((x) => x.name === name);
     return a ? Math.max(0, Math.ceil((100 - a.hp - this.repairing(name)) * this.repairRate(name))) : 0;
+  }
+
+  /** How much smaller a raid at clock time `at` is because the enemy is still licking its wounds. */
+  shakenCut(at: number): number {
+    const k = this.s.shaken;
+    return k && at < k.until ? k.cut : 0;
+  }
+
+  /** The 06:00 emergency grant while the airbase is badly hurt, bigger the worse it is. */
+  emergencyGrant(): number {
+    const hp = this.s.deployment.assets.find((a) => a.name === 'Airbase')?.hp ?? 100;
+    return hp > 0 && hp < EMERGENCY.belowHp ? Math.round((EMERGENCY.belowHp - hp) * EMERGENCY.perHpM) : 0;
   }
 
   /** Repair points restored an hour: the base crews plus every crew hired. */
@@ -1072,6 +1098,20 @@ export class Campaign {
     const found = th.filter((b) => b.known && !knownBefore.has(b.id));
     if (found.length) enemyLines.push(`Located by their launches: ${found.map((b) => b.name.toLowerCase()).join(', ')}. They are on the map and open to a deep strike.`);
     s.theatre = th;
+    // A raid that bled badly makes the enemy cautious: fewer ready aircraft and a warier planner.
+    let flown = 0;
+    let downAir = 0;
+    for (const p of s.plan) {
+      const a = PKG[p.kind].asset;
+      if (!a || !AIRCRAFT.includes(a)) continue;
+      flown += p.size;
+      downAir += Math.min(p.size, lostByPkg.get(p.id) ?? 0);
+    }
+    if (flown >= SHAKEN.minFlown && downAir / flown >= SHAKEN.lossShare) {
+      const cut = Math.min(SHAKEN.maxCut, (downAir / flown) * 0.5);
+      s.shaken = { until: end + SHAKEN.hours * 60, cut };
+      enemyLines.push(`The enemy lost ${downAir} of ${flown} aircraft. Expect smaller raids (about ${Math.round(cut * 100)}% less) for the next ${SHAKEN.hours} hours.`);
+    }
     // Aircraft that came back need turning round before they fly again.
     for (const p of s.plan) {
       const a = PKG[p.kind].asset;
@@ -1274,6 +1314,11 @@ export class Campaign {
       this.advanceTo(Math.max(end, DAY_START_MIN + (s.day - 1) * 1440));
       s.money += income;
       s.incomePenalty = 0;
+      const grant = this.emergencyGrant();
+      if (grant) {
+        s.money += grant;
+        report.grantM = grant;
+      }
       s.deployment.units = s.deployment.units.filter((u) => !u.loan);
       reinforce(this.theatre, this.diff.threat);
       this.replan();

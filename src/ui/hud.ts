@@ -842,7 +842,20 @@ export class Hud {
       }
     }
     const col = w.column;
-    const aSite = w.sites.find((x) => x.role === 'assault');
+    const aSite = w.ground ? undefined : w.sites.find((x) => x.role === 'assault');
+    const g = w.ground;
+    if (g && g.bats.some((b) => b.alive)) {
+      rows.push('<h3>Ground war <span class="dim">orders: P</span></h3>');
+      for (const b of g.bats.filter((x) => x.alive).sort((x, y) => (x.side === y.side ? x.s - y.s : x.side === 'blue' ? -1 : 1))) {
+        const st = b.foe ? '<span class="st dead blink">FIGHTING</span>' : b.broken ? '<span class="st dead">BROKEN</span>' : b.formUntil !== undefined ? '<span class="st jam">FORMING UP</span>' : b.order === 'advance' ? '<span class="st ok">ADVANCING</span>' : b.order === 'withdraw' ? '<span class="st">PULLING BACK</span>' : '<span class="st emcon">HOLDING</span>';
+        const hp = Math.round(b.strength);
+        rows.push(`<div class="sys ${b.side === 'red' ? 'located' : ''}"><div class="sys-h"><b>${esc(b.name)}</b> ${st} <button data-act="flyto" data-x="${Math.round(b.pos.x)}" data-y="${Math.round(b.pos.y)}" title="Fly the camera to it">Fly to</button></div>
+          <div class="sys-b"><span class="heat" style="width:80px"><i style="width:${hp}%;background:${b.side === 'red' ? '#ff6b5b' : hp >= 50 ? '#78ffaa' : '#ffd84d'}"></i></span> ${hp}%</div></div>`);
+      }
+      g.capture.forEach((cap, i) => {
+        if (cap > 0) rows.push(`<div class="sys located"><div class="sys-b"><b>${esc(g.townNames[i])}</b> changing hands <span class="heat" style="width:80px"><i style="width:${Math.round(cap * 100)}%;background:#ffd84d"></i></span> ${Math.round(cap * 100)}%</div></div>`);
+      });
+    }
     if (aSite) {
       const hp = Math.round(aSite.hp);
       const st = !aSite.alive ? '<span class="st dead">DESTROYED</span>'

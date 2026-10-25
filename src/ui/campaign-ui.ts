@@ -17,6 +17,7 @@ import { EVENTS } from '../campaign/events';
 import { DEEP_STRIKES, DeepStrikeId, deepStrike, deepStrikeError, strikeTargets } from '../campaign/deepstrike';
 import { type Asset, BASE_DEFS, assetCount, stockText } from '../sim/theatre';
 import { War, WAR } from '../campaign/war';
+import { GROUND, type Battalion, type Order, now } from '../sim/ground';
 import { modifiers } from '../campaign/upgrades';
 import { ASSAULT_HOLD, DEVASTATED_ZONE_M, OFFENSIVE_COST_M, TOWN_THREAT_CUT, TOWN_ZONE_M, dugIn, nextObjective } from '../campaign/front';
 
@@ -550,6 +551,7 @@ export class CampaignUi {
     const c = this.c!;
     const f = c.s.front;
     if (!f?.towns.length) return '';
+    if (this.war?.w.ground) return this.groundPanel();
     const next = nextObjective(f);
     const road = f.towns
       .map((t, i) => {
@@ -575,6 +577,58 @@ export class CampaignUi {
       ${this.pushPanel()}
       ${this.fieldPanel()}
       ${action}`;
+  }
+
+  /** The ground war: the road and its towns, our objective, our battalions and their orders, the enemy's. */
+  private groundPanel(): string {
+    const c = this.c!;
+    const f = c.s.front!;
+    const war = this.war!;
+    const g = war.w.ground!;
+    const w = war.w;
+    const next = nextObjective(f);
+    const obj = g.objective;
+    const where = (b: Battalion): string => {
+      const t = g.townAt(b.s);
+      if (t >= 0) return `at ${f.towns[t].name}`;
+      const ahead = g.townS.findIndex((x) => x > b.s);
+      if (Math.abs(b.s - g.blueDepot) < 3000) return 'at our depot';
+      if (Math.abs(b.s - g.redDepot) < 3000) return 'at the enemy depot';
+      return ahead >= 0 ? `${((g.townS[ahead] - b.s) / 1000).toFixed(0)} km short of ${f.towns[ahead].name}` : 'beyond the last town';
+    };
+    const state = (b: Battalion): string =>
+      b.formUntil !== undefined && now(w) < b.formUntil ? `<span class="st jam">FORMING UP ${Math.ceil((b.formUntil - now(w)) / 60)} min</span>`
+      : b.foe ? '<span class="st dead blink">FIGHTING</span>'
+      : b.broken ? '<span class="st dead">BROKEN</span>'
+      : b.order === 'advance' ? '<span class="st ok">ADVANCING</span>'
+      : b.order === 'withdraw' ? '<span class="st">PULLING BACK</span>' : '<span class="st emcon">HOLDING</span>';
+    const bar = (v: number, col: string): string => `<span class="heat" style="width:60px"><i style="width:${Math.round(v)}%;background:${col}"></i></span>`;
+    const road = f.towns.map((t, i) => {
+      const cap = g.capture[i];
+      const capTxt = cap > 0 ? ` · <b class="${t.ours ? 'warn' : 'good'}">${t.ours ? 'being taken' : 'taking'} ${bar(cap * 100, t.ours ? '#ff6b5b' : '#78ffaa')} ${Math.round(cap * 100)}%</b>` : '';
+      return `<li class="${t.ours ? 'good' : 'dim'}"><b>${esc(t.name)}</b> · ${t.ours ? 'ours' : 'enemy held'}${obj?.town === i ? ` · <b>objective: ${obj.kind}</b>` : ''} · +${money(t.incomeM)}/day${t.airfield ? ' · <b>take it to win</b>' : ''}${capTxt}</li>`;
+    }).join('');
+    const front = f.towns.map((t, i) => (t.ours ? i : -1)).filter((i) => i >= 0).pop();
+    const objBtns = `${next >= 0 ? `<button data-cui="objective" data-kind="push" data-town="${next}" class="${obj?.kind === 'push' ? 'on' : ''}" title="Battalions you order to advance drive up the road to ${esc(f.towns[next].name)}. A town falls ${GROUND.captureS / 60} minutes after we hold it with nothing of the enemy's there.">Push for ${esc(f.towns[next].name)}</button>` : ''}${front !== undefined ? ` <button data-cui="objective" data-kind="hold" data-town="${front}" class="${obj?.kind === 'hold' ? 'on' : ''}" title="Battalions you order to advance move up to ${esc(f.towns[front].name)} and hold it. Holding a town of ours halves the losses a battalion takes.">Hold ${esc(f.towns[front].name)}</button>` : ''}`;
+    const ours = g.bats.filter((b) => b.side === 'blue' && b.alive).map((b) => {
+      const btn = (o: Order, label: string, tip: string): string => `<button data-cui="bnorder" data-id="${b.id}" data-o="${o}" class="${b.order === o ? 'on' : ''}" title="${tip}">${label}</button>`;
+      return `<div class="sys"><div class="sys-h"><b>${esc(b.name)}</b> ${state(b)} <span class="dim">${esc(where(b))}</span></div>
+        <div class="sys-b">${bar(b.strength, b.strength >= 50 ? '#78ffaa' : b.strength >= GROUND.breakAt ? '#ffd84d' : '#ff4d4d')} ${Math.round(b.strength)}% ${b.kind === 'armour' ? 'armour' : 'mech infantry'}
+        ${btn('advance', 'Advance', 'Drive up the road to the objective and fight anything in the way')} ${btn('hold', 'Hold', 'Stop where it is and dig in (a quarter less loss in a fight)')} ${btn('withdraw', 'Withdraw', 'Pull back to the nearest town of ours behind it, or the depot, and refit')}</div></div>`;
+    }).join('') || '<p class="dim">No battalions left. A new one reaches the depot every morning.</p>';
+    const theirs = g.bats.filter((b) => b.side === 'red' && b.alive).map((b) => {
+      const err = war.bnStrikeError(b.id);
+      return `<div class="sys located"><div class="sys-h"><b>${esc(b.name)}</b> ${state(b)} <span class="dim">${esc(where(b))}</span></div>
+        <div class="sys-b">${bar(b.strength, '#ff6b5b')} ${Math.round(b.strength)}% <button data-cui="bnstrike" data-id="${b.id}" ${err ? 'disabled' : ''} title="${esc(err ?? `Deep strike: ${Math.round(GROUND.strike.chance * 100)}% chance to knock ${GROUND.strike.hit}% off it. Best while it forms up.`)}">Strike ${money(GROUND.strike.costM)}</button></div></div>`;
+    }).join('');
+    const attack = g.enemyGoal !== undefined ? `<p class="warn"><b>Enemy attack on ${esc(f.towns[g.enemyGoal].name)}.</b> Get our battalions into the town (holding it halves their losses) and keep the air over them clear: enemy helicopters, drones and jets hunt battalions outside our air defence.</p>` : '';
+    return `<h3>The ground war</h3>
+      <p class="dim">Battalions fight wherever they meet on the road. A town changes hands ${GROUND.captureS / 60} minutes after one side holds it uncontested; the bar pauses while it is contested. Our battalions are hunted from the air: move SAM and SHORAD up behind them.</p>
+      <ul class="intel road">${road}</ul>
+      ${attack}
+      <div class="row">${objBtns}</div>
+      <h3>Our battalions</h3>${ours}
+      <h3>Enemy battalions <span class="dim">as intel sees them</span></h3>${theirs || '<p class="dim">None seen.</p>'}`;
   }
 
   /** Before an assault on the enemy airfield: everything the enemy has ready to throw at it. */
@@ -900,8 +954,21 @@ export class CampaignUi {
         c.s.autoRestock = (el as HTMLInputElement).checked;
         store(c);
         return;
+      case 'objective': {
+        const err = this.war?.setObjective(d.kind as 'push' | 'hold', Number(d.town));
+        this.note = err ?? (d.kind === 'push' ? 'Objective set: order battalions to Advance to push.' : 'Objective set: order battalions to Advance to move up and hold.');
+        break;
+      }
+      case 'bnorder': {
+        const err = this.war?.orderBattalion(Number(d.id), d.o as Order);
+        if (err) this.note = err;
+        break;
+      }
+      case 'bnstrike':
+        if (this.war) this.note = this.war.strikeBattalion(Number(d.id));
+        break;
       case 'offensive':
-        if (!(this.war ? this.war.launchOffensive() : c.launchOffensive())) return;
+        if (this.war || !c.launchOffensive()) return;
         this.note = this.war
           ? `Offensive on ${c.s.front!.towns[c.s.front!.offensive!].name} launched: the column sets off when the clock runs. Move units up to cover it (yellow on the scope).`
           : `Offensive on ${c.s.front!.towns[c.s.front!.offensive!].name} ordered. Move units up to cover the assault force (yellow on the scope).`;

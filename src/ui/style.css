@@ -1004,3 +1004,10 @@ table.grp tr { cursor: pointer; }
   font-style: italic;
   border-style: dashed;
 }
+.site-label.bn {
+  font-weight: 600;
+}
+.site-label.bn.fighting {
+  color: #ffb05b;
+  border-color: #ffb05b;
+}

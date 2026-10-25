@@ -1,5 +1,6 @@
 import { EnemyBase, makeTheatre } from './theatre';
 import { EnemyArmour } from './enemyarmour';
+import type { Ground } from './ground';
 import { DT } from './constants';
 import { Ciws, GUNS } from './ciws';
 import { MoveOrder, orderMove, scoot, stepMoves } from './mobility';
@@ -215,6 +216,9 @@ export class World {
   spawnTag = -1;
   /** The enemy's armoured column, when it is attacking one of our towns in this raid. */
   enemyArmour: EnemyArmour | null = null;
+  /** The living war's ground war: battalions of both sides on the road, stepped once a second. */
+  ground: Ground | null = null;
+  private groundAcc = 0;
   /** Everything that died or left in the last 20 s, newest last (for wrecks and kill feeds). */
   deaths: Entity[] = [];
   /** Enemy aircraft shot down this battle, keyed "package|kind" (the campaign takes them off their bases' strength). */
@@ -483,6 +487,17 @@ export class World {
     const i = this.sites.indexOf(s);
     if (i >= 0) this.sites.splice(i, 1);
     this.layoutSeq++;
+  }
+
+  /** One of our battalions as a site: enemy weapons and helicopters hunt it, and its health is its strength. */
+  addBattalionSite(name: string, x: number, y: number, hp: number): Site {
+    const s = this.addSite(name, 'asset', x, y, 0, 250, true);
+    s.role = 'assault';
+    s.hp = hp;
+    // Dispersed vehicles: one warhead knocks out a few of them, not a fifth of the battalion.
+    s.vuln *= 0.2 * this.mods.damageMult;
+    this.layoutSeq++;
+    return s;
   }
 
   /** Send an assault force up the road during the war, as the constructor does for a battle's offensive. */
@@ -1108,6 +1123,10 @@ export class World {
     this.exposure.step(this);
     this.enemyAd.step(this);
     this.enemyArmour?.step(this, dt);
+    if (this.ground && (this.groundAcc += dt) >= 1) {
+      this.ground.step(this, this.groundAcc);
+      this.groundAcc = 0;
+    }
     if (this.t >= this.nextTewa) {
       this.nextTewa = this.t + 1;
       autoEngage(this);

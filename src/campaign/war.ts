@@ -1,7 +1,7 @@
 import { CATALOG, DEFENDED_ASSETS, type DeployedUnit, RANKS, rankOf } from '../sim/catalog';
 import { inZones, nearestFree } from '../sim/deploy';
 import type { Sighting } from '../sim/entities';
-import { ARMOUR } from '../sim/enemyarmour';
+import { GROUND, Ground, type GroundState, type Order } from '../sim/ground';
 import { orderMove } from '../sim/mobility';
 import { RED_SUPPORT, sweepCap } from '../sim/redair';
 import { Rng } from '../sim/rng';
@@ -10,7 +10,7 @@ import type { Fielded, Stats, World } from '../sim/world';
 import { ARMOUR_BDE, CAMPAIGN_DAYS, CIVIL_LIMIT, Campaign, DayReport, EMERGENCY, SHAKEN } from './campaign';
 import { DAY_START_MIN, PULSES, PulseType, REPAIR_PER_H, TURNAROUND_H, hhmm, isNight } from './clock';
 import { doctrineOf } from './doctrine';
-import { ASSAULT_HOLD, DUG_IN_HP, TAKEN_HP, assaultSpot, columnStart, dugIn } from './front';
+import { TAKEN_HP } from './front';
 import { PKG, PkgKind, PlannedPkg, SECTOR_NAMES, aimAtSightings, assignBases, planDay, sectorOf, toRaids } from './raidgen';
 import { WEATHER } from './weather';
 
@@ -60,8 +60,10 @@ export interface WarState {
   flights: Flight[];
   /** Clock time the enemy armour's attack goes in today, if one is planned. */
   pushAt?: number;
-  /** Our offensive under way: the town it goes for, and when its force reached its start line (clock). */
-  assault?: { town: number; arrivedAt?: number };
+  /** The ground war: battalions, capture bars, our objective. */
+  ground?: GroundState;
+  /** Day of our last deep strike on a battalion (one a day). */
+  bnStrikeDay?: number;
   /** The day so far, for the 06:00 report. */
   day: { front: string[]; enemy: string[]; lessons: string[]; losses: string[]; hp: Record<string, number> };
 }
@@ -118,7 +120,39 @@ export class War {
       w.exposure.fixes.push({ uid: k.uid, unit: k.name, x: k.x, y: k.y, t: ((k.at ?? c.clock) - c.clock) * 60, how: 'elint' });
     }
     c.s.civilBefore = c.s.civilLosses;
+    this.buildGround(w);
     return w;
+  }
+
+  /** The ground war on this world: from the save, or the opening line-up on the first day. */
+  private buildGround(w: World): void {
+    const c = this.c;
+    const f = c.s.front;
+    if (!f?.towns.length) return;
+    const st = this.st;
+    const fresh = !st.ground;
+    const g = new Ground(f.towns, st.ground ?? { bats: [], capture: [], nextId: 1 }, {
+      owner: (i) => (f.towns[i].ours ? 'blue' : 'red'),
+      captured: (i, by) => (by === 'blue' ? this.takeTown(i, Math.round(this.w.ground?.bats.filter((b) => b.side === 'blue' && b.alive && Math.abs(b.s - (this.w.ground?.townS[i] ?? 0)) < GROUND.townR).reduce((m, b) => Math.max(m, b.strength), 0) ?? 70)) : this.townFalls(i)),
+      event: (msg) => this.onEvent?.(msg),
+    });
+    if (fresh) {
+      // Two of ours at the front town and a third at the depot.
+      const front = f.towns.map((t, i) => (t.ours ? i : -1)).filter((i) => i >= 0).pop() ?? -1;
+      const fs = front >= 0 ? g.townS[front] : g.blueDepot;
+      g.add('blue', 'armour', fs - 400);
+      g.add('blue', 'mech', fs - 900);
+      g.add('blue', 'mech', g.blueDepot);
+      const red = f.towns.map((t, i) => (t.ours ? -1 : i)).filter((i) => i >= 0);
+      // The enemy garrisons its nearest town and has one more coming up: it needs reinforcements before it can attack.
+      if (red.length) g.add('red', 'armour', g.townS[red[0]] + 400);
+      g.add('red', 'mech', g.redDepot);
+    }
+    for (const b of g.bats) if (b.side === 'blue' && b.alive) {
+      const p = g.place(b);
+      b.site = w.addBattalionSite(b.name, p.x, p.y, b.strength);
+    }
+    w.ground = g;
   }
 
   /** A unit that should be on the map: delivered (or bought before the war began). */
@@ -175,6 +209,7 @@ export class War {
   private flagged = new Set<number>();
 
   private rebuild(): void {
+    if (this.w.ground) this.st.ground = this.w.ground.save();
     this.w = this.build();
     this.onWorld?.(this.w);
   }
@@ -205,22 +240,55 @@ export class War {
     return err;
   }
 
-  /** Launch the offensive on the next town up the road: the column sets off now, and the enemy counter-attacks it. */
-  launchOffensive(): boolean {
+  /** The player's objective for the ground war: push for a town (it must be the next one up the road) or hold one of ours. */
+  setObjective(kind: 'push' | 'hold', town: number): string | null {
+    const g = this.w.ground;
+    const f = this.c.s.front;
+    if (!g || !f) return 'No ground war on this map';
+    const t = f.towns[town];
+    if (!t) return 'No such town';
+    if (kind === 'push' && (t.ours || town !== f.towns.findIndex((x) => !x.ours))) return 'Push for the next town up the road the enemy holds';
+    if (kind === 'hold' && !t.ours) return 'Hold a town we hold';
+    g.setObjective(kind, town);
+    this.w.log(kind === 'push' ? `Objective: take ${t.name}. Battalions ordered to advance head for it; it falls ${Math.round(GROUND.captureS / 60)} minutes after we hold it uncontested.` : `Objective: hold ${t.name}. Battalions ordered to advance move up to it and dig in.`, 'raid');
+    return null;
+  }
+
+  /** An order to one of our battalions: advance on the objective, hold where it is, or pull back. */
+  orderBattalion(id: number, o: Order): string | null {
+    const g = this.w.ground;
+    const b = g?.bats.find((x) => x.id === id);
+    if (!g || !b) return 'No such battalion';
+    return g.order(b, o);
+  }
+
+  /** A deep strike on an enemy battalion out of contact (forming up, holding a town, on the road): one a day. */
+  strikeBattalion(id: number): string {
     const c = this.c;
-    const f = c.s.front;
-    if (!f || c.offensiveError()) return false;
-    c.launchOffensive();
-    const i = f.offensive!;
-    // Its counter-attack packages fly now, from what the enemy has ready.
-    const counters = c.s.plan.filter((p) => p.counter);
-    c.s.plan = c.s.plan.filter((p) => !p.counter);
-    this.fly(counters);
-    this.w.startAssault({ ...assaultSpot(c.terrain, f, i), target: f.towns[i].name, from: columnStart(c.terrain, f, i) });
-    this.st.assault = { town: i };
-    c.s.offensiveDay = c.s.day;
-    this.w.log(`Offensive on ${f.towns[i].name}: the assault column is forming up. Get it to its start line and hold there for ${WAR.holdMin} minutes to take the town.`, 'raid');
-    return true;
+    const g = this.w.ground;
+    const b = g?.bats.find((x) => x.id === id && x.side === 'red' && x.alive);
+    const err = this.bnStrikeError(id);
+    if (err || !b) return err ?? 'No such battalion';
+    c.s.money -= GROUND.strike.costM;
+    this.st.bnStrikeDay = c.s.day;
+    const rng = new Rng(c.s.seed * 89 + c.s.day * 13 + id);
+    if (!rng.chance(GROUND.strike.chance)) return `The strike on ${b.name} missed.`;
+    b.strength -= GROUND.strike.hit;
+    const p = b.pos;
+    for (let k = 0; k < 6; k++) this.w.effect({ x: p.x + rng.gauss() * 300, y: p.y + rng.gauss() * 300, z: p.z }, 'ground');
+    const line = `Our deep strike hit ${b.name}: it is down to ${Math.round(b.strength)}%.`;
+    this.w.log(line, 'kill');
+    this.st.day.front.push(line);
+    return line;
+  }
+
+  bnStrikeError(id: number): string | null {
+    const b = this.w.ground?.bats.find((x) => x.id === id && x.side === 'red' && x.alive);
+    if (!b) return 'No such battalion';
+    if (b.foe) return 'It is in contact with our troops: too close for a deep strike';
+    if (this.st.bnStrikeDay === this.c.s.day) return 'One battalion strike a day';
+    if (this.c.s.money < GROUND.strike.costM) return 'Not enough money';
+    return null;
   }
 
   // ------------------------------------------------------------- the clock
@@ -250,8 +318,6 @@ export class War {
     this.intel();
     this.judge();
     this.planner(dMin);
-    this.push();
-    this.assault();
     this.support();
     this.checkOver();
     this.events();
@@ -504,6 +570,7 @@ export class War {
     const front = f?.towns.filter((t) => t.ours).pop();
     if (front && s.day >= 2) for (const p of plan) if ((p.kind === 'drones' || p.kind === 'cruise' || p.kind === 'strike') && !p.aims && rng.chance(0.3)) p.target = front.name;
     st.opIdx++;
+    plan.push(...this.groundSupport(rng));
     const spent = plan.reduce((t, p) => t + PKG[p.kind].cost(p.size), 0);
     // Nothing ready to fly: it waits, and the strength it banked keeps.
     if (!plan.some((p) => p.kind !== 'dark')) {
@@ -516,6 +583,38 @@ export class War {
     this.fly(plan);
     if (type === 'strike') sweepCap(this.w);
     this.newOp();
+  }
+
+  /**
+   * Air power over the ground war: helicopters and drones hunt our battalions (worst for those beyond our air
+   * defence), and an enemy attack under way gets drones and missiles at the town it goes for.
+   */
+  private groundSupport(rng: Rng): PlannedPkg[] {
+    const g = this.w.ground;
+    const s = this.c.s;
+    if (!g) return [];
+    const out: PlannedPkg[] = [];
+    const bearingAt = (sAt: number): number => {
+      const a = g.at(sAt);
+      const b = g.at(sAt + 8000);
+      return (Math.atan2(b.x - a.x, b.y - a.y) * 180) / Math.PI;
+    };
+    const ours = g.bats.filter((b) => b.side === 'blue' && b.alive && b.site);
+    // The most forward of ours is the one they go for.
+    const prey = ours.sort((a, b) => b.s - a.s)[0];
+    if (prey && rng.chance(0.65)) {
+      const o = { x: prey.pos.x, y: prey.pos.y };
+      const base = { id: 0, bearing: bearingAt(prey.s), t: 0, reported: true, origin: o } as const;
+      if (s.day >= 2) out.push({ ...base, id: s.nextPkg++, kind: 'helo', size: Math.min(4, 2 + Math.floor(s.day / 4)), target: prey.name });
+      out.push({ ...base, id: s.nextPkg++, kind: 'drones', size: Math.min(10, 3 + Math.floor(s.day / 2)), target: prey.name });
+    }
+    if (g.enemyGoal !== undefined) {
+      const tn = s.front!.towns[g.enemyGoal];
+      const o = { x: tn.x, y: tn.y };
+      out.push({ id: s.nextPkg++, kind: 'drones', size: Math.min(12, 5 + Math.floor(s.day / 2)), bearing: bearingAt(g.townS[g.enemyGoal]), t: 0, reported: true, target: tn.name, origin: o });
+      if (s.day >= 2) out.push({ id: s.nextPkg++, kind: 'cruise', size: Math.min(5, 2 + Math.floor(s.day / 3)), bearing: bearingAt(g.townS[g.enemyGoal]), t: 0, reported: true, target: tn.name });
+    }
+    return out.length ? assignBases(out, this.c.theatre, this.c.busy(this.clock)) : [];
   }
 
   /** Put packages in the air, `p.t` seconds from now: their aircraft are busy until turned round. */
@@ -537,100 +636,6 @@ export class War {
 
   // ------------------------------------------------------------- the ground war
 
-  /** The enemy's armour goes for our front town at the time planned this morning. */
-  private push(): void {
-    const c = this.c;
-    const s = c.s;
-    const st = this.st;
-    const w = this.w;
-    const p = s.enemyPush;
-    const f = s.front;
-    if (p && f && st.pushAt !== undefined && this.clock >= st.pushAt && !w.enemyArmour) {
-      st.pushAt = undefined;
-      const town = f.towns[p.town];
-      const from = f.towns[p.from];
-      if (p.broken || !town?.ours || from?.ours) return;
-      w.startEnemyAssault({ target: town.name, from, to: town, takeHp: dugIn(town, this.clock) ? DUG_IN_HP : ARMOUR.takeHp });
-      // Its air support goes in with it: drones and missiles at the town.
-      const rng = new Rng(s.seed * 61 + s.day * 17);
-      const day = s.day;
-      const support: PlannedPkg[] = (
-        [
-          ['drones', Math.min(14, 6 + Math.floor(day / 2))],
-          ['cruise', Math.min(6, 2 + Math.floor(day / 3))],
-          ['drones', Math.min(10, 4 + Math.floor(day / 3))],
-        ] as [PkgKind, number][]
-      ).map(([kind, size], i) => ({
-        id: s.nextPkg++,
-        kind,
-        bearing: (Math.atan2(from.x - town.x, from.y - town.y) * 180) / Math.PI,
-        size,
-        t: Math.round(60 + i * 150 + rng.range(0, 40)),
-        reported: true,
-        target: town.name,
-        origin: { x: from.x, y: from.y },
-        push: true,
-      }));
-      this.fly(assignBases(support, c.theatre, c.busy(this.clock)));
-      return;
-    }
-    const arm = w.enemyArmour;
-    if (!arm || !arm.over || !f) return;
-    w.enemyArmour = null;
-    s.enemyPush = null;
-    const i = f.towns.findIndex((x) => x.name === arm.target);
-    if (arm.outcome === 'taken' && i >= 0) {
-      this.st.day.front.push(`Enemy armour overran ${arm.target}.`);
-      this.loseTowns(i);
-    } else {
-      const k = c.loseArmour(ARMOUR_BDE.lostRepulsed);
-      const line = `The enemy attack on ${arm.target} was beaten off: the enemy lost ${k} armoured battalion${k === 1 ? '' : 's'} (${Math.floor(c.armourStock)} left).`;
-      this.st.day.front.push(line);
-      w.log(line, 'kill');
-    }
-  }
-
-  /** Our offensive: the column has to reach its start line, then hold there to take the town. */
-  private assault(): void {
-    const c = this.c;
-    const st = this.st;
-    const a = st.assault;
-    const f = c.s.front;
-    const w = this.w;
-    if (!a || !f) return;
-    const tn = f.towns[a.town];
-    const site = w.site('Assault force');
-    const fail = (why: string): void => {
-      st.assault = undefined;
-      f.offensive = null;
-      c.s.armourCounter = 0;
-      w.endAssault();
-      const line = `The offensive on ${tn.name} failed: ${why}.`;
-      st.day.front.push(line);
-      w.log(line, 'damage');
-    };
-    if (!site || !site.alive || w.assaultOutcome === 'destroyed') return fail('the assault force was destroyed');
-    if (w.assaultOutcome !== 'arrived') return;
-    if (a.arrivedAt === undefined) {
-      a.arrivedAt = this.clock;
-      // Armour waves from the brigade wear the force down as it digs in.
-      const waves = c.s.armourCounter ?? 0;
-      if (waves) {
-        site.damage(w, (waves * ARMOUR_BDE.counterHp) / site.vuln, 'enemy armour');
-        st.day.front.push(`${waves} enemy armour wave${waves > 1 ? 's' : ''} hit the assault force (−${waves * ARMOUR_BDE.counterHp}%).`);
-        c.s.armourCounter = 0;
-        if (site.hp >= ASSAULT_HOLD) c.loseArmour(waves * ARMOUR_BDE.lostRepulsed);
-      }
-      return;
-    }
-    if (site.hp < ASSAULT_HOLD) return fail(`the assault force was down to ${Math.round(site.hp)}%`);
-    if (this.clock - a.arrivedAt < WAR.holdMin) return;
-    st.assault = undefined;
-    f.offensive = null;
-    w.endAssault();
-    this.takeTown(a.town, Math.round(site.hp));
-  }
-
   /** A town is ours: income, ground to deploy on, and whatever the enemy had in it is overrun. */
   private takeTown(i: number, hp: number): void {
     const c = this.c;
@@ -640,9 +645,12 @@ export class War {
     const tn = f.towns[i];
     tn.ours = true;
     tn.hp = TAKEN_HP;
+    // Taken: the objective becomes holding it.
+    const g = this.w.ground;
+    if (g?.objective?.town === i) g.objective = { kind: 'hold', town: i };
     tn.heldSince = this.clock;
     w.addTown(tn);
-    const line = `The assault force held (${hp}%) and took ${tn.name}: +$${tn.incomeM}M a day, and units can now deploy round it.`;
+    const line = `Our troops took ${tn.name} (${hp}% strength): +$${tn.incomeM}M a day, and units can now deploy round it.`;
     this.st.day.front.push(line);
     w.log(line, 'kill');
     const lost = (s.enemyLost ??= {});
@@ -657,6 +665,20 @@ export class War {
     // The enemy's SAM site there goes with it.
     for (const ad of w.enemyAd.sites) if (ad.base.town === tn.name && ad.site.alive) ad.site.alive = false;
     this.frontMoved(lines);
+  }
+
+  /** The enemy has taken town i: it and every town of ours beyond it (cut off) are lost. */
+  private townFalls(i: number): void {
+    const tn = this.c.s.front!.towns[i];
+    const g = this.w.ground;
+    // Holding it is no longer an objective: battalions told to advance on it stop where they are.
+    if (g?.objective && g.objective.town <= i) {
+      g.objective = undefined;
+      for (const b of g.bats) if (b.side === 'blue' && b.order === 'advance') g.order(b, 'hold');
+    }
+    this.st.day.front.push(`Enemy battalions took ${tn.name}.`);
+    this.onEvent?.(`the enemy has taken ${tn.name}`);
+    this.loseTowns(i);
   }
 
   /** Towns from `i` up the road fall to the enemy. */
@@ -796,10 +818,18 @@ export class War {
     w.setWeather(s.weather ?? 'clear');
     w.qraUsed = false;
     w.exposure.level = s.day;
-    // The enemy's armour, if it attacks today, goes in during the day.
-    const rng = new Rng(s.seed * 7307 + s.day * 409);
-    this.st.pushAt = s.enemyPush ? DAY_START_MIN + (s.day - 1) * 1440 + rng.range(...WAR.pushHours) * 60 : undefined;
-    if (s.enemyPush && s.front) w.log(`Intel: enemy armour is massing at ${s.front.towns[s.enemyPush.from].name} to attack ${s.front.towns[s.enemyPush.town].name} today.`, 'alert');
+    // No scripted armour push: the enemy's attacks are its battalions. A battalion a day reaches each side's depot.
+    s.enemyPush = null;
+    this.st.pushAt = undefined;
+    const g = w.ground;
+    if (g) {
+      const kind = s.day % 2 ? 'armour' : 'mech';
+      const b = g.add('blue', kind, g.blueDepot);
+      const p = g.place(b);
+      b.site = w.addBattalionSite(b.name, p.x, p.y, 100);
+      g.add('red', s.day % 2 ? 'mech' : 'armour', g.redDepot);
+      w.log(`${b.name} has reached our depot by the airbase. Intel reports a fresh enemy battalion at its depot too.`, 'info');
+    }
     if (s.autoRestock) {
       report.restockM = c.restock();
       this.applyAll();
@@ -888,6 +918,7 @@ export class War {
       if (em) u.on = em.on;
     }
     if (s.front) for (const tn of s.front.towns) if (tn.ours) tn.hp = Math.round(w.site(tn.name)?.hp ?? tn.hp);
+    if (w.ground) this.st.ground = w.ground.save();
     s.enemy.known = this.sightings();
   }
 
@@ -911,7 +942,12 @@ export class War {
   /** Jump the clock `s` seconds through quiet time without stepping (headless runs): exposure drains as it would. */
   jump(s: number): void {
     const w = this.w;
-    w.t += s;
+    // The ground war goes on through quiet time, in coarse steps.
+    for (let left = s; left > 0; left -= 30) {
+      const dt = Math.min(30, left);
+      w.t += dt;
+      w.ground?.step(w, dt);
+    }
     for (const f of w.fielded) if (f.heat && !f.radar?.isEmitting()) f.heat = Math.max(0, f.heat - 0.5 * s);
     this.update();
   }

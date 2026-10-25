@@ -211,6 +211,11 @@ export class View3D {
   private readonly tmp = new THREE.Vector3();
   private sceneryRes = 1;
   /** The enemy's armoured column attacking one of our towns (World.enemyArmour), built when first seen. */
+  /** Living war: battalions on the road (enemy models; labels with strength for both sides) and the hulks they leave. */
+  private readonly bnObjs = new Map<number, { root: THREE.Group; label: CSS2DObject; el: HTMLDivElement; last: string; hulkAt: number }>();
+  private readonly hulks: THREE.Mesh[] = [];
+  private readonly hulkMat = new THREE.MeshStandardMaterial({ color: 0x1c1a18, roughness: 1, metalness: 0 });
+  private readonly redBnMat = new THREE.MeshStandardMaterial({ color: 0x8a5a4a, roughness: 0.85, metalness: 0.1 });
   /** Living war: ghosts of units on order, at the spot they were placed, with the road from the depot. */
   private readonly ghosts = new Map<number, { root: THREE.Group; line: THREE.Line; label: CSS2DObject; eta: number }>();
   private armourObj: { root: THREE.Group; body: THREE.Mesh; label: CSS2DObject } | null = null;
@@ -501,6 +506,7 @@ export class View3D {
     }
     this.trackLabels.clear();
     this.clearGhosts();
+    this.clearGround();
     this.selected = null;
     this.buildSites();
     this.buildBases();
@@ -585,6 +591,82 @@ export class View3D {
     const o = new CSS2DObject(el);
     o.center.set(0.5, -0.4);
     return o;
+  }
+
+  private clearGround(): void {
+    for (const o of this.bnObjs.values()) {
+      this.scene.remove(o.root);
+      o.el.remove();
+    }
+    this.bnObjs.clear();
+    for (const h of this.hulks) this.scene.remove(h);
+    this.hulks.length = 0;
+  }
+
+  /** The ground war: enemy battalions as a cluster of vehicles with a marker, a label with strength on every battalion, hulks where they bleed. */
+  private syncGround(): void {
+    const g = this.world.ground;
+    if (!g) return;
+    const live = new Set<number>();
+    for (const b of g.bats) {
+      if (!b.alive) continue;
+      live.add(b.id);
+      let o = this.bnObjs.get(b.id);
+      if (!o) {
+        const root = new THREE.Group();
+        if (b.side === 'red') {
+          for (let i = 0; i < 6; i++) {
+            const m = new THREE.Mesh(groundGeometry(i < 3 ? 'tank' : 'ifv'), this.redBnMat);
+            m.position.set((i % 3) * 26 - 26, 0, Math.floor(i / 3) * 24 - 12);
+            root.add(m);
+          }
+          const marker = new THREE.Sprite(new THREE.SpriteMaterial({ map: MARKERS.red, depthTest: false, transparent: true, sizeAttenuation: false }));
+          marker.scale.setScalar(0.016);
+          marker.position.y = 25;
+          marker.renderOrder = 6;
+          root.add(marker);
+        }
+        const el = document.createElement('div');
+        el.className = `site-label bn ${b.side === 'red' ? 'enemy' : ''}`;
+        const label = new CSS2DObject(el);
+        label.center.set(0.5, -0.6);
+        label.position.y = 40;
+        root.add(label);
+        this.scene.add(root);
+        o = { root, label, el, last: '', hulkAt: b.strength };
+        this.bnObjs.set(b.id, o);
+      }
+      const y = this.world.terrain.groundAt(b.pos.x, b.pos.y);
+      o.root.position.set(b.pos.x, y, -b.pos.y);
+      const a = g.at(b.s + 50 * b.dir);
+      o.root.rotation.y = Math.atan2(a.x - b.pos.x, a.y - b.pos.y) + Math.PI;
+      const tag = b.foe ? ' ⚔' : b.broken ? ' (broken)' : '';
+      const txt = `${b.name} · ${Math.round(b.strength)}%${tag}`;
+      if (txt !== o.last) {
+        o.el.textContent = txt;
+        o.el.classList.toggle('fighting', !!b.foe);
+        o.last = txt;
+      }
+      o.label.visible = this.showLabels;
+      // Every few percent lost leaves a burnt-out vehicle by the road.
+      if (o.hulkAt - b.strength >= 7) {
+        o.hulkAt = b.strength;
+        const h = new THREE.Mesh(groundGeometry(this.hulks.length % 2 ? 'ifv' : 'tank'), this.hulkMat);
+        const hx = b.pos.x + (Math.random() - 0.5) * 500;
+        const hy = b.pos.y + (Math.random() - 0.5) * 500;
+        h.position.set(hx, this.world.terrain.groundAt(hx, hy) - 0.5, -hy);
+        h.rotation.set((Math.random() - 0.5) * 0.3, Math.random() * 6.3, (Math.random() - 0.5) * 0.3);
+        this.scene.add(h);
+        this.hulks.push(h);
+        if (this.hulks.length > 90) this.scene.remove(this.hulks.shift()!);
+      } else if (b.strength > o.hulkAt) o.hulkAt = b.strength;
+    }
+    for (const [id, o] of this.bnObjs) {
+      if (live.has(id)) continue;
+      this.scene.remove(o.root);
+      o.el.remove();
+      this.bnObjs.delete(id);
+    }
   }
 
   private clearGhosts(): void {
@@ -1234,7 +1316,7 @@ export class View3D {
         for (const m of s.mats) m.color.multiplyScalar(0.25);
         s.label.element.classList.add('dead');
       }
-      s.label.visible = this.showLabels && s.site.kind !== 'launcher';
+      s.label.visible = this.showLabels && s.site.kind !== 'launcher' && !(this.world.ground && s.site.role === 'assault');
       if (s.site.role === 'assault') {
         const laager = s.root.getObjectByName('laager');
         const col = this.world.column;
@@ -1293,6 +1375,7 @@ export class View3D {
     this.syncMissiles();
     this.syncTrackLabels();
     this.syncGhosts();
+    this.syncGround();
     this.rig.following = this.follow && this.selected !== null;
     this.rig.update(realDt);
     this.controls.update();

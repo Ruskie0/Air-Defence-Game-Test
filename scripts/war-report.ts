@@ -51,7 +51,23 @@ function shop(): string[] {
   if (c.s.money > 80 && !c.armourStrikeError()) out.push(`armour strike: ${c.strikeArmour()}`);
   const f = c.s.front;
   const covered = count('MR') + count('LR') >= 2 && count('SH') >= 1;
-  if (f && covered && c.s.money > 130 && !flag('--no-offensive') && war.launchOffensive()) out.push(`offensive on ${f.towns[f.offensive!].name}`);
+  const g = w().ground;
+  if (f && g && !flag('--no-offensive')) {
+    const blue = g.bats.filter((b) => b.side === 'blue' && b.alive);
+    const avg = blue.length ? blue.reduce((t, b) => t + b.strength, 0) / blue.length : 0;
+    const next = nextObjective(f);
+    const front = f.towns.map((t, i) => (t.ours ? i : -1)).filter((i) => i >= 0).pop();
+    if ((g.enemyGoal !== undefined || g.objective?.kind !== 'push' || f.towns[g.objective.town]?.ours) && front !== undefined) {
+      if (g.objective?.kind !== 'hold') out.push(`hold ${f.towns[front].name}`);
+      war.setObjective('hold', front);
+    } else if (covered && next >= 0 && avg > 70 && blue.length >= 2 && blue.reduce((t, b) => t + b.strength, 0) > 1.4 * g.bats.filter((b) => b.side === 'red' && b.alive && b.s < g.townS[next] + 5000).reduce((t, b) => t + b.strength, 0)) {
+      if (g.objective?.kind !== 'push') out.push(`push for ${f.towns[next].name}`);
+      war.setObjective('push', next);
+    }
+    if (g.objective) for (const b of blue) if (b.order === 'hold' && !b.broken && b.strength > 55) war.orderBattalion(b.id, 'advance');
+    const red = g.bats.find((b) => b.side === 'red' && b.alive && b.formUntil !== undefined);
+    if (red && !war.bnStrikeError(red.id) && c.s.money > 60) out.push(war.strikeBattalion(red.id));
+  }
   // Units the enemy has a fix on move a couple of kilometres (the LR battery stays and fights).
   for (const fl of w().fielded) {
     const u = fl.unit;
@@ -76,6 +92,7 @@ war.onDay = (r) => {
   console.log(
     `\nDay ${r.day}: kills ${r.kills}, leakers ${r.leakers}, missiles ${r.missilesFired} ($${r.missileCostM}M), civil ${r.civilian}, income $${r.income}M, money now $${Math.round(c.s.money)}M` +
       `\n  damage: ${dmg}${r.losses.length ? `\n  lost: ${r.losses.join(', ')}` : ''}` +
+      `\n  ground: ${w().ground?.bats.filter((b) => b.alive).map((b) => `${b.side === 'blue' ? 'B' : 'R'}${Math.round(b.strength)}@${Math.round(b.s / 1000)}${b.order[0]}`).join(' ')}` +
       (r.front?.length ? `\n  front: ${r.front.join(' / ')}` : '') +
       (r.enemy?.length ? `\n  enemy: ${r.enemy.slice(0, verbose ? 99 : 4).join(' / ')}` : '') +
       (verbose && r.lessons.length ? `\n  lessons: ${r.lessons.join(' / ')}` : '') +
@@ -87,6 +104,7 @@ war.onDay = (r) => {
 let nextShop = 0;
 const ops: string[] = [];
 let raidsSeen = 0;
+let logSeen = 0;
 while (!c.s.over) {
   const W = w();
   if (W.t >= nextShop) {
@@ -107,6 +125,7 @@ while (!c.s.over) {
     slow.set(why, (slow.get(why) ?? 0) + 1 / 60 / lv);
     war.update();
   }
+  if (flag('--bnlog')) for (let k = Math.max(0, W.logEntries.length - (W.logSeq - logSeen)); k < W.logEntries.length; k++) { const m = W.logEntries[k].msg; if (/Bn|bn |taking|took|taken|forming|beaten|broken|fallen|Objective/.test(m) && !/ hit by /.test(m)) console.log('   ', stamp(war.clock), m.slice(0, 150)); } if (flag('--bnlog')) logSeen = W.logSeq;
   if (W.scenario.raids.length > raidsSeen) {
     const fresh = W.scenario.raids.slice(raidsSeen);
     raidsSeen = W.scenario.raids.length;

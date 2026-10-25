@@ -305,7 +305,7 @@ export class Ppi {
         g.stroke();
         g.fillStyle = g.strokeStyle;
         g.font = '9px sans-serif';
-        g.fillText(s.role === 'assault' ? 'ASSAULT' : s.name, x + 8, y + 3);
+        g.fillText(s.role === 'assault' && !this.world.ground ? 'ASSAULT' : s.name, x + 8, y + 3);
       }
     }
 

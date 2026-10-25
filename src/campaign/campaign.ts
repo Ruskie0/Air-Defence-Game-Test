@@ -568,8 +568,8 @@ export class Campaign {
   airbaseDownNote(): string | null {
     const hp = this.s.deployment.assets.find((a) => a.name === 'Airbase')?.hp ?? 100;
     if (hp > 0) return null;
-    return (this.s.downMornings ?? 0) >= 1
-      ? 'Airbase out of action since yesterday: restore it before 06:00 or the campaign is lost. Fighters cannot fly and it earns nothing.'
+    return (this.s.downMornings ?? 0) >= 1 || (this.s.front && townsHeld(this.s.front) === 0)
+      ? 'Airbase out of action, with no second chance left: restore it before 06:00 or the campaign is lost. Fighters cannot fly and it earns nothing.'
       : 'Airbase out of action: restore it by 06:00 tomorrow or the campaign is lost. Fighters cannot fly and it earns nothing. Crews repair it twice as fast.';
   }
 
@@ -1295,11 +1295,17 @@ export class Campaign {
     s.history.push(report);
 
     const airbase = s.deployment.assets.find((a) => a.name === 'Airbase')!;
-    if (airbase.hp <= 0 && s.front && townsHeld(s.front) === 0) s.over = { won: false, reason: 'The airbase is out of action and every town has fallen. The defence has failed.' };
-    else if (airbase.hp > 0 && s.front?.towns.some((t) => t.airfield && t.ours)) s.over = { won: true, reason: `We took the enemy's forward airfield on day ${s.day}. The front has collapsed: the campaign is won.` };
+    if (airbase.hp > 0 && s.front?.towns.some((t) => t.airfield && t.ours)) s.over = { won: true, reason: `We took the enemy's forward airfield on day ${s.day}. The front has collapsed: the campaign is won.` };
     else if (airbase.hp <= 0) {
       // Knocked out, not lost: the campaign ends only if it is still down at 06:00 on two mornings running.
-      if (s.day >= CAMPAIGN_DAYS && lastToday) s.over = { won: false, reason: 'The ceasefire came with the airbase out of action. The defence has failed.' };
+      if (s.day >= CAMPAIGN_DAYS && lastToday) {
+        // The ceasefire with the airbase down: we held on if any town is still ours, but only just.
+        const held = townsHeld(s.front);
+        if (held > 0 || !s.front) {
+          s.grade = 'Bronze';
+          s.over = { won: true, reason: `Ceasefire after ${CAMPAIGN_DAYS} days with the airbase out of action${s.front ? `, holding ${held} of the ${s.front.towns.length} towns on the road` : ''}. Bronze grade.` };
+        } else s.over = { won: false, reason: 'The ceasefire came with the airbase out of action and every town fallen. The defence has failed.' };
+      }
     } else if (s.front?.towns.some((t) => t.airfield && t.ours)) s.over = { won: true, reason: `We took the enemy's forward airfield on day ${s.day}. The front has collapsed: the campaign is won.` };
     else if (s.civilLosses >= CIVIL_LIMIT) s.over = { won: false, reason: `${s.civilLosses} civil airliners shot down. You have been relieved of command.` };
     else if (s.day >= CAMPAIGN_DAYS && lastToday) {
@@ -1341,6 +1347,7 @@ export class Campaign {
       if (airbase.hp <= 0) {
         s.downMornings = (s.downMornings ?? 0) + 1;
         if (s.downMornings >= 2) s.over = { won: false, reason: 'The airbase was still out of action on a second morning. The defence has failed.' };
+        else if (s.front && townsHeld(s.front) === 0) s.over = { won: false, reason: 'Morning found the airbase out of action and every town fallen. The defence has failed.' };
       } else s.downMornings = 0;
       s.deployment.units = s.deployment.units.filter((u) => !u.loan);
       reinforce(this.theatre, this.diff.threat);

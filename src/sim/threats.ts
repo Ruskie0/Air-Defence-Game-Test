@@ -146,6 +146,8 @@ export function spawnDecoyDrones(w: World, n: number, bearing: number, rangeM: n
  */
 export function spawnDrones(w: World, n: number, bearing: number, rangeM: number, targets?: Target[], origin?: { x: number; y: number }, from?: LaunchFrom): void {
   const aims = targets ? targetsByName(w, targets) : origin ? targetsByName(w, ['Airbase', 'Power plant', 'CRC']) : smartAims(w, ['Airbase', 'Power plant', 'CRC'], 'drone', n);
+  // Everything already flattened: they still come for the airbase.
+  if (!aims.length) aims.push({ pos: w.site('Airbase')!.pos, name: 'Airbase' });
   const o = v3(origin?.x ?? 0, origin?.y ?? 0);
   const base = launchPoint(w, 'drone', bearing, from);
   for (let i = 0; i < n; i++) {
@@ -173,6 +175,8 @@ export function spawnDrones(w: World, n: number, bearing: number, rangeM: number
 
 export function spawnCruise(w: World, n: number, bearing: number, rangeM: number, targets?: Target[], from?: LaunchFrom): void {
   const aims = targets ? targetsByName(w, targets) : smartAims(w, ['Airbase', 'CRC', 'LR radar', 'MR radar'], 'cruise', n);
+  // Everything already flattened: they still come for the airbase.
+  if (!aims.length) aims.push({ pos: w.site('Airbase')!.pos, name: 'Airbase' });
   const t = w.terrain;
   const base = launchPoint(w, 'cruise', bearing, from);
   // From the mountain side they come down the passes; elsewhere in low over the plain or the sea.
@@ -203,6 +207,8 @@ export function spawnCruise(w: World, n: number, bearing: number, rangeM: number
 
 export function spawnBombers(w: World, n: number, bearing: number, rangeM: number, from?: LaunchFrom): void {
   const aims = smartAims(w, ['Airbase', 'CRC', 'Power plant', 'LR radar'], 'bomber', n * 4);
+  // Everything already flattened: they still come for the airbase.
+  if (!aims.length) aims.push({ pos: w.site('Airbase')!.pos, name: 'Airbase' });
   const base = launchPoint(w, 'bomber', bearing, from);
   for (let i = 0; i < n; i++) {
     const start = add(base ?? polar(bearing, rangeM), polar(bearing + 90, (i - (n - 1) / 2) * 6000));
@@ -215,6 +221,8 @@ export function spawnBombers(w: World, n: number, bearing: number, rangeM: numbe
 /** Strike fighters: take off, come in high, down to treetop height for the last 95 km, pop up and glide-bomb. */
 export function spawnStrike(w: World, n: number, bearing: number, rangeM: number, targets?: Target[], from?: LaunchFrom): void {
   const aims = targets ? targetsByName(w, targets) : smartAims(w, ['Airbase', 'Power plant', 'CRC', 'MR radar'], 'strike', n);
+  // Everything already flattened: they still come for the airbase.
+  if (!aims.length) aims.push({ pos: w.site('Airbase')!.pos, name: 'Airbase' });
   const first = w.rng.int(0, aims.length - 1);
   const base = launchPoint(w, 'strike', bearing, from);
   const jets: Striker[] = [];
@@ -289,6 +297,8 @@ export function spawnSoj(w: World, bearing: number, rangeM: number, from?: Launc
 /** Ballistic missiles, fired from a launch area at targets; CEP round each aim point. */
 export function spawnTbm(w: World, n: number, bearing: number, targets?: Target[], from?: LaunchFrom): void {
   const aims = targets ? targetsByName(w, targets) : targetsByName(w, ['Airbase', 'LR radar', 'CRC']);
+  // Everything already flattened: they still come for the airbase.
+  if (!aims.length) aims.push({ pos: w.site('Airbase')!.pos, name: 'Airbase' });
   const base = launchPoint(w, 'tbm', bearing, from);
   for (let i = 0; i < n; i++) {
     const aim = aims[i % aims.length];

@@ -1099,3 +1099,26 @@ table.grp tr { cursor: pointer; }
   border-color: #ff9f43;
   color: #ffcf9a;
 }
+#eng-card {
+  position: fixed;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  max-width: min(560px, calc(100vw - 32px));
+  pointer-events: auto;
+}
+#eng-card:empty { display: none; }
+#eng-card .eng-prompt, #eng-card .eng-bar {
+  background: rgba(8, 16, 12, 0.94);
+  border: 1px solid #3c6;
+  border-radius: 6px;
+  padding: 10px 14px;
+  color: #cfe;
+  font-size: 13px;
+}
+#eng-card .eng-prompt { border-color: #ff9f43; }
+#eng-card .eng-prompt h3 { margin: 0 0 6px; color: #ffcf9a; }
+#eng-card .eng-prompt ul { margin: 0 0 8px 18px; padding: 0; }
+#eng-card .eng-bar button { margin-left: 10px; }
+#eng-card .eng-bar.dim { opacity: 0.7; }

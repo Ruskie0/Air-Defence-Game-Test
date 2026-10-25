@@ -20,9 +20,6 @@ export const GROUND = {
   townR: 3000,
   /** A town falls after being held this long uncontested (s). */
   captureS: 1200,
-  /** Air damage to our battalions with air defence cover, and without it. */
-  coveredAir: 0.5,
-  openAir: 2.2,
   /** Strength lost per second in contact against a full-strength enemy battalion (percent). An even fight breaks one side in about 45 minutes. */
   fire: 100 / 1800,
   /** Damage taken is cut to this share for a battalion holding a town of its own side, holding in the open, or pulling back. */
@@ -156,7 +153,7 @@ export interface GroundHooks {
   /** One side has taken town i. */
   captured(i: number, by: Side): void;
   /** Something the player should know about (the game may stop the clock for it). */
-  event(msg: string): void;
+  event(msg: string, pause?: boolean): void;
 }
 
 /** Campaign time in seconds: survives the world being rebuilt from a save, unlike sim time. */
@@ -329,7 +326,7 @@ export class Ground {
       // Broken, it scatters as it falls back: harder to hit from the air than a battalion in formation.
       // Air defence close by (an escort, or our own SAM umbrella) shoots up what comes at it from the air; a
       // battalion out on its own is easy meat for helicopters and drones.
-      if (b.site) b.site.vuln = b.vuln * (b.broken ? 0.5 : 1) * (b.side === 'blue' ? (this.covered(w, b) ? GROUND.coveredAir : GROUND.openAir) : 1);
+      if (b.site) b.site.vuln = b.vuln * (b.broken ? 0.5 : 1);
       // Broken: it falls back to its depot to refit.
       if (b.broken && b.order !== 'withdraw') {
         b.order = 'withdraw';
@@ -468,7 +465,7 @@ export class Ground {
     }
     const where = stage >= 0 ? this.townNames[stage] : 'its depot';
     w.log(`Intel: ${go.length} enemy battalions are forming up at ${where} to attack ${this.townNames[target]}. They move in about ${Math.round(GROUND.formUpS / 60)} minutes: a deep strike can hit them while they form up.`, 'alert');
-    this.hooks.event(`${go.length} enemy battalions are forming up at ${where} to attack ${this.townNames[target]}`);
+    this.hooks.event(`${go.length} enemy battalions are forming up at ${where} to attack ${this.townNames[target]}`, true);
   }
 
   /** Whether one of our air defence units in action covers this battalion. */

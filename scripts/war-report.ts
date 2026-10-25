@@ -146,7 +146,7 @@ const t0 = Date.now();
 let realS = 0;
 let simStepped = 0;
 const tempo = new Tempo();
-tempo.max = 64;
+tempo.max = 4;
 const slow = new Map<string, number>();
 war.onDay = (r) => {
   const dmg = r.damage.filter((d) => d.lost > 0).map((d) => `${d.name} -${d.lost} (${d.hp})`).join(', ') || 'none';
@@ -158,11 +158,13 @@ war.onDay = (r) => {
       (r.enemy?.length ? `\n  enemy: ${r.enemy.slice(0, verbose ? 99 : 4).join(' / ')}` : '') +
       (verbose && r.lessons.length ? `\n  lessons: ${r.lessons.join(' / ')}` : '') +
       `\n  real time by cause (min): ${[...slow].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k} ${Math.round(v / 60)}`).join(', ')}` +
-      `\n  real time so far at auto tempo: ${Math.round(realS / 60)} min; artillery barrages ${w().logEntries.filter((e) => e.msg.startsWith('Rocket artillery launch')).length}` +
+      `\n  real time so far: ${Math.round(realS / 60)} min; artillery barrages ${w().logEntries.filter((e) => e.msg.startsWith('Rocket artillery launch')).length}` +
       (verbose ? `\n  theatre: ${c.theatre.map((b) => `${b.id}${b.known ? '*' : ''}${b.lost ? ' LOST' : ''} [${stockText(b)}]`).join('; ')}` : ''),
   );
 };
 let nextShop = 0;
+let engReal = 0;
+const engagements: number[] = [];
 const ops: string[] = [];
 let raidsSeen = 0;
 let logSeen = 0;
@@ -174,18 +176,39 @@ while (!c.s.over) {
     nextShop = W.t + (push ? 600 : 2 * 3600);
     if (results.length && flag('--stop-first')) break;
   }
-  const skip = war.skippable();
-  if (skip > 30) {
-    realS += skip / 3600;
-    war.jump(skip);
+  if (war.phase === 'cut') {
+    // Between engagements the clock cuts forward (a couple of real seconds an hour of game time).
+    const dt0 = W.t;
+    war.cutStep(30);
+    realS += (W.t - dt0) / 2400 / 60;
+    slow.set('cut', (slow.get('cut') ?? 0) + (W.t - dt0) / 2400 / 60);
+    if (W.t === dt0) { W.step(); war.update(); }
+  } else if (war.phase === 'prompt') {
+    war.decide(!flag('--delegate'));
+    engReal = 0;
+  } else if (war.phase === 'delegate') {
+    war.delegateStep(1e9, 1 / 60);
+    realS += 0.5;
   } else {
+    // Commanded: up to 4x on the approach until the first shot, then 1x; ended 2 minutes after the sky is clear.
     W.step();
     simStepped++;
+    if (war.eng && !war.eng.fired && W.missiles.length) war.eng.fired = true;
+    tempo.max = war.eng?.fired ? 1 : 4;
     const lv = Math.max(1, tempo.update(W));
     realS += 1 / 60 / lv;
-    const why = W.missiles.length ? 'missiles' : lv >= 64 ? 'fast' : W.tracker.tracks.some((t) => t.confirmed && !t.dropped && t.ident !== 'FRD' && t.ident !== 'NEU') ? `track@${lv}` : `other@${lv}`;
+    engReal += 1 / 60 / lv;
+    const why = W.missiles.length ? 'missiles' : `engagement@${lv}`;
     slow.set(why, (slow.get(why) ?? 0) + 1 / 60 / lv);
     war.update();
+    if (war.eng && war.engagementClear()) {
+      war.eng.clearAt ??= W.t;
+      if (W.t - war.eng.clearAt >= 120) {
+        const sum = war.endEngagement();
+        engagements.push(engReal / 60);
+        if (verbose) console.log(`  engagement ${(engReal / 60).toFixed(0)} real min: ${sum}`);
+      }
+    } else if (war.eng) war.eng.clearAt = undefined;
   }
   if (flag('--bnlog')) for (let k = Math.max(0, W.logEntries.length - (W.logSeq - logSeen)); k < W.logEntries.length; k++) { const m = W.logEntries[k].msg; if (/Bn|bn |taking|took|taken|forming|beaten|broken|fallen|Objective/.test(m) && !/ hit by /.test(m)) console.log('   ', stamp(war.clock), m.slice(0, 150)); } if (flag('--bnlog')) logSeen = W.logSeq;
   if (W.scenario.raids.length > raidsSeen) {
@@ -195,6 +218,7 @@ while (!c.s.over) {
     if (verbose) console.log(`  ${ops[ops.length - 1]}`);
   }
 }
+console.log(`Engagements: ${engagements.length}, real minutes each: ${engagements.map((m) => m.toFixed(0)).join(' ')}`);
 console.log('Pushes:', results.join(' | ') || 'none');
 if (!c.s.over) process.exit(0);
 console.log(`\n${c.s.over!.won ? 'WON' : c.s.over!.draw ? 'DRAW' : 'LOST'} on day ${c.s.day}: ${c.s.over!.reason}  score ${c.score()}`);

@@ -532,6 +532,12 @@ export class Helo extends Air {
   private readyAt = 0;
   /** Where it heads: the airbase, or our assault force up the front. */
   private readonly goal: V3 | null;
+  /** Its guided missiles still in the air: it has to stay up and keep the sight on the target until they land. */
+  inFlight = 0;
+  /** Pop-ups called off because a tracking radar had it. */
+  private aborts = 0;
+  /** Firing from the edge of its reach because it is being tracked: worse aim. */
+  standoff = false;
 
   constructor(name: string, pos: V3, goal?: V3) {
     super(name, pos, bearingDeg(pos, goal ?? v3()), 70);
@@ -570,12 +576,26 @@ export class Helo extends Air {
         if (w.t >= this.nextLook && w.t >= this.readyAt) {
           this.nextLook = w.t + 2;
           this.aim = this.findTarget(w);
-          // Nothing of ours in sight: the airbase itself, once close enough.
+          // A tracking radar has it (its warning receiver is lit): it fires only from the edge of its reach, or
+          // ducks away and tries somewhere else; after three tries it goes home.
+          if (this.aim) {
+            const lit = litBy(w, this.pos);
+            const far = hdist(this.pos, this.aim.pos) > 0.7 * HELO_RANGE;
+            this.standoff = lit && far;
+            if (lit && !far) {
+              this.aim = null;
+              this.readyAt = w.t + 45;
+              if (++this.aborts >= 3) {
+                this.phase = 'egress';
+                w.log(`${this.name} is being tracked by our air defence: it breaks off and heads home`, 'info');
+              }
+            }
+          }
           if (this.aim) {
             this.phase = 'popup';
             this.tfAgl = 70;
             this.cmdSpd = 5;
-            this.phaseEnd = w.t + 14;
+            this.phaseEnd = w.t + 60;
             this.shots = 0;
           }
         }
@@ -595,7 +615,8 @@ export class Helo extends Air {
           }
           this.nextLook = w.t + 3.5;
         }
-        if (w.t >= this.phaseEnd || this.shots >= 2) {
+        // Guided missiles: it stays up, exposed, until they have landed.
+        if (w.t >= this.phaseEnd || (this.shots >= 2 && this.inFlight <= 0) || (w.t >= this.nextLook + 12 && this.shots > 0 && this.inFlight <= 0)) {
           this.tfAgl = 25;
           this.cmdSpd = 70;
           this.phase = this.missiles > 0 ? 'ingress' : 'egress';
@@ -616,6 +637,16 @@ export class Helo extends Air {
   }
 }
 
+/** Whether one of our tracking radars (SHORAD, gun, MR or LR fire control) is emitting with this point inside its reach. */
+function litBy(w: World, p: V3): boolean {
+  return w.fielded.some((f) => {
+    const r = f.radar;
+    if (!r || !r.alive || !r.isEmitting() || f.unit.type === 'EWR') return false;
+    const reach = Math.min(r.spec.maxRangeKm * 1000, 20000);
+    return hdist(r.pos, p) <= reach && w.terrain.los(r.pos, v3(p.x, p.y, w.terrain.groundAt(p.x, p.y) + 70));
+  });
+}
+
 /** Radar cross-section a helicopter shows down in the ground clutter (m²). */
 const HELO_LOW_RCS = 0.01;
 /** How far an attack helicopter's missiles reach (m). */
@@ -626,6 +657,9 @@ export class Atgm extends Entity {
   readonly kind = 'atgm' as const;
   readonly side = 'red' as const;
   private readonly t0: number;
+  /** The helicopter guiding it; if it is shot down or ducks before impact, the missile flies on unguided and misses. */
+  shooter: Helo | null = null;
+  private lost = false;
 
   constructor(name: string, pos: V3, target: Site, t0: number) {
     super(name, pos);
@@ -641,10 +675,19 @@ export class Atgm extends Entity {
   }
 
   update(w: World, dt: number): void {
+    const h = this.shooter;
+    if (!this.lost && h && (!h.alive || h.phase !== 'popup')) {
+      // Guidance lost: it keeps its last heading and goes wide.
+      this.lost = true;
+      this.target = v3(this.target!.x + w.rng.range(-80, 80), this.target!.y + w.rng.range(-80, 80), this.target!.z);
+    }
     const aim = this.target!;
     this.vel = scale(norm(sub(aim, this.pos)), 300);
     this.pos = addScaled(this.pos, this.vel, dt);
-    if (dist(this.pos, aim) < 6 || this.pos.z <= w.terrain.groundAt(this.pos.x, this.pos.y) || w.t - this.t0 > 40) w.detonate(this);
+    if (dist(this.pos, aim) < 6 || this.pos.z <= w.terrain.groundAt(this.pos.x, this.pos.y) || w.t - this.t0 > 40) {
+      if (h) h.inFlight--;
+      w.detonate(this);
+    }
   }
 }
 

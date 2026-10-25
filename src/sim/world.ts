@@ -7,7 +7,7 @@ import { MoveOrder, orderMove, scoot, stepMoves } from './mobility';
 import { SupportCall, stepSupport } from './support';
 import { Modifiers, modifiers } from '../campaign/upgrades';
 import { WEATHER, Weather, WeatherId } from '../campaign/weather';
-import { Arm, Atgm, Cruise, Drone, Emitter, Entity, Fate, GlideBomb, ReconDrone, Sighting } from './entities';
+import { Arm, Atgm, Cruise, Drone, Emitter, Entity, Fate, GlideBomb, Helo, ReconDrone, Sighting } from './entities';
 import { Fighter } from './fighter';
 import { V3, add, bearingDeg, clone, dist, hdist, norm, polar, scale, sub, v3 } from './math';
 import { CATALOG, DEFENDED_ASSETS, DeployedUnit, Deployment, UnitType, rankOf } from './catalog';
@@ -852,6 +852,12 @@ export class World {
   launchAtgm(from: Entity, target: Site): void {
     const m = new Atgm(this.nextName('ATGM'), clone(from.pos), target, this.t);
     m.pkg = from.pkg;
+    if (from instanceof Helo) {
+      m.shooter = from;
+      from.inFlight++;
+      // Fired from the edge of its reach while tracked: the aim point is off.
+      if (from.standoff && this.rng.chance(0.4)) m.target = v3(target.pos.x + this.rng.range(-40, 40), target.pos.y + this.rng.range(-40, 40), target.pos.z);
+    }
     this.spawn(m);
     this.tracker.markHostileAct(this, from.pos);
   }

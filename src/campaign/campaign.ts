@@ -53,7 +53,7 @@ export type Difficulty = 'easy' | 'normal' | 'hard';
 export const DIFFICULTY: Record<Difficulty, { name: string; desc: string; threat: number; income: number; start: number }> = {
   easy: { name: 'Easy', desc: 'Smaller raids and a little more money.', threat: 0.914, income: 1.05, start: 180 },
   normal: { name: 'Normal', desc: 'The intended balance.', threat: 1, income: 1, start: 160 },
-  hard: { name: 'Hard', desc: 'Bigger raids, a tighter budget.', threat: 1.057, income: 0.95, start: 150 },
+  hard: { name: 'Hard', desc: 'Bigger raids, a tighter budget.', threat: 1.04, income: 0.95, start: 150 },
 };
 
 /** One raid's outcome (several a day on the continuous clock). */

@@ -3,7 +3,7 @@
 import { Campaign } from '../src/campaign/campaign';
 import { CATALOG, UnitType } from '../src/sim/catalog';
 import { DeepStrikeId, deepStrike, deepStrikeError, strikeTargets } from '../src/campaign/deepstrike';
-import { assaultSpot } from '../src/campaign/front';
+import { OFFENSIVE_COST_M, assaultSpot } from '../src/campaign/front';
 import { nearestFree } from '../src/sim/deploy';
 
 /** What the automatic commander buys, in order, while it can afford it. */
@@ -17,7 +17,13 @@ export function commanderShop(c: Campaign): string[] {
   for (const u of c.units) if (c.reload(u)) bought.push(`reload ${CATALOG[u.type].name}`);
   // Push up the road when there is money to spare, and send a covering group forward with the assault force.
   const f = c.s.front;
-  if (f && c.s.day >= 2 && count('MR') >= 2 && c.s.money > 140 && !flag('--no-offensive') && c.launchOffensive()) {
+  // Attack whenever two batteries can cover the push and $100M is left after paying for it; after a town falls
+  // to us, keep pressing as long as the push itself is affordable.
+  const last = c.s.history[c.s.history.length - 1];
+  const pressing = !!last?.front?.some((l) => / and took /.test(l));
+  const covered = count('MR') + count('LR') >= 2 && count('SH') >= 1;
+  const spare = c.s.money - OFFENSIVE_COST_M >= (pressing ? 0 : 100);
+  if (f && covered && spare && !flag('--no-offensive') && c.launchOffensive()) {
     bought.push(`offensive on ${f.towns[f.offensive!].name}`);
     const at = assaultSpot(c.terrain, f, f.offensive!);
     const prev = f.offensive! > 0 ? f.towns[f.offensive! - 1] : { x: 0, y: 0 };

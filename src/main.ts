@@ -13,6 +13,7 @@ import { Lesson, Tutorial, setupFrontLesson } from './ui/tutorial';
 import { WEATHER, WeatherId } from './campaign/weather';
 import { LastStand } from './campaign/laststand';
 import { StandUi } from './ui/laststand-ui';
+import { armoury } from './ui/armoury';
 
 const params = new URLSearchParams(location.search);
 const seed = Number(params.get('seed')) || MAP_SEED;
@@ -198,6 +199,13 @@ else if (mode === 'campaign') {
     return stand;
   },
 };
+
+// The armoury pauses a running battle while it is open.
+document.getElementById('armoury-btn')!.addEventListener('click', () => {
+  const was = ctl.paused;
+  if (running) ctl.paused = true;
+  armoury.open(undefined, () => (ctl.paused = was));
+});
 
 const tempo = new Tempo();
 const MAX_STEPS_PER_FRAME = 64;

@@ -11,6 +11,7 @@ import { bearingDeg, v3 } from '../sim/math';
 import { MAP_TYPES, MAP_TYPE_LIST, MapType } from '../sim/terrain';
 import type { World } from '../sim/world';
 import type { Ppi } from './ppi';
+import { armoury } from './armoury';
 import { UPGRADES, UPGRADE_ORDER, UpgradeId } from '../campaign/upgrades';
 import { objectiveDesc, objectiveName } from '../campaign/objectives';
 import { EVENTS } from '../campaign/events';
@@ -128,6 +129,10 @@ export class CampaignUi {
           <b>Sandbox</b>
           <small>A fully equipped defence against six scripted raids on a new map, with a panel to spawn any threat. Good for learning the systems.</small>
         </button>
+        <button data-cui="armoury" class="big">
+          <b>Armoury</b>
+          <small>Every unit, missile and threat in the game: turn the 3D models, read their numbers and what each one is good against.</small>
+        </button>
         <div class="big-group">
           <div class="big-h"><b>Map</b><small>Every new campaign and sandbox gets a new 300 km map: pick its kind, or leave it to chance.</small></div>
           <div class="diff maps">
@@ -216,7 +221,7 @@ export class CampaignUi {
       return `<div class="shop-item ${locked ? 'locked' : ''}">
         <div class="shop-h"><b>${info.name}</b><span class="mono">${money(c.price(t))}</span></div>
         <div class="dim">${esc(info.role)}</div>
-        <div class="row">${locked ? `<span class="st emcon">Day ${info.unlockDay}</span>` : `<button data-cui="buy" data-type="${t}" ${why ? 'disabled' : ''} title="${esc(why ?? (c.started ? `Buy and place on the map. It reaches the depot ${DELIVERY_H[t]} h after ordering and sits out raids until then` : 'Buy and place on the map'))}">Buy</button>${c.started ? ` <span class="dim">arrives in ${DELIVERY_H[t]} h</span>` : ''}`}</div>
+        <div class="row">${locked ? `<span class="st emcon">Day ${info.unlockDay}</span>` : `<button data-cui="buy" data-type="${t}" ${why ? 'disabled' : ''} title="${esc(why ?? (c.started ? `Buy and place on the map. It reaches the depot ${DELIVERY_H[t]} h after ordering and sits out raids until then` : 'Buy and place on the map'))}">Buy</button>${c.started ? ` <span class="dim">arrives in ${DELIVERY_H[t]} h</span>` : ''}`} <button class="info" data-cui="armoury" data-type="${t}" title="Open in the armoury: model, full stats and tips">Info</button></div>
       </div>`;
     }).join('');
 
@@ -687,6 +692,9 @@ export class CampaignUi {
         return;
       case 'laststand':
         this.host.startLastStand(this.mapPick);
+        return;
+      case 'armoury':
+        armoury.open(d.type ? `u-${d.type}` : undefined);
         return;
       case 'map':
         this.mapPick = (d.map || undefined) as MapType | undefined;

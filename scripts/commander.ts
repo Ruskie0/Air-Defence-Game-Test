@@ -34,7 +34,6 @@ export function commanderShop(c: Campaign): string[] {
     }
   }
   const wants: [UnitType, () => boolean][] = [
-    ...(flag('--hunt-force') ? ([['CAP', () => count('CAP') < 2 && c.s.day >= 4]] as [UnitType, () => boolean][]) : []),
     ['LR', () => count('LR') < 1],
     ['EWR', () => count('EWR') < 1],
     ['GNSS', () => count('GNSS') < 1],
@@ -49,13 +48,13 @@ export function commanderShop(c: Campaign): string[] {
     ['SH', () => count('SH') < 4],
     ['CIWS', () => count('CIWS') < 4],
     ['LR', () => count('LR') < 2 && c.s.day >= 6],
-    // A hunting force: a second fighter pair so a 2-ship can go deep while 2 stay on CAP.
-    ['CAP', () => count('CAP') < 2 && c.s.day >= 4 && flag('--hunt-force')],
+    // A second fighter pair mid-campaign, cheaper than the first.
+    ['CAP', () => count('CAP') < 2 && c.s.day >= 5],
   ];
   for (const [t, want] of wants) {
     // Save up for the LR battery once it is unlocked rather than spending on extras.
     // The fighter pair is worth having once the enemy flies an AWACS (and its fighters): buy it even while saving.
-    if (t !== 'LR' && !(t === 'CAP' && c.s.day >= 4) && c.unlocked('LR') && count('LR') < 1 && c.s.money - CATALOG[t].costM < CATALOG.LR.costM) continue;
+    if (t !== 'LR' && !(t === 'CAP' && c.s.day >= 4) && c.unlocked('LR') && count('LR') < 1 && c.s.money - c.price(t) < CATALOG.LR.costM) continue;
     if (want() && c.buy(t)) bought.push(CATALOG[t].name);
   }
   for (const u of c.units) {

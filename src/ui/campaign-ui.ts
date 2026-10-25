@@ -214,7 +214,7 @@ export class CampaignUi {
       const why = c.canBuy(t);
       const locked = !c.unlocked(t);
       return `<div class="shop-item ${locked ? 'locked' : ''}">
-        <div class="shop-h"><b>${info.name}</b><span class="mono">${money(info.costM)}</span></div>
+        <div class="shop-h"><b>${info.name}</b><span class="mono">${money(c.price(t))}</span></div>
         <div class="dim">${esc(info.role)}</div>
         <div class="row">${locked ? `<span class="st emcon">Day ${info.unlockDay}</span>` : `<button data-cui="buy" data-type="${t}" ${why ? 'disabled' : ''} title="${esc(why ?? (c.started ? `Buy and place on the map. It reaches the depot ${DELIVERY_H[t]} h after ordering and sits out raids until then` : 'Buy and place on the map'))}">Buy</button>${c.started ? ` <span class="dim">arrives in ${DELIVERY_H[t]} h</span>` : ''}`}</div>
       </div>`;

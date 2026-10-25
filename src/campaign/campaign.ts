@@ -172,6 +172,8 @@ const DEFAULT_SPOTS: Record<UnitType, [number, number][]> = {
 };
 
 /** An extra repair crew: cost, and how many can be hired. */
+/** A second (or later) fighter pair, against the first one's catalogue price. */
+export const SECOND_CAP_M = 120;
 export const REPAIR_CREW = { costM: 30, max: 2 };
 
 export class Campaign {
@@ -604,16 +606,21 @@ export class Campaign {
     return true;
   }
 
+  /** What a unit costs to buy now: a second fighter pair comes cheaper, so it is a real mid-campaign buy. */
+  price(type: UnitType): number {
+    return type === 'CAP' && this.units.some((u) => u.type === 'CAP') ? SECOND_CAP_M : CATALOG[type].costM;
+  }
+
   canBuy(type: UnitType): string | null {
     const info = CATALOG[type];
     if (!this.unlocked(type)) return `Available from day ${info.unlockDay}`;
-    if (info.costM > this.s.money) return 'Not enough budget';
+    if (this.price(type) > this.s.money) return 'Not enough budget';
     return null;
   }
 
   buy(type: UnitType): DeployedUnit | null {
     if (this.canBuy(type)) return null;
-    this.s.money -= CATALOG[type].costM;
+    this.s.money -= this.price(type);
     const u = this.add(type);
     u.arrives = this.deliveryAt(type);
     if (u.arrives === undefined) delete u.arrives;

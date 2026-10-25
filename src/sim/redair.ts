@@ -142,8 +142,9 @@ export class RedSupport {
       wv.forEach((r, i) => {
         // A combined strike with the AWACS up is timed on target: the packages come in a minute or so apart
         // rather than spread over the wave. Probes and night raids keep their own timing.
-        if (this.awacsUp) r.t = tot ? t0 + i * w.rng.range(60, 90) : r.t;
-        else r.t = Math.max(r.t, t0 + i * w.rng.range(60, 150));
+        // Without it they keep their planned times: spreading them out only drew the raid out and wore the
+        // defence down, which made a kill a loss for us.
+        if (this.awacsUp && tot) r.t = t0 + i * w.rng.range(60, 90);
       });
     }
   }

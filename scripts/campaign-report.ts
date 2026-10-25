@@ -11,6 +11,7 @@ import { nearestFree } from '../src/sim/deploy';
 import { hhmm } from '../src/campaign/clock';
 import { scrambleQra } from '../src/sim/support';
 import { commanderShop } from './commander';
+import { timeToGo } from '../src/sim/tewa';
 
 const seed = Number(process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 1);
 const verbose = process.argv.includes('--verbose');
@@ -57,11 +58,12 @@ while (!c.s.over) {
         fg.sweep(w, a.base.id);
       }
     }
-    // Hunt the enemy AWACS only when our picture shows it unescorted, and only with a 2-ship from the fighters
-    // beyond the 2 that stay on base CAP.
+    // Hunt the enemy AWACS with the pair only when our picture shows it unescorted and no raid is within about
+    // 5 minutes of the base: leaving the base without CAP is the price.
     if (hunt && w.t % 5 < 1 / 60 && w.redSupport.escortSeen(w) === 'no escort' && !w.fighters.some((f) => f.state === 'hunt')) {
+      const near = w.tracker.tracks.some((tr) => tr.confirmed && !tr.dropped && tr.ident === 'HOS' && timeToGo(w, tr) < 300);
       const ready = w.fighters.filter((f) => f.alive && (f.state === 'station' || f.state === 'intercept') && !f.huntError(w, 'awacs'));
-      for (const fg of ready.slice(2, 4)) fg.hunt(w, 'awacs');
+      if (!near) for (const fg of ready.slice(0, 2)) fg.hunt(w, 'awacs');
     }
     // Fighters escort the assault column while it is on the road.
     if (!escorted && w.column?.alive && w.t > 10) {

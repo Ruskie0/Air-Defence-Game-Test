@@ -419,7 +419,9 @@ export class World {
         const base = v3(0, 0, this.terrain.groundAt(0, 0));
         const station = v3(u.x, u.y, 8000);
         f.fighters = [];
-        for (let i = 0; i < u.aircraft; i++) {
+        // An airbase knocked out cannot launch or recover fighters.
+        const flying = this.site('Airbase')?.alive === false ? 0 : u.aircraft;
+        for (let i = 0; i < flying; i++) {
           const n = this.fighters.length + 1;
           const start = v3(u.x + (i === 0 ? -12000 : 12000), u.y - 5000 + i * 3000, 8000);
           const fi = new Fighter(`Viper ${n}`, `F${n}`, base, station, start);

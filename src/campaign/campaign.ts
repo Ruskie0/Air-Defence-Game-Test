@@ -143,6 +143,8 @@ export interface CampaignState {
   enemyLost?: Partial<Record<Asset, number>>;
   /** After a costly raid the enemy flies smaller raids until `until` (clock minutes), by `cut`. */
   shaken?: { until: number; cut: number } | null;
+  /** 06:00 mornings in a row the airbase has been at 0 (two loses the campaign). */
+  downMornings?: number;
   /** The day the last emergency grant was paid. */
   grantDay?: number;
   /** The campaign clock (minutes since midnight before day 1): now, in the lull between raids. Absent in old saves. */
@@ -562,6 +564,15 @@ export class Campaign {
     return k && at < k.until ? k.cut : 0;
   }
 
+  /** The warning to show while the airbase is knocked out, or null. */
+  airbaseDownNote(): string | null {
+    const hp = this.s.deployment.assets.find((a) => a.name === 'Airbase')?.hp ?? 100;
+    if (hp > 0) return null;
+    return (this.s.downMornings ?? 0) >= 1
+      ? 'Airbase out of action since yesterday: restore it before 06:00 or the campaign is lost. Fighters cannot fly and it earns nothing.'
+      : 'Airbase out of action: restore it by 06:00 tomorrow or the campaign is lost. Fighters cannot fly and it earns nothing. Crews repair it twice as fast.';
+  }
+
   /** The emergency grant while the airbase is badly hurt, bigger the worse it is. */
   emergencyGrant(): number {
     const hp = this.s.deployment.assets.find((a) => a.name === 'Airbase')?.hp ?? 100;
@@ -771,7 +782,7 @@ export class Campaign {
     const at = assaultSpot(this.terrain, f, f.offensive);
     // The enemy fights hardest for its forward airfield: everything it has goes at that assault force.
     const field = f.towns[f.offensive].airfield;
-    const big = (n: number): number => (field ? Math.ceil(n * 1.3) : n);
+    const big = (n: number): number => (field ? Math.ceil(n * 1.15) : n);
     const kinds: [PkgKind, number][] = [['drones', big(Math.min(12, 4 + Math.floor(day / 2)))]];
     if (day >= 2) kinds.push(['cruise', big(Math.min(5, 2 + Math.floor(day / 4)))]);
     if (day >= 3 || field) kinds.push(['helo', big(day >= 6 ? 3 : 2)]);
@@ -1284,8 +1295,12 @@ export class Campaign {
     s.history.push(report);
 
     const airbase = s.deployment.assets.find((a) => a.name === 'Airbase')!;
-    if (airbase.hp <= 0) s.over = { won: false, reason: 'The airbase was destroyed. The defence has failed.' };
-    else if (s.front?.towns.some((t) => t.airfield && t.ours)) s.over = { won: true, reason: `We took the enemy's forward airfield on day ${s.day}. The front has collapsed: the campaign is won.` };
+    if (airbase.hp <= 0 && s.front && townsHeld(s.front) === 0) s.over = { won: false, reason: 'The airbase is out of action and every town has fallen. The defence has failed.' };
+    else if (airbase.hp > 0 && s.front?.towns.some((t) => t.airfield && t.ours)) s.over = { won: true, reason: `We took the enemy's forward airfield on day ${s.day}. The front has collapsed: the campaign is won.` };
+    else if (airbase.hp <= 0) {
+      // Knocked out, not lost: the campaign ends only if it is still down at 06:00 on two mornings running.
+      if (s.day >= CAMPAIGN_DAYS && lastToday) s.over = { won: false, reason: 'The ceasefire came with the airbase out of action. The defence has failed.' };
+    } else if (s.front?.towns.some((t) => t.airfield && t.ours)) s.over = { won: true, reason: `We took the enemy's forward airfield on day ${s.day}. The front has collapsed: the campaign is won.` };
     else if (s.civilLosses >= CIVIL_LIMIT) s.over = { won: false, reason: `${s.civilLosses} civil airliners shot down. You have been relieved of command.` };
     else if (s.day >= CAMPAIGN_DAYS && lastToday) {
       // The ceasefire: graded by how far up the road we got.
@@ -1323,6 +1338,10 @@ export class Campaign {
       this.advanceTo(Math.max(end, DAY_START_MIN + (s.day - 1) * 1440));
       s.money += income;
       s.incomePenalty = 0;
+      if (airbase.hp <= 0) {
+        s.downMornings = (s.downMornings ?? 0) + 1;
+        if (s.downMornings >= 2) s.over = { won: false, reason: 'The airbase was still out of action on a second morning. The defence has failed.' };
+      } else s.downMornings = 0;
       s.deployment.units = s.deployment.units.filter((u) => !u.loan);
       reinforce(this.theatre, this.diff.threat);
       this.replan();

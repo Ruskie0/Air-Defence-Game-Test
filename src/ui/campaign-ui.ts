@@ -358,7 +358,8 @@ export class CampaignUi {
     const when = warn ? ` <small>expected about ${hhmm(warn.at)}</small>` : '';
     const lull = c.started ? tip('lull', 'data-cui') : '';
     const waiting = c.started && (c.units.some((u) => u.arrives !== undefined) || c.s.deployment.assets.some((a) => c.repairing(a.name) > 0));
-    return `<button data-cui="start" class="go big-go" title="The clock runs on to the enemy's next operation and the battle starts">Advance to the next raid ▶${when}</button>
+    const down = c.airbaseDownNote();
+    return `${down ? `<p class="warn"><b>${esc(down)}</b></p>` : ''}<button data-cui="start" class="go big-go" title="The clock runs on to the enemy's next operation and the battle starts">Advance to the next raid ▶${when}</button>
       ${lull}${c.started ? `<button data-cui="wait" title="Let an hour pass, to let orders arrive and repairs go on before you reposition. Intel's timings can be out: the enemy may come during the hour">Wait 1 hour${waiting ? '' : ' <small class="dim">nothing pending</small>'}</button>` : ''}`;
   }
 

@@ -63,6 +63,8 @@ const cui = new CampaignUi({
     show(w);
   },
   startBattle(w: World, c: Campaign) {
+    const down = c.airbaseDownNote();
+    if (down) w.log(down, 'alert');
     w.scenario.doneMsg = 'All reported packages are in and the airspace is clear. End the raid when you are ready.';
     hud.campaign = { day: c.s.day, days: CAMPAIGN_DAYS, objectives: c.s.objectives ?? [], clock0: c.clock, onEndDay: () => {
         running = false;

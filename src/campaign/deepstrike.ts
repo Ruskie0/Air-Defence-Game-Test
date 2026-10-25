@@ -27,6 +27,7 @@ export const DEEP_STRIKES: Partial<Record<BaseKind, DeepStrikeDef>> = {
   glcm: { desc: 'Hunt the cruise missile launchers and their reloads.', costM: 40, chance: 0.5, unlockDay: 3 },
   tbm: { desc: 'Hunt the ballistic missile launchers in their hides.', costM: 45, chance: 0.45, unlockDay: 5 },
   sam: { desc: 'Hit the SAM site\'s launchers and its reloads.', costM: 35, chance: 0.55, unlockDay: 2 },
+  arty: { desc: 'Counter-battery fire on the guns and their ammunition.', costM: 30, chance: 0.6, unlockDay: 1 },
 };
 
 /** Share of an installation's stock a successful strike destroys. */

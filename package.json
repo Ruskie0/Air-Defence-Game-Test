@@ -12,7 +12,8 @@
     "playtest:campaign": "node scripts/playtest-campaign.mjs",
     "sim": "esbuild scripts/sim-report.ts --bundle --platform=node --format=esm --outfile=playtest/sim.mjs --log-level=warning && node playtest/sim.mjs",
     "harness": "esbuild scripts/threat-harness.ts --bundle --platform=node --format=esm --outfile=playtest/harness.mjs --log-level=warning && node playtest/harness.mjs",
-    "campaign": "esbuild scripts/campaign-report.ts --bundle --platform=node --format=esm --outfile=playtest/campaign.mjs --log-level=warning && node playtest/campaign.mjs"
+    "campaign": "esbuild scripts/campaign-report.ts --bundle --platform=node --format=esm --outfile=playtest/campaign.mjs --log-level=warning && node playtest/campaign.mjs",
+    "war": "esbuild scripts/war-report.ts --bundle --platform=node --format=esm --outfile=playtest/war.mjs --log-level=warning && node playtest/war.mjs"
   },
   "dependencies": {
     "three": "0.186.1"

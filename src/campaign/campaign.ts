@@ -24,6 +24,7 @@ import { ASSAULT_HOLD, DEVASTATED_ZONE_M, DUG_IN_HP, FrontState, dugIn, OFFENSIV
 import { AIRCRAFT, type Asset, type EnemyBase, TALLY_ASSET, assetCount, avail, draw, fallBack, makeTheatre, overrun, reinforce } from '../sim/theatre';
 import { Rng } from '../sim/rng';
 import { DeployZone, inZones } from '../sim/deploy';
+import type { WarState } from './war';
 
 export const CAMPAIGN_DAYS = 10;
 /** Scale on the enemy's threat points for a whole day, shared between its operations (balance). */
@@ -183,6 +184,10 @@ export interface CampaignState {
   enemyPush?: { pulse: number; town: number; from: number; struck?: boolean; broken?: boolean } | null;
   /** How the war ended on the clock: a ceasefire after the last day, graded by the ground we hold. */
   grade?: 'Bronze' | 'Silver' | 'Gold';
+  /** The living war's own state (src/campaign/war.ts). */
+  war?: WarState;
+  /** Airliners shot down before the current world was built (a reload starts its counters at 0). */
+  civilBefore?: number;
 }
 
 /** Where new units go before the player moves them, in order of preference. */
@@ -321,7 +326,7 @@ export class Campaign {
 
   /** The first raid has been fought: from then on orders take time to arrive and repairs take hours. */
   get started(): boolean {
-    return this.s.history.length > 0;
+    return this.s.history.length > 0 || !!this.s.war?.begun;
   }
 
   /** Threat points the enemy has for today, less for every town we hold beyond the first. */
@@ -411,7 +416,7 @@ export class Campaign {
   }
 
   /** A new day at 06:00: the weather, the enemy's budget for the day and its operations. */
-  private startDay(): void {
+  startDay(): void {
     // Targets our deep strikes hit recover a day at a time.
     const sup = this.s.enemy.suppressed;
     if (sup) for (const k of Object.keys(sup) as PkgKind[]) if (--sup[k]! <= 0) delete sup[k];
@@ -440,7 +445,7 @@ export class Campaign {
   }
 
   /** Take battalions off the brigade; returns how many were lost. */
-  private loseArmour(n: number): number {
+  loseArmour(n: number): number {
     const k = Math.min(n, this.armourStock);
     this.s.armourStock = this.armourStock - k;
     return k;
@@ -1039,11 +1044,21 @@ export class Campaign {
     const lines: string[] = [];
     const slot = this.pulse;
     const warn = this.s.warn;
-    if (slot && warn) {
+    if (this.s.war) {
+      lines.push(warn && warn.at > this.clock - 30
+        ? `The enemy is massing for an operation: expect it around ${hhmm(warn.at)}, mainly from the ${SECTOR_NAMES[warn.sector]}. Timings from intel have been out by an hour before.`
+        : 'No enemy operation reported yet. Intel warns when the enemy starts massing for one.');
+      if (this.s.enemyPush && !this.s.enemyPush.broken && this.s.front) {
+        const f = this.s.front;
+        lines.push(`Enemy armour is massing at ${f.towns[this.s.enemyPush.from].name} to attack ${f.towns[this.s.enemyPush.town].name} today, with drones and missiles aimed at the town. Keep the town above ${ARMOUR.takeHp}% while the armour assaults it, or strike the armour before it moves.`);
+      }
+      const fixed = (this.s.enemy.known ?? []).length;
+      if (fixed) lines.push(`Our ELINT thinks the enemy has fixed ${fixed} of our positions (marked Compromised). Its next sorties will go for them: move them, or defend them.`);
+    } else if (slot && warn) {
       const left = (this.s.pulses?.length ?? 1) - (this.s.pulseIdx ?? 0) - 1;
       lines.push(`Next: ${PULSES[slot.type].name.toLowerCase()}, ${PULSES[slot.type].desc}. Expected about ${hhmm(warn.at)}, mainly from the ${SECTOR_NAMES[warn.sector]}. Timings from intel have been out by an hour or two before. ${left ? `${left === 1 ? 'One more operation' : `${left} more operations`} expected today.` : 'The last operation expected today.'}`);
     }
-    const push = this.pushNow;
+    const push = this.s.war ? null : this.pushNow;
     if (push) {
       const f = this.s.front!;
       lines.push(`Enemy armour is massing at ${f.towns[push.from].name} to attack ${f.towns[push.town].name} with the next raid, with drones and missiles aimed at the town. Keep the town above ${ARMOUR.takeHp}% while the armour assaults it, or strike the armour before it moves.`);
@@ -1110,6 +1125,29 @@ export class Campaign {
       clockStart: withRaids ? this.clock : undefined,
       pulse: withRaids ? this.pulse?.type : undefined,
       awacsDenied: withRaids && (this.s.awacsBackAt ?? 0) > this.clock,
+    });
+  }
+
+  /**
+   * The one world of the living war: every unit as it stands (the same records, so the world moves them),
+   * our towns, the theatre itself (its stocks change as the enemy launches and loses), and no raids yet.
+   */
+  makeLiveWorld(): World {
+    const f = this.s.front;
+    return new World({
+      towns: f?.towns.filter((t) => t.ours).map((t) => ({ name: t.name, x: t.x, y: t.y, hp: t.hp })),
+      zones: this.zones,
+      seed: this.s.seed * 31 + this.s.day * 7 + this.s.history.length,
+      terrain: this.terrain,
+      theatre: this.theatre,
+      deployment: { units: this.units.filter((u) => u.arrives === undefined || u.arrives <= this.clock), assets: this.s.deployment.assets },
+      raids: [],
+      civil: true,
+      upgrades: this.s.upgrades,
+      budgetM: this.s.money,
+      weather: this.s.weather,
+      counterBattery: this.s.day,
+      clockStart: this.clock,
     });
   }
 

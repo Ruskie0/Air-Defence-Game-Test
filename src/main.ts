@@ -13,6 +13,10 @@ import { Lesson, Tutorial, setupFrontLesson } from './ui/tutorial';
 import { WEATHER, WeatherId } from './campaign/weather';
 import { LastStand } from './campaign/laststand';
 import { StandUi } from './ui/laststand-ui';
+import type { War } from './campaign/war';
+import { TEMPO } from './sim/tempo';
+import { hhmm } from './campaign/clock';
+import { SECTOR_NAMES } from './campaign/raidgen';
 
 const params = new URLSearchParams(location.search);
 const seed = Number(params.get('seed')) || MAP_SEED;
@@ -41,8 +45,11 @@ let running = false;
 let tutorial: Tutorial | null = null;
 /** The Last Stand run and its panel, while one is on. */
 let stand: LastStand | null = null;
+/** The campaign's living war, while one is on. */
+let war: War | null = null;
 let standUi: StandUi | null = null;
 const view = new View3D(document.getElementById('view')!, world);
+const tempo = new Tempo();
 gfx.mount();
 view.planClock = () => (document.body.dataset.mode === 'plan' ? cui.campaign?.clock : undefined);
 const ppi = new Ppi(document.getElementById('ppi') as HTMLCanvasElement, world);
@@ -78,9 +85,43 @@ const cui = new CampaignUi({
     document.body.dataset.mode = 'battle';
     view.setView('defended');
   },
+  startWar(wr: War, c: Campaign) {
+    endTraining();
+    endStand();
+    war = wr;
+    hud.campaign = {
+      get day() {
+        return c.s.day;
+      },
+      days: CAMPAIGN_DAYS,
+      objectives: [],
+      onEndDay: () => cui.toggleOrders(),
+      clock0: wr.w.clockStart,
+      war: true,
+      warn: () => {
+        const wn = c.s.warn;
+        return wn && wn.at > wr.clock - 30 ? `next enemy operation expected ~${hhmm(wn.at)} from the ${SECTOR_NAMES[wn.sector]}` : 'no enemy operation reported';
+      },
+    };
+    show(wr.w);
+    hud.setWorld(wr.w);
+    wr.onWorld = (w) => {
+      show(w);
+      hud.setWorld(w);
+    };
+    tempo.max = TEMPO.warMax;
+    running = true;
+    document.body.dataset.mode = 'battle';
+    view.setView('defended');
+  },
+  setPlanning(on: boolean) {
+    ctl.paused = on;
+    document.body.classList.toggle('planning', on);
+  },
   toMenu() {
     endTraining();
     endStand();
+    endWar();
     running = false;
     hud.campaign = null;
     show(backdrop());
@@ -94,6 +135,7 @@ const cui = new CampaignUi({
 function startSandbox(type?: MapType): void {
   endTraining();
   endStand();
+  endWar();
   hud.campaign = null;
   terrain = sandboxTerrain(type);
   const wx = params.get('weather');
@@ -110,6 +152,7 @@ function startSandbox(type?: MapType): void {
 function startTraining(lesson: Lesson = 'basics'): void {
   endTraining();
   endStand();
+  endWar();
   hud.campaign = null;
   const c = Campaign.create(424242, 'normal', 'coastal');
   c.buy('EWR');
@@ -139,6 +182,7 @@ function startTraining(lesson: Lesson = 'basics'): void {
 function startLastStand(type?: MapType): void {
   endTraining();
   endStand();
+  endWar();
   hud.campaign = null;
   const st = new LastStand(params.has('seed') ? seed : Math.floor(Math.random() * 1e6) + 1, type);
   stand = st;
@@ -159,6 +203,12 @@ function startLastStand(type?: MapType): void {
       cui.showMenu();
     },
   });
+}
+
+function endWar(): void {
+  war = null;
+  tempo.max = TEMPO.max;
+  document.body.classList.remove('planning');
 }
 
 function endStand(): void {
@@ -196,10 +246,14 @@ else if (mode === 'campaign') {
   get stand() {
     return stand;
   },
+  get war() {
+    return war;
+  },
 };
 
-const tempo = new Tempo();
-const MAX_STEPS_PER_FRAME = 64;
+const MAX_STEPS_PER_FRAME = 160;
+/** Real milliseconds a frame may spend stepping the simulation before it gives up on the backlog. */
+const STEP_BUDGET_MS = 14;
 let acc = 0;
 let last = performance.now();
 let nextDraw = 0;
@@ -226,14 +280,21 @@ function frame(now: number): void {
     ctl.fastForward = lv > ctl.speed;
     acc += real * Math.max(ctl.speed, lv);
     let n = 0;
+    const t0 = performance.now();
     while (acc >= DT && n < MAX_STEPS_PER_FRAME) {
       world.step(DT);
       acc -= DT;
       n++;
+      if (war && n % 30 === 0) war.update();
+      if (performance.now() - t0 > STEP_BUDGET_MS) break;
     }
     // If the sim cannot keep up with the requested compression, drop the backlog rather than spiral.
-    if (n === MAX_STEPS_PER_FRAME) acc = 0;
+    if (acc >= DT) acc = 0;
   } else acc = 0;
+  if (war && running) {
+    war.update();
+    cui.autosave();
+  }
   view.render();
   ppi.draw();
   if (running) hud.update();

@@ -191,6 +191,8 @@ export class Drone extends Air {
   readonly kind = 'drone' as const;
   readonly side = 'red' as const;
   diving = false;
+  /** Seconds spent hunting for the target after the last waypoint (a jammed drone can circle a long way off it). */
+  private hunting = 0;
 
   constructor(name: string, pos: V3, route: V3[], target: V3, targetName: string, agl: number) {
     super(name, pos, bearingDeg(pos, route[0] ?? target), 50);
@@ -213,7 +215,9 @@ export class Drone extends Air {
     if (!this.diving) {
       if (this.followWaypoints(dt)) {
         this.steer(tgt.x, tgt.y, dt);
-        if (this.perceivedDist(tgt) < 1600) this.diving = true;
+        this.hunting += dt;
+        // Out of fuel or patience: it dives wherever it thinks it is.
+        if (this.perceivedDist(tgt) < 1600 || this.hunting > 240) this.diving = true;
       }
       this.integrate(w, dt);
     } else {
@@ -221,6 +225,8 @@ export class Drone extends Air {
       const aim = sub(tgt, this.navErr);
       this.vel = scale(norm(sub(aim, this.pos)), 68);
       this.pos = addScaled(this.pos, this.vel, dt);
+      // Reaching the aim point is impact, even where the nav error put it in the air above the ground.
+      if (Math.hypot(aim.x - this.pos.x, aim.y - this.pos.y, aim.z - this.pos.z) < 68 * dt * 1.5) this.pos.z = w.terrain.groundAt(this.pos.x, this.pos.y);
     }
     if (this.pos.z <= w.terrain.groundAt(this.pos.x, this.pos.y) + 1) w.detonate(this);
   }
@@ -260,6 +266,7 @@ export class Cruise extends Air {
       const aim = sub(tgt, this.navErr);
       this.vel = scale(norm(sub(aim, this.pos)), 250);
       this.pos = addScaled(this.pos, this.vel, dt);
+      if (Math.hypot(aim.x - this.pos.x, aim.y - this.pos.y, aim.z - this.pos.z) < 250 * dt * 1.5) this.pos.z = w.terrain.groundAt(this.pos.x, this.pos.y);
     }
     if (this.pos.z <= w.terrain.groundAt(this.pos.x, this.pos.y) + 1) w.detonate(this);
   }

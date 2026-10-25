@@ -16,6 +16,8 @@ export const EXPOSURE = {
   launch: { LR: 16, MR: 16, SH: 9 } as Record<string, number>,
   /** Per second while radiating: the big radars, and SHORAD's small search radar. */
   radiate: { LR: 0.1, MR: 0.1, EWR: 0.1, SH: 0.03 } as Record<string, number>,
+  /** Living war: emissions are only heard by an enemy aircraft within this range (m). */
+  esmM: 200000,
   /** Lost per second while silent. */
   decay: 0.5,
   threshold: 100,
@@ -42,7 +44,64 @@ export interface Located {
 /** Counter-battery strikes the enemy has for a battle at this level (campaign day, or a Last Stand wave). */
 export const cbStrikes = (level: number): number => (level <= 0 ? 0 : 1 + Math.floor(level / 3));
 
+/**
+ * The living war's retaliation: a fix is the enemy's picture of where a unit stands, from its launches and
+ * emissions or a recon photograph. Nothing launches at it straight away: its sortie planner aims the next
+ * raid at it. Only artillery near the front can react within minutes. Game-level numbers.
+ */
+export const ARTY = {
+  /** Reach of an enemy artillery base (m): long-range rocket artillery. */
+  rangeM: 60000,
+  /** From the fix to the first shell landing (s): the call for fire and the guns laying on, then the flight. */
+  callS: [100, 200] as [number, number],
+  /** Shells in a barrage, seconds between them, their spread round the aim point (m), and their effect. */
+  shells: 8,
+  gapS: 4,
+  spreadM: 120,
+  blastM: 70,
+  dmg: 14,
+  /** Shortest gap between two barrages from the same base (s). */
+  cooldownS: 600,
+  /** A fix older than this is dropped (s); so is one on a unit that has moved more than DRIFT_M from it. */
+  fixAgeS: 18 * 3600,
+  driftM: 400,
+};
+
+/** A position the enemy has fixed: where, and when. */
+export interface Fix {
+  uid: number;
+  unit: string;
+  x: number;
+  y: number;
+  /** Sim time it was fixed. */
+  t: number;
+  /** How: by its launches and emissions, or from a recon drone's photographs. */
+  how: 'elint' | 'recon';
+}
+
+/** A barrage on its way to a fixed position. */
+export interface Barrage {
+  uid: number;
+  unit: string;
+  x: number;
+  y: number;
+  base: string;
+  /** Sim time the first shell lands, and how many are still to land. */
+  at: number;
+  left: number;
+}
+
 export class Exposure {
+  /**
+   * 'strike': a located battery draws a counter-battery strike within minutes (Last Stand, sandbox, training).
+   * 'intel': the campaign's living war, where a full bar only gives the enemy a fix for its next sorties.
+   */
+  mode: 'strike' | 'intel' = 'strike';
+  /** Positions the enemy has fixed (intel mode). */
+  fixes: Fix[] = [];
+  /** Artillery barrages on their way (intel mode). */
+  readonly barrages: Barrage[] = [];
+  private readonly artyReady = new Map<string, number>();
   /** Campaign day (or equivalent) that sets the strike's weapons; 0 turns counter-battery fire off. */
   level: number;
   strikesLeft: number;
@@ -78,6 +137,9 @@ export class Exposure {
     if (w.t < this.nextStep) return;
     const dt = 0.5;
     this.nextStep = w.t + dt;
+    // In the living war emissions only give a unit away while something of the enemy's is listening: an
+    // aircraft up within ESM range, or a SAM site's radar watching. Through the quiet hours it holds steady.
+    const ears = this.mode === 'intel' ? w.entities.filter((e) => e.alive && e.side === 'red' && e.airborne && !e.munition) : [];
     for (const f of w.fielded) {
       if (!Exposure.tracked(f) || !f.sites[0]?.alive) continue;
       const type = f.unit.type;
@@ -89,10 +151,19 @@ export class Exposure {
       if (n > before) heat += (n - before) * (EXPOSURE.launch[type] ?? 0) * w.mods.exposureMult * seen;
       this.fired.set(f, n);
       if (f.move) heat = 0;
-      else if (f.radar?.isEmitting()) heat += (EXPOSURE.radiate[type] ?? 0) * dt * w.mods.exposureMult * seen;
+      else if (f.radar?.isEmitting()) {
+        const heard = this.mode !== 'intel' || seen > 1 || ears.some((e) => hdist(e.pos, f.sites[0].pos) < EXPOSURE.esmM);
+        if (heard) heat += (EXPOSURE.radiate[type] ?? 0) * dt * w.mods.exposureMult * seen;
+      }
       else heat -= EXPOSURE.decay * dt;
       f.heat = Math.min(EXPOSURE.threshold, Math.max(0, heat));
-      if (f.heat >= EXPOSURE.threshold && this.canStrike(w, f)) this.locate(w, f);
+      if (this.mode === 'intel') {
+        if (f.heat >= EXPOSURE.threshold && this.level > 0) this.fix(w, f);
+      } else if (f.heat >= EXPOSURE.threshold && this.canStrike(w, f)) this.locate(w, f);
+    }
+    if (this.mode === 'intel') {
+      this.stepFixes(w);
+      return;
     }
     for (const l of this.located) {
       if (!l.over && w.t > l.eta + 5) {
@@ -105,6 +176,77 @@ export class Exposure {
         l.moved = true;
         w.log(`${l.unit} is off the spot the enemy located: the strike will hit empty ground`, 'info');
       }
+    }
+  }
+
+  /** The enemy's fix on a unit, if it has a current one. */
+  fixOn(uid: number): Fix | undefined {
+    return this.fixes.find((x) => x.uid === uid);
+  }
+
+  /**
+   * What our own ELINT makes of it: whether the enemy has probably fixed this unit. It reads the enemy's
+   * emissions and recon flights, not its plans, so it misses about one fix in seven and now and then flags a
+   * unit that is only close to being fixed.
+   */
+  compromised(f: Fielded): boolean {
+    const fx = this.fixOn(f.unit.uid);
+    // A steady per-unit, per-fix roll, so the estimate does not flicker.
+    const roll = ((f.unit.uid * 2654435761 + (fx ? Math.floor(fx.t) : 0) * 40503) >>> 0) % 1000 / 1000;
+    if (fx) return roll >= 0.15;
+    return (f.heat ?? 0) >= 70 && roll < 0.2;
+  }
+
+  /** Record a fix (recon photographs come in this way too); a newer one replaces the old. */
+  addFix(w: World, fx: Fix): void {
+    this.fixes = this.fixes.filter((x) => x.uid !== fx.uid);
+    this.fixes.push(fx);
+    w.layoutSeq++;
+  }
+
+  /** A unit's position has given itself away: the enemy fixes it, and artillery in reach may shell it. */
+  private fix(w: World, f: Fielded): void {
+    f.heat = 0;
+    const pos = f.sites[0].pos;
+    const name = w.unitName(f);
+    this.addFix(w, { uid: f.unit.uid, unit: name, x: Math.round(pos.x), y: Math.round(pos.y), t: w.t, how: 'elint' });
+    if (this.barrages.some((b) => b.uid === f.unit.uid)) return;
+    const arty = basesWith(w.theatre, 'shell', 1, pos).find((b) => Math.hypot(b.x - pos.x, b.y - pos.y) <= ARTY.rangeM && (this.artyReady.get(b.id) ?? 0) <= w.t);
+    if (!arty) return;
+    draw(arty, 'shell', 1);
+    this.artyReady.set(arty.id, w.t + ARTY.cooldownS);
+    this.barrages.push({ uid: f.unit.uid, unit: name, x: pos.x, y: pos.y, base: arty.id, at: w.t + w.rng.range(...ARTY.callS), left: ARTY.shells });
+  }
+
+  /** Fixes go stale when the unit moves off the spot or after most of a day; barrages land. */
+  private stepFixes(w: World): void {
+    const before = this.fixes.length;
+    this.fixes = this.fixes.filter((fx) => {
+      if (w.t - fx.t > ARTY.fixAgeS) return false;
+      const f = w.fielded.find((x) => x.unit.uid === fx.uid);
+      if (!f || !f.sites[0]?.alive) return false;
+      return Math.hypot(f.unit.x - fx.x, f.unit.y - fx.y) <= ARTY.driftM;
+    });
+    if (this.fixes.length !== before) w.layoutSeq++;
+    for (let i = this.barrages.length - 1; i >= 0; i--) {
+      const b = this.barrages[i];
+      if (w.t < b.at) continue;
+      if (b.left === ARTY.shells) {
+        const base = w.theatre.find((x) => x.id === b.base);
+        if (base) w.revealBase(base);
+        w.log(`Artillery fire from the ${base?.name.toLowerCase() ?? 'enemy guns'} is falling on the ${b.unit}'s position`, 'alert');
+      }
+      const p = v3(b.x + w.rng.gauss() * ARTY.spreadM, b.y + w.rng.gauss() * ARTY.spreadM, 0);
+      p.z = w.terrain.groundAt(p.x, p.y);
+      w.effect(p, 'ground');
+      for (const s of w.sites) {
+        if (!s.alive || s.role === 'town') continue;
+        const d = hdist(s.pos, p);
+        if (d < ARTY.blastM + s.radius) s.damage(w, ARTY.dmg * (1 - d / (ARTY.blastM + s.radius + 1)), 'artillery');
+      }
+      b.left--;
+      b.at = w.t + ARTY.gapS;
+      if (b.left <= 0) this.barrages.splice(i, 1);
     }
   }
 

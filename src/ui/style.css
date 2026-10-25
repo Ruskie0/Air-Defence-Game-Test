@@ -485,7 +485,8 @@ tbody tr.sel {
 body[data-mode='menu'] :is(#left, #right, #log, #ppi-wrap, #plan-left, #plan-right, #speed, #wcs, #raid, #score, #clock, #menu-btn),
 body[data-mode='plan'] :is(#left, #right, #log, #speed, #wcs),
 body[data-mode='debrief'] :is(#plan-left, #plan-right),
-body[data-mode='battle'] :is(#plan-left, #plan-right),
+body[data-mode='battle']:not(.planning) :is(#plan-left, #plan-right),
+body.planning[data-mode='battle'] :is(#left, #right),
 body[data-mode='sandbox'] :is(#plan-left, #plan-right),
 body[data-mode='training'] :is(#plan-left, #plan-right, #spawn) {
   display: none;

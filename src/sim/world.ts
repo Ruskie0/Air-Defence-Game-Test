@@ -149,9 +149,9 @@ export class World {
   readonly scenario: Scenario;
   wcs: Wcs = 'TIGHT';
   /** Game-stat multipliers from campaign upgrades. */
-  readonly mods: Modifiers;
-  readonly weatherId: WeatherId;
-  readonly weather: Weather;
+  mods: Modifiers;
+  weatherId: WeatherId;
+  weather: Weather;
   /** Support calls budget ($M) and what has been spent from it. */
   budgetM: number;
   supportSpentM = 0;
@@ -171,11 +171,13 @@ export class World {
    */
   onAssault: ((outcome: AssaultOutcome, w: World) => void) | null = null;
   /** Where ground units may stand. */
-  readonly zones: readonly DeployZone[];
+  zones: readonly DeployZone[];
   /** The quick reaction alert pair has been scrambled this battle. */
   qraUsed = false;
   /** Resupply convoys and repair teams on their way. */
   support: SupportCall[] = [];
+  /** Units bought and still on their way to the depot (campaign): where they will go, and when they arrive (clock min). */
+  incoming: { uid: number; type: UnitType; x: number; y: number; eta: number; depot: { x: number; y: number } }[] = [];
   /** Bumped whenever a unit's position changes, so views can redraw coverage. */
   layoutSeq = 0;
   readonly logEntries: LogEntry[] = [];
@@ -434,6 +436,9 @@ export class World {
       }
     }
     if (f.radar && u.armWatch) f.radar.armWatch = true;
+    // Emission control as the crew left it.
+    if (f.radar && u.emcon) f.radar.emcon = u.emcon;
+    if (f.radar && u.silent) f.radar.emitting = false;
     // Damage from an earlier raid that the crews have not yet repaired.
     if (u.hp !== undefined && f.sites[0]) f.sites[0].hp = Math.max(1, u.hp);
     f.fu?.launchers.forEach((l, i) => {
@@ -445,7 +450,7 @@ export class World {
   }
 
   /** A unit that arrives during the battle (Last Stand reinforcements): field it as the constructor would. */
-  reinforce(u: DeployedUnit): void {
+  reinforce(u: DeployedUnit): Fielded {
     const n = this.sites.length;
     const f = this.field(u);
     if (f.radar && f.radar.spec.freqGHz >= 8) f.radar.wxLoss = Math.pow(10, this.weather.radarLossDb / 10);
@@ -454,6 +459,111 @@ export class World {
       this.startHp.set(s.name, s.hp);
     }
     this.layoutSeq++;
+    return f;
+  }
+
+  // ---------------------------------------------------------------- the living war (campaign)
+  // The campaign keeps one world for the whole war, so the map changes under it: towns change hands, the
+  // assault force sets off and is done with, units are bought, scrapped and refitted, and the weather turns.
+
+  /** A defended site added during the war (a town just taken). */
+  addTown(tn: { name: string; x: number; y: number; hp: number }): Site {
+    const s = this.addSite(tn.name, 'asset', tn.x, tn.y, 0, 450, true);
+    s.role = 'town';
+    s.vuln = 0.5 * this.mods.damageMult;
+    s.hp = tn.hp;
+    s.alive = s.hp > 0;
+    this.startHp.set(s.name, s.hp);
+    this.layoutSeq++;
+    return s;
+  }
+
+  /** Take a site off the map altogether (a town lost, the assault force stood down, a unit scrapped). */
+  removeSite(s: Site): void {
+    const i = this.sites.indexOf(s);
+    if (i >= 0) this.sites.splice(i, 1);
+    this.layoutSeq++;
+  }
+
+  /** Send an assault force up the road during the war, as the constructor does for a battle's offensive. */
+  startAssault(a: { x: number; y: number; target: string; from: { x: number; y: number } }): void {
+    const s = this.addSite('Assault force', 'asset', a.from.x, a.from.y, 0, 250, true);
+    s.role = 'assault';
+    s.vuln *= this.mods.damageMult;
+    s.onDestroyed = () => this.assaultEvent('destroyed');
+    this.assaultOutcome = null;
+    const dest = v3(a.x, a.y, this.terrain.groundAt(a.x, a.y) + 2);
+    this.column = new Column('Assault column', v3(a.from.x, a.from.y, this.terrain.groundAt(a.from.x, a.from.y) + 2), dest, s, a.target, this.t);
+    this.spawn(this.column);
+    this.layoutSeq++;
+  }
+
+  /** The offensive is over either way: the column and its site leave the map. */
+  endAssault(): void {
+    const s = this.site('Assault force');
+    if (s) this.removeSite(s);
+    if (this.column) this.column.alive = false;
+    this.column = null;
+  }
+
+  /** The enemy's armour sets off for one of our towns. */
+  startEnemyAssault(e: { target: string; from: { x: number; y: number }; to: { x: number; y: number }; takeHp?: number }): void {
+    this.enemyArmour = new EnemyArmour(e.target, e.from, e.to, e.takeHp, this.t);
+  }
+
+  /** The day's weather turns. */
+  setWeather(id: WeatherId): void {
+    this.weatherId = id;
+    this.weather = WEATHER[id];
+    const wx = Math.pow(10, this.weather.radarLossDb / 10);
+    for (const r of this.allRadars()) r.wxLoss = r.spec.freqGHz >= 8 ? wx : 1;
+  }
+
+  /** Scrap a unit: its sites, radar, weapons and aircraft leave the war. */
+  removeUnit(f: Fielded): void {
+    for (const s of f.sites) this.removeSite(s);
+    const drop = <T>(list: T[], x: T | undefined): void => {
+      const i = x === undefined ? -1 : list.indexOf(x);
+      if (i >= 0) list.splice(i, 1);
+    };
+    drop(this.radars, f.radar);
+    drop(this.units, f.fu);
+    drop(this.ciws, f.ciws);
+    for (const fi of f.fighters ?? []) {
+      drop(this.fighters, fi);
+      fi.alive = false;
+    }
+    for (const list of [this.gnss, this.decoys, this.ewj] as { site: Site }[][]) {
+      for (let i = list.length - 1; i >= 0; i--) if (f.sites.includes(list[i].site)) list.splice(i, 1);
+    }
+    drop(this.fielded, f);
+    this.layoutSeq++;
+  }
+
+  /** One more loaded launcher for a SAM battery, standing at (x, y). */
+  addLauncher(f: Fielded, x: number, y: number, rounds: number): void {
+    const fu = f.fu;
+    if (!fu || fu.type === 'SH') return;
+    const s = this.addSite(`${fu.name} launcher ${fu.launchers.length + 1}`, 'launcher', x, y, 2, 6);
+    s.vuln *= this.mods.damageMult;
+    const launcher: Launcher = { site: s, rounds, max: rounds, reloadAt: 0 };
+    s.onDestroyed = () => {
+      launcher.rounds = 0;
+    };
+    fu.launchers.push(launcher);
+    f.sites.push(s);
+    this.layoutSeq++;
+  }
+
+  /** A replacement fighter joins a CAP pair from the airbase. */
+  addFighter(f: Fielded): void {
+    if (!f.fighters || this.site('Airbase')?.alive === false) return;
+    const base = v3(0, 0, this.terrain.groundAt(0, 0));
+    const n = this.fighters.length + 1;
+    const fi = new Fighter(`Viper ${n}`, `F${n}`, base, v3(f.unit.x, f.unit.y, 8000), v3(base.x, base.y, 1500));
+    this.fighters.push(fi);
+    this.spawn(fi);
+    f.fighters.push(fi);
   }
 
   /** Launch the quick reaction alert pair from the airbase, on station 20 km out towards the enemy. */

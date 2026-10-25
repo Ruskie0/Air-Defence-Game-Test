@@ -16,6 +16,8 @@ import { objectiveDesc, objectiveName } from '../campaign/objectives';
 import { EVENTS } from '../campaign/events';
 import { DEEP_STRIKES, DeepStrikeId, deepStrike, deepStrikeError, strikeTargets } from '../campaign/deepstrike';
 import { type Asset, BASE_DEFS, assetCount, stockText } from '../sim/theatre';
+import { War, WAR } from '../campaign/war';
+import { modifiers } from '../campaign/upgrades';
 import { ASSAULT_HOLD, DEVASTATED_ZONE_M, OFFENSIVE_COST_M, TOWN_THREAT_CUT, TOWN_ZONE_M, dugIn, nextObjective } from '../campaign/front';
 
 const SAVE_KEY = 'air-defence-campaign-v1';
@@ -40,6 +42,10 @@ export interface CampaignHost {
   startSandbox(type?: MapType): void;
   startTraining(lesson?: 'basics' | 'front'): void;
   startLastStand(type?: MapType): void;
+  /** Start (or resume) the campaign's living war on the live map. */
+  startWar(war: War, c: Campaign): void;
+  /** Pause for the orders overlay, or close it and run on. */
+  setPlanning(on: boolean): void;
 }
 
 /** Saved campaign in this browser, if any. Storage can be unavailable, so every access is guarded. */
@@ -74,6 +80,12 @@ export class CampaignUi {
   private note = '';
   /** Map type picked on the menu (undefined = random). */
   private mapPick: MapType | undefined;
+  /** The living war, while a campaign is on. */
+  private war: War | null = null;
+  /** The orders overlay is open over the live map. */
+  private ordersOpen = false;
+  /** Real time of the last autosave. */
+  private savedAt = 0;
 
   constructor(host: CampaignHost) {
     this.host = host;
@@ -148,20 +160,81 @@ export class CampaignUi {
   newCampaign(seed = Math.floor(Math.random() * 1e6) + 1, difficulty: Difficulty = 'normal', mapType: MapType | undefined = this.mapPick): void {
     this.c = Campaign.create(seed, difficulty, mapType);
     store(this.c);
-    this.note = 'Your first units are in their default positions. Move them, buy more, then start the day.';
-    this.showPlanning();
+    this.note = 'The war starts when you close this overlay. Your first units are in their default positions: move them, buy more, then press "Start the war". Until then everything is instant.';
+    this.beginWar();
   }
 
   continueCampaign(c: Campaign): void {
     this.c = c;
     this.note = '';
-    this.showPlanning();
+    this.beginWar();
+  }
+
+  /** Put the campaign on the live map and open the orders overlay over it. */
+  private beginWar(): void {
+    const c = this.c!;
+    const war = new War(c);
+    this.war = war;
+    war.onOver = () => {
+      this.closeOrders();
+      this.host.setPlanning(true);
+      document.body.classList.remove('planning');
+      store(c);
+      this.showDebrief(c.s.history[c.s.history.length - 1] ?? war.emptyReport());
+    };
+    war.onDay = () => {
+      if (!c.s.over) store(c);
+      if (this.ordersOpen) this.render();
+    };
+    this.host.startWar(war, c);
+    this.openOrders();
+  }
+
+  /** Save the war when nothing of the enemy's is in the air, at most every 20 seconds of real time. */
+  autosave(): void {
+    const war = this.war;
+    if (!war || !this.c || this.c.s.over || performance.now() - this.savedAt < 20000 || !war.quiet()) return;
+    this.savedAt = performance.now();
+    war.sync();
+    store(this.c);
+  }
+
+  /** Open or close the orders overlay (the P key and the top-bar button). */
+  toggleOrders(): void {
+    if (this.ordersOpen) this.closeOrders();
+    else this.openOrders();
+  }
+
+  openOrders(): void {
+    if (!this.c || !this.war) return;
+    this.ordersOpen = true;
+    this.war.sync();
+    this.host.setPlanning(true);
+    this.render();
+  }
+
+  closeOrders(): void {
+    if (!this.ordersOpen) return;
+    this.ordersOpen = false;
+    this.stopPlacing();
+    this.focus = null;
+    this.host.view.setPreview(null);
+    this.host.setPlanning(false);
+    if (this.c && this.war?.quiet()) {
+      this.war.sync();
+      store(this.c);
+    }
   }
 
   // ------------------------------------------------------------- planning
 
   showPlanning(): void {
     if (!this.c) return;
+    if (this.war) {
+      $('debrief').classList.add('hidden');
+      this.openOrders();
+      return;
+    }
     document.body.dataset.mode = 'plan';
     $('debrief').classList.add('hidden');
     this.refreshWorld();
@@ -180,7 +253,7 @@ export class CampaignUi {
 
   private refreshWorld(): void {
     if (!this.c) return;
-    this.host.showPreview(this.c.makeWorld(false));
+    if (!this.war) this.host.showPreview(this.c.makeWorld(false));
     this.showFocus();
   }
 
@@ -205,9 +278,11 @@ export class CampaignUi {
     if (!c) return;
     const s = c.s;
     const last = s.history[s.history.length - 1];
-    $('raid').innerHTML = `<span class="lbl">DAY</span><b>${s.day}</b><span class="dim">/${CAMPAIGN_DAYS}</span> <span class="lbl" style="margin-left:10px">PLANNING</span><span class="dim">${c.diff.name} · saved</span>`;
-    $('clock').innerHTML = `<b>${hhmm(c.clock)}</b> <span class="rate paused">CLOCK STOPPED</span>`;
-    $('score').innerHTML = `<span class="chip">Budget <b>${money(s.money)}</b></span>`;
+    if (!this.war) $('raid').innerHTML = `<span class="lbl">DAY</span><b>${s.day}</b><span class="dim">/${CAMPAIGN_DAYS}</span> <span class="lbl" style="margin-left:10px">PLANNING</span><span class="dim">${c.diff.name} · saved</span>`;
+    if (!this.war) {
+      $('clock').innerHTML = `<b>${hhmm(c.clock)}</b> <span class="rate paused">CLOCK STOPPED</span>`;
+      $('score').innerHTML = `<span class="chip">Budget <b>${money(s.money)}</b></span>`;
+    }
 
     const shop = SHOP_ORDER.map((t) => {
       const info = CATALOG[t];
@@ -216,7 +291,7 @@ export class CampaignUi {
       return `<div class="shop-item ${locked ? 'locked' : ''}">
         <div class="shop-h"><b>${info.name}</b><span class="mono">${money(c.price(t))}</span></div>
         <div class="dim">${esc(info.role)}</div>
-        <div class="row">${locked ? `<span class="st emcon">Day ${info.unlockDay}</span>` : `<button data-cui="buy" data-type="${t}" ${why ? 'disabled' : ''} title="${esc(why ?? (c.started ? `Buy and place on the map. It reaches the depot ${DELIVERY_H[t]} h after ordering and sits out raids until then` : 'Buy and place on the map'))}">Buy</button>${c.started ? ` <span class="dim">arrives in ${DELIVERY_H[t]} h</span>` : ''}`}</div>
+        <div class="row">${locked ? `<span class="st emcon">Day ${info.unlockDay}</span>` : `<button data-cui="buy" data-type="${t}" ${why ? 'disabled' : ''} title="${esc(why ?? (c.started ? `Buy and place on the map. It reaches the depot by the airbase ${DELIVERY_H[t]} h after ordering, then drives to where you placed it` : 'Buy and place on the map'))}">Buy</button>${c.started ? ` <span class="dim">arrives in ${DELIVERY_H[t]} h</span>` : ''}`}</div>
       </div>`;
     }).join('');
 
@@ -354,6 +429,12 @@ export class CampaignUi {
   /** The clock controls: on to the next raid, or wait an hour first (orders arrive, repairs go on, units can move). */
   private goButtons(): string {
     const c = this.c!;
+    if (this.war) {
+      const down = c.airbaseDownNote();
+      const go = this.war.st.begun ? 'Back to the war ▶' : 'Start the war ▶';
+      return `${down ? `<p class="warn"><b>${esc(down)}</b></p>` : ''}${tip('war', 'data-cui')}<button data-cui="resume" class="go big-go" title="Close the orders and let the clock run (P opens them again at any time)">${go} <small>P</small></button>
+        <p class="dim">The war runs on one clock: the enemy flies whenever it has massed enough, and time runs up to 64× while nothing is near. Orders here are given with the clock stopped.${this.lastReport() ? ' <button data-cui="dayreport">Yesterday\'s report</button>' : ''}</p>`;
+    }
     const warn = c.s.warn;
     const when = warn ? ` <small>expected about ${hhmm(warn.at)}</small>` : '';
     const lull = c.started ? tip('lull', 'data-cui') : '';
@@ -475,10 +556,12 @@ export class CampaignUi {
     const why = c.offensiveError();
     const action =
       f.offensive !== null
-        ? `<p class="warn">The assault force moves up to ${esc(f.towns[f.offensive].name)} during the next raid. Keep it above ${ASSAULT_HOLD}% until the raid ends. Cover it: units may stand within ${TOWN_ZONE_M / 1000} km of a town we hold.</p>
+        ? this.war
+          ? `<p class="warn">The assault column is on its way to ${esc(f.towns[f.offensive].name)}. It must reach its start line, then hold there above ${ASSAULT_HOLD}% for ${WAR.holdMin} minutes to take the town. Cover it: units may stand within ${TOWN_ZONE_M / 1000} km of a town we hold.</p>`
+          : `<p class="warn">The assault force moves up to ${esc(f.towns[f.offensive].name)} during the next raid. Keep it above ${ASSAULT_HOLD}% until the raid ends. Cover it: units may stand within ${TOWN_ZONE_M / 1000} km of a town we hold.</p>
            <div class="row"><button data-cui="offensive-cancel" title="Call it off for the money back">Call off the offensive</button></div>`
         : next >= 0
-          ? `<div class="row"><button data-cui="offensive" class="go" ${why ? 'disabled' : ''} title="${esc(why ?? `The enemy will counter-attack the assault force with drones, missiles, helicopters and jets. It goes in with the next raid: hold it above ${ASSAULT_HOLD}% until the raid ends to take the town. One offensive a day.`)}">Attack ${esc(f.towns[next].name)} ${money(OFFENSIVE_COST_M)}</button>${why ? ` <span class="dim">${esc(why)}</span>` : ''}</div>`
+          ? `<div class="row"><button data-cui="offensive" class="go" ${why ? 'disabled' : ''} title="${esc(why ?? (this.war ? `The column sets off at once and drives up the road; the enemy counter-attacks it with drones, missiles, helicopters and jets. It has to reach its start line and hold there above ${ASSAULT_HOLD}% for ${WAR.holdMin} minutes. One offensive a day.` : `The enemy will counter-attack the assault force with drones, missiles, helicopters and jets. It goes in with the next raid: hold it above ${ASSAULT_HOLD}% until the raid ends to take the town. One offensive a day.`))}">Attack ${esc(f.towns[next].name)} ${money(OFFENSIVE_COST_M)}</button>${why ? ` <span class="dim">${esc(why)}</span>` : ''}</div>`
           : '<p class="good">Every town on the road is ours.</p>';
     return `<h3>The front</h3>
       <p class="dim">Towns we hold pay every day, let units deploy round them, and each one past the first cuts the enemy's raids by ${Math.round(TOWN_THREAT_CUT * 100)}%. Raids also go for our front town: one knocked flat is devastated (no income, a ${DEVASTATED_ZONE_M / 1000} km zone) but only falls to enemy armour.</p>
@@ -518,8 +601,14 @@ export class CampaignUi {
     const now = c.pushNow;
     const why = c.armourStrikeError();
     return `<div class="event"><h3>Enemy armour massing at ${esc(f.towns[p.from]?.name ?? '')}</h3>${tip('armour', 'data-cui')}
-      <p>${now ? `It attacks ${esc(town)} with the next raid` : `Intel expects it to attack ${esc(town)} in a later raid today`}, behind drones and missiles aimed at the town. If the raids knock the town below ${ARMOUR.takeHp}% while the armour assaults it, the town falls. Cover it with air defence, or hit the armour before it moves.</p>
+      <p>${this.war ? `Intel expects it to attack ${esc(town)} today` : now ? `It attacks ${esc(town)} with the next raid` : `Intel expects it to attack ${esc(town)} in a later raid today`}, behind drones and missiles aimed at the town. If the raids knock the town below ${ARMOUR.takeHp}% while the armour assaults it, the town falls. Cover it with air defence, or hit the armour before it moves.</p>
       <div class="row"><button data-cui="armourstrike" ${why ? 'disabled' : ''} title="${esc(why ?? `${Math.round(ARMOUR_STRIKE.chance * 100)}% chance to break the attack up before it starts`)}">Strike the armour ${money(ARMOUR_STRIKE.costM)} · ${Math.round(ARMOUR_STRIKE.chance * 100)}%</button>${p.struck ? ' <span class="dim">Our strike missed.</span>' : ''}</div></div>`;
+  }
+
+  /** The last day's report, for the orders overlay. */
+  private lastReport(): DayReport | undefined {
+    const h = this.c?.s.history;
+    return h?.[h.length - 1];
   }
 
   private showFocus(): void {
@@ -546,13 +635,14 @@ export class CampaignUi {
       v.renderer.domElement.title = err ?? '';
     };
     v.onGroundClick = (p) => {
-      const err = c.place(c.terrain, u, p.x, p.y);
+      const err = this.war ? this.war.move(u, Math.round(p.x), Math.round(p.y)) : c.place(c.terrain, u, p.x, p.y);
       if (err) {
         this.note = err;
         this.render();
         return;
       }
-      this.stopPlacing(`${this.label(u)} placed ${this.where(u)}.`);
+      const driving = this.war?.st.begun && !!this.war.fielded(u.uid)?.move;
+      this.stopPlacing(driving ? `${this.label(u)} is packing up to drive to its new position.` : `${this.label(u)} placed ${this.where(u)}.`);
       store(c);
       this.refreshWorld();
     };
@@ -629,6 +719,8 @@ export class CampaignUi {
         over
           ? `<p>Final score <b>${c.score()}</b> over ${c.s.history.length} raids.</p>
              <div class="menu-opts row"><button data-cui="new" class="go">New campaign</button><button data-cui="menu">Main menu</button></div>`
+          : this.war
+            ? `<p>Day ${r.day} report. Budget now <b>${money(c.s.money)}</b>.</p><div class="row"><button data-cui="plan" class="go">Back to the orders ▶</button><button data-cui="menu">Save and quit</button></div>`
           : (r.grantM ? `<p><b>Emergency grant: ${money(r.grantM)}.</b> The airbase is badly hurt. Crews repair it twice as fast while it is below 40%.</p>` : '') + (r.income
             ? `<p>That was the day's last operation. At 06:00 the income came in: <b>${money(r.income)}</b> from the assets still working and the towns we hold${r.bonusM ? `, after ${money(r.bonusM)} of objective bonuses` : ''}${r.restockM ? `; ${money(r.restockM)} already spent restocking the batteries` : ''}. Budget now <b>${money(c.s.money)}</b>.</p>
              <div class="row"><button data-cui="plan" class="go">Plan day ${c.s.day} ▶</button><button data-cui="menu">Save and quit</button></div>`
@@ -701,6 +793,15 @@ export class CampaignUi {
         this.focus = null;
         this.showPlanning();
         return;
+      case 'resume':
+        $('debrief').classList.add('hidden');
+        this.closeOrders();
+        return;
+      case 'dayreport': {
+        const r = this.lastReport();
+        if (r) this.showDebrief(r);
+        return;
+      }
     }
     if (!c) return;
     e.stopPropagation();
@@ -716,6 +817,7 @@ export class CampaignUi {
         const t = d.type as UnitType;
         const nu = c.buy(t);
         if (!nu) return;
+        this.war?.apply(nu);
         store(c);
         this.refreshWorld();
         this.startPlacing(nu);
@@ -732,6 +834,7 @@ export class CampaignUi {
       }
       case 'upgrade':
         if (!c.upgrade(d.id as UpgradeId)) return;
+        if (this.war) this.war.w.mods = modifiers(c.s.upgrades);
         this.note = `${UPGRADES[d.id as UpgradeId].name} bought.`;
         break;
       case 'move':
@@ -742,19 +845,20 @@ export class CampaignUi {
       case 'turn':
         if (!u) return;
         c.turn(c.terrain, u, u.facing + Number(d.d));
+        this.war?.apply(u);
         this.focus = u.uid;
         break;
       case 'reload':
-        if (u) c.reload(u);
+        if (u && c.reload(u)) this.war?.apply(u);
         break;
       case 'spares':
-        if (u) c.buySpares(u);
+        if (u && c.buySpares(u)) this.war?.apply(u);
         break;
       case 'launcher':
-        if (u) c.addLauncher(u);
+        if (u && c.addLauncher(u)) this.war?.apply(u);
         break;
       case 'aircraft':
-        if (u) c.replaceAircraft(u);
+        if (u && c.replaceAircraft(u)) this.war?.apply(u);
         break;
       case 'sell':
         if (!u) return;
@@ -766,11 +870,13 @@ export class CampaignUi {
         this.confirmSell = null;
         if (this.placing === u) this.stopPlacing();
         c.sell(u);
+        this.war?.remove(u.uid);
         this.note = `${CATALOG[u.type].name} sold.`;
         if (this.focus === u.uid) this.focus = null;
         break;
       case 'repair':
         c.repair(d.name!);
+        this.war?.applyAssets();
         break;
       case 'crew':
         if (c.hireCrew()) this.note = `Repair crew hired: repairs now run at ${c.repairPerH} points an hour.`;
@@ -780,6 +886,7 @@ export class CampaignUi {
         break;
       case 'restock': {
         const spent = c.restock();
+        this.war?.applyAll();
         this.note = spent > 0 ? `Restocked for ${money(spent)}.` : 'Nothing to restock.';
         break;
       }
@@ -788,8 +895,10 @@ export class CampaignUi {
         store(c);
         return;
       case 'offensive':
-        if (!c.launchOffensive()) return;
-        this.note = `Offensive on ${c.s.front!.towns[c.s.front!.offensive!].name} ordered. Move units up to cover the assault force (yellow on the scope).`;
+        if (!(this.war ? this.war.launchOffensive() : c.launchOffensive())) return;
+        this.note = this.war
+          ? `Offensive on ${c.s.front!.towns[c.s.front!.offensive!].name} launched: the column sets off when the clock runs. Move units up to cover it (yellow on the scope).`
+          : `Offensive on ${c.s.front!.towns[c.s.front!.offensive!].name} ordered. Move units up to cover the assault force (yellow on the scope).`;
         break;
       case 'armourstrike': {
         const r = c.strikeArmour();
@@ -827,6 +936,7 @@ export class CampaignUi {
       default:
         return;
     }
+    if (this.war) this.war.sync();
     store(c);
     this.refreshWorld();
     this.render();

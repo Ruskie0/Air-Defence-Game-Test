@@ -607,11 +607,11 @@ export class CampaignUi {
         over
           ? `<p>Final score <b>${c.score()}</b> over ${c.s.history.length} raids.</p>
              <div class="menu-opts row"><button data-cui="new" class="go">New campaign</button><button data-cui="menu">Main menu</button></div>`
-          : r.income
-            ? `<p>That was the day's last operation. At 06:00 the income came in: <b>${money(r.income)}</b> from the assets still working and the towns we hold${r.bonusM ? `, after ${money(r.bonusM)} of objective bonuses` : ''}${r.grantM ? `; an emergency grant of ${money(r.grantM)} because the airbase is badly hurt (crews repair it twice as fast below 40%)` : ''}${r.restockM ? `; ${money(r.restockM)} already spent restocking the batteries` : ''}. Budget now <b>${money(c.s.money)}</b>.</p>
+          : (r.grantM ? `<p><b>Emergency grant: ${money(r.grantM)}.</b> The airbase is badly hurt. Crews repair it twice as fast while it is below 40%.</p>` : '') + (r.income
+            ? `<p>That was the day's last operation. At 06:00 the income came in: <b>${money(r.income)}</b> from the assets still working and the towns we hold${r.bonusM ? `, after ${money(r.bonusM)} of objective bonuses` : ''}${r.restockM ? `; ${money(r.restockM)} already spent restocking the batteries` : ''}. Budget now <b>${money(c.s.money)}</b>.</p>
              <div class="row"><button data-cui="plan" class="go">Plan day ${c.s.day} ▶</button><button data-cui="menu">Save and quit</button></div>`
             : `<p>Budget now <b>${money(c.s.money)}</b>${r.bonusM ? ` (objective bonuses ${money(r.bonusM)} paid)` : ''}. The day's income comes at 06:00. The clock is stopped at ${hhmm(c.clock)} while you plan for the next operation.</p>
-             <div class="row"><button data-cui="plan" class="go">Plan for the next raid ▶</button><button data-cui="menu">Save and quit</button></div>`
+             <div class="row"><button data-cui="plan" class="go">Plan for the next raid ▶</button><button data-cui="menu">Save and quit</button></div>`)
       }`;
     $('debrief').classList.remove('hidden');
   }

@@ -35,7 +35,7 @@ export function setDayThreat(v: number): void {
 
 /** A raid that loses at least this share of its aircraft shakes the enemy: its next 12 h of raids are smaller. */
 export const SHAKEN = { lossShare: 0.4, minFlown: 4, hours: 12, maxCut: 0.35 };
-/** Below this airbase health an emergency grant arrives at 06:00, and crews repair the airbase twice as fast. */
+/** Below this airbase health an emergency grant arrives straight after the raid (once a day), and crews repair the airbase twice as fast. */
 export const EMERGENCY = { belowHp: 40, perHpM: 3, repairX: 2 };
 /** Our strike on the enemy's armour while it masses for an attack on one of our towns. */
 export const ARMOUR_STRIKE = { costM: 35, chance: 0.6 };
@@ -86,7 +86,7 @@ export interface DayReport {
   front?: string[];
   /** Spent by the automatic restock this morning ($M). */
   restockM?: number;
-  /** Emergency grant paid at 06:00 because the airbase is badly hurt ($M). */
+  /** Emergency grant paid after the raid because the airbase is badly hurt ($M). */
   grantM?: number;
   /** What the enemy took away from the day. */
   lessons: string[];
@@ -143,6 +143,8 @@ export interface CampaignState {
   enemyLost?: Partial<Record<Asset, number>>;
   /** After a costly raid the enemy flies smaller raids until `until` (clock minutes), by `cut`. */
   shaken?: { until: number; cut: number } | null;
+  /** The day the last emergency grant was paid. */
+  grantDay?: number;
   /** The campaign clock (minutes since midnight before day 1): now, in the lull between raids. Absent in old saves. */
   clock?: number;
   /** Today's enemy operations, and which one comes next. */
@@ -560,7 +562,7 @@ export class Campaign {
     return k && at < k.until ? k.cut : 0;
   }
 
-  /** The 06:00 emergency grant while the airbase is badly hurt, bigger the worse it is. */
+  /** The emergency grant while the airbase is badly hurt, bigger the worse it is. */
   emergencyGrant(): number {
     const hp = this.s.deployment.assets.find((a) => a.name === 'Airbase')?.hp ?? 100;
     return hp > 0 && hp < EMERGENCY.belowHp ? Math.round((EMERGENCY.belowHp - hp) * EMERGENCY.perHpM) : 0;
@@ -1300,6 +1302,13 @@ export class Campaign {
       if (s.civilLosses === 0 && s.history.every((r) => !r.fratricide)) medals.push(award('hands') ?? '');
     }
     report.medals = medals.filter(Boolean);
+    // An airbase knocked below 40% gets an emergency grant straight away, once a day.
+    const grant = s.over || s.grantDay === s.day ? 0 : this.emergencyGrant();
+    if (grant) {
+      s.money += grant;
+      s.grantDay = s.day;
+      report.grantM = grant;
+    }
     s.clock = end;
     if (!s.over && !lastToday) {
       // On to the enemy's next operation today: the planning lull starts now.
@@ -1314,11 +1323,6 @@ export class Campaign {
       this.advanceTo(Math.max(end, DAY_START_MIN + (s.day - 1) * 1440));
       s.money += income;
       s.incomePenalty = 0;
-      const grant = this.emergencyGrant();
-      if (grant) {
-        s.money += grant;
-        report.grantM = grant;
-      }
       s.deployment.units = s.deployment.units.filter((u) => !u.loan);
       reinforce(this.theatre, this.diff.threat);
       this.replan();

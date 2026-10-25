@@ -292,7 +292,7 @@ export class Fighter extends Air {
         }
         this.steer(tgt.pos.x, tgt.pos.y, dt);
         this.cmdAlt = clamp(tgt.pos.z, 1500, 12500);
-        this.cmdSpd = 320;
+        this.cmdSpd = 380;
         const R = dist(this.pos, tgt.pos);
         const off = angleBetween(this.vel, sub(tgt.pos, this.pos));
         // A big target that sees it coming and runs: the fighter has to close well inside its usual range to make the shot stick.

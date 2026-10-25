@@ -978,3 +978,16 @@ li.warn {
   box-shadow: inset 2px 0 0 #ff4d4d;
   padding-left: 4px;
 }
+
+/* First-campaign prompts */
+.tip {
+  margin: 6px 0;
+  padding: 6px 8px;
+  border-left: 3px solid #ffd84d;
+  background: rgba(255, 216, 77, 0.08);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.tip button {
+  margin-left: 6px;
+}

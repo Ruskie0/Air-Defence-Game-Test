@@ -69,9 +69,10 @@ export function smartAims(w: World, defaults: string[], weapon: 'drone' | 'cruis
   if ((weapon === 'drone' || weapon === 'strike') && w.column?.alive && !w.assaultOutcome) bump(all.find((a) => a.name === 'Assault force'), 1.6);
   // A big missile raid takes the power out first, so the radars fight on generators.
   if ((weapon === 'cruise' || weapon === 'bomber') && n >= 4) bump(all.find((a) => a.name === 'Power plant'), 1.2);
-  // Coverage gaps: the fewer batteries with missiles that reach a target, the better it looks.
+  // Coverage gaps: the fewer batteries with missiles that reach a target, the better it looks. It takes the
+  // AWACS's picture to find them: with it down, the raid flies its planned targets.
   const out = [...score.keys()];
-  for (const a of out) {
+  if (!w.redSupport.down) for (const a of out) {
     let cover = 0;
     for (const f of w.fielded) {
       const fu = f.fu;

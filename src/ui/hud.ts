@@ -1,3 +1,4 @@
+import { dismissTip, tip } from './onboard';
 import type { View3D } from '../render/view3d';
 import { bearingDeg, dist, headingOf, len, v3 } from '../sim/math';
 import { EARLY_BONUS_M } from '../campaign/laststand';
@@ -363,6 +364,9 @@ export class Hud {
         f.escortColumn(w, !f.escort);
         break;
       }
+      case 'tip-ok':
+        dismissTip(d.name!);
+        break;
       case 'cap-hunt':
         w.fighters[Number(d.i)].hunt(w, d.name!);
         break;
@@ -514,6 +518,11 @@ export class Hud {
     this.set(
       'score',
       `<span class="chip">Kills <b>${s.kills}</b></span><span class="chip ${s.leakers ? 'bad' : ''}">Leakers <b>${s.leakers}</b></span>` +
+      (this.w.redSupport.awacsUp
+        ? '<span class="chip bad" title="Enemy AWACS up: its packages arrive together, strike jets go for gaps in our coverage, its fighters are vectored onto our CAP and our missiles kill a little less often. Hunt it with a fighter.">AWACS up: raids coordinated</span>'
+        : this.w.redSupport.down
+          ? '<span class="chip" title="No enemy AWACS: packages arrive staggered, strike jets fly their planned targets, fighter sweeps only find what their own radar sees">AWACS down: raids uncoordinated</span>'
+          : '') +
         `<span class="chip" title="LR ${s.fired.LR} · MR ${s.fired.MR} · SHORAD ${s.fired.SH} · AAM ${s.fired.AAM} · CIWS rounds ${s.ciwsRounds}">Missiles <b>${fired}</b> ($${s.costM.toFixed(1)}M)</span>` +
         (Number.isFinite(this.w.budgetM) ? `<span class="chip" title="Campaign budget left for support calls (resupply, field repair)">Budget <b>$${Math.round(this.w.budgetM - this.w.supportSpentM)}M</b></span>` : '') +
         (this.w.weatherId !== 'clear' ? `<span class="chip" title="${esc(this.w.weather.desc)}">${this.w.weather.name}</span>` : '') +
@@ -604,6 +613,7 @@ export class Hud {
     const warn = w.exposure.located.filter((l) => w.t < l.eta + 3);
     if (warn.length) {
       rows.push('<h3>Counter-battery fire</h3>');
+      if (this.campaign) rows.push(tip('located', 'data-act'));
       for (const l of warn) {
         const f = w.fielded.find((x) => x.unit.uid === l.uid);
         const code = f?.fu?.code ?? f?.radar?.code ?? '';

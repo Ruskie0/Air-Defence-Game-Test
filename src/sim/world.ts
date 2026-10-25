@@ -278,6 +278,8 @@ export class World {
     this.redSupport.launch(this, o.counterBattery ?? 0);
     sweepCap(this);
     this.scenario = new Scenario(o.raids, this.terrain.layout.rot);
+    this.redSupport.coordinate(this);
+    if (this.redSupport.down) this.log('Enemy AWACS down: raids uncoordinated. Its packages will arrive staggered and its fighters fly blind', 'info');
     if (o.civil ?? true) this.scenario.start(this);
   }
 

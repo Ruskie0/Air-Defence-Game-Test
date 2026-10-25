@@ -1,4 +1,5 @@
 import type { HurtBy } from '../sim/world';
+import { dismissTip, tip } from './onboard';
 import { loadBest } from '../campaign/laststand';
 import { MEDALS, MedalId, earnedMedals } from '../campaign/medals';
 import { ARMOUR_STRIKE, CAMPAIGN_DAYS, Campaign, DIFFICULTY, DayReport, Difficulty, REPAIR_CREW } from '../campaign/campaign';
@@ -355,9 +356,10 @@ export class CampaignUi {
     const c = this.c!;
     const warn = c.s.warn;
     const when = warn ? ` <small>expected about ${hhmm(warn.at)}</small>` : '';
+    const lull = c.started ? tip('lull', 'data-cui') : '';
     const waiting = c.started && (c.units.some((u) => u.arrives !== undefined) || c.s.deployment.assets.some((a) => c.repairing(a.name) > 0));
     return `<button data-cui="start" class="go big-go" title="The clock runs on to the enemy's next operation and the battle starts">Advance to the next raid ▶${when}</button>
-      ${c.started ? `<button data-cui="wait" title="Let an hour pass, to let orders arrive and repairs go on before you reposition. Intel's timings can be out: the enemy may come during the hour">Wait 1 hour${waiting ? '' : ' <small class="dim">nothing pending</small>'}</button>` : ''}`;
+      ${lull}${c.started ? `<button data-cui="wait" title="Let an hour pass, to let orders arrive and repairs go on before you reposition. Intel's timings can be out: the enemy may come during the hour">Wait 1 hour${waiting ? '' : ' <small class="dim">nothing pending</small>'}</button>` : ''}`;
   }
 
   /** The war at a glance: our ground, the road, located enemy installations with what they hold, and where the next raid is expected from. */
@@ -448,7 +450,7 @@ export class CampaignUi {
     const hidden = bases.filter((b) => !b.known && !b.lost);
     const kinds = [...new Set(hidden.map((b) => BASE_DEFS[b.kind].name.toLowerCase()))];
     const lost = Object.entries(c.s.enemyLost ?? {}).filter(([, n]) => n! >= 1) as [Asset, number][];
-    return `<h3>Enemy order of battle <span class="dim">as far as intel knows</span></h3>
+    return `<h3>Enemy order of battle <span class="dim">as far as intel knows</span></h3>${tip('oob', 'data-cui')}
       <div class="enemy-oob">${rows || '<div class="dim">Nothing located yet.</div>'}</div>
       ${hidden.length ? `<p class="dim">Not yet located: ${hidden.length} installation${hidden.length > 1 ? 's' : ''} (${esc(kinds.join(', '))}). Each one shows up once it launches.</p>` : ''}
       <p class="dim">Destroyed so far: ${lost.length ? esc(lost.map(([a, n]) => assetCount(a, Math.floor(n))).join(', ')) : 'nothing yet'}. What the enemy loses stays lost; it gets a trickle of reinforcements each night.</p>`;
@@ -493,7 +495,7 @@ export class CampaignUi {
     if (p.broken) return `<p class="good">The enemy attack on ${esc(town)} was broken up by our strike.</p>`;
     const now = c.pushNow;
     const why = c.armourStrikeError();
-    return `<div class="event"><h3>Enemy armour massing at ${esc(f.towns[p.from]?.name ?? '')}</h3>
+    return `<div class="event"><h3>Enemy armour massing at ${esc(f.towns[p.from]?.name ?? '')}</h3>${tip('armour', 'data-cui')}
       <p>${now ? `It attacks ${esc(town)} with the next raid` : `Intel expects it to attack ${esc(town)} in a later raid today`}, behind drones and missiles aimed at the town. If the raids knock the town below ${ARMOUR.takeHp}% while the armour assaults it, the town falls. Cover it with air defence, or hit the armour before it moves.</p>
       <div class="row"><button data-cui="armourstrike" ${why ? 'disabled' : ''} title="${esc(why ?? `${Math.round(ARMOUR_STRIKE.chance * 100)}% chance to break the attack up before it starts`)}">Strike the armour ${money(ARMOUR_STRIKE.costM)} · ${Math.round(ARMOUR_STRIKE.chance * 100)}%</button>${p.struck ? ' <span class="dim">Our strike missed.</span>' : ''}</div></div>`;
   }
@@ -783,6 +785,9 @@ export class CampaignUi {
         store(c);
         this.host.startBattle(c.startPulse(), c);
         return;
+      case 'tip-ok':
+        dismissTip(d.name!);
+        break;
       case 'wait': {
         const before = c.clock;
         const r = c.wait(60);

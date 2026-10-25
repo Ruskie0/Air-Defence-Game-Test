@@ -27,7 +27,7 @@ import { DeployZone, inZones } from '../sim/deploy';
 
 export const CAMPAIGN_DAYS = 10;
 /** Scale on the enemy's threat points for a whole day, shared between its operations (balance). */
-export let DAY_THREAT = 1.75;
+export let DAY_THREAT = 1.7;
 /** Override the threat scale (headless sweeps). */
 export function setDayThreat(v: number): void {
   DAY_THREAT = v;
@@ -54,9 +54,9 @@ export type Difficulty = 'easy' | 'normal' | 'hard';
 
 /** What each difficulty changes: the enemy's daily threat budget, our income and the starting budget. */
 export const DIFFICULTY: Record<Difficulty, { name: string; desc: string; threat: number; income: number; start: number }> = {
-  easy: { name: 'Easy', desc: 'Smaller raids and a little more money.', threat: 0.914, income: 1.05, start: 180 },
+  easy: { name: 'Easy', desc: 'Smaller raids and a little more money.', threat: 0.941, income: 1.05, start: 180 },
   normal: { name: 'Normal', desc: 'The intended balance.', threat: 1, income: 1, start: 160 },
-  hard: { name: 'Hard', desc: 'Bigger raids, a tighter budget.', threat: 1.04, income: 0.95, start: 150 },
+  hard: { name: 'Hard', desc: 'Bigger raids, a tighter budget.', threat: 1.071, income: 0.95, start: 150 },
 };
 
 /** One raid's outcome (several a day on the continuous clock). */
